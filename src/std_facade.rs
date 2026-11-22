@@ -1,11 +1,12 @@
 //! std's `path`, `ffi`, `io`, `env`, `fs`, `process`, `num`, `fmt`,
-//! `char`, `panic`, `sync::mpsc`, `thread` and `time` items for every program
-//! (D528.4). Every [`Engine`](crate::Engine) made by `Engine::new` declares
-//! them, and every runtime registry binds them, so a plain program, an
-//! embedding and an iced app all name `std::path::PathBuf`
-//! (`resolve::std_reexport` sends those modules here). The `fs` functions,
-//! `env::args` and `process::id` reach the operating system only as far as
-//! the calling program's [`Access`](crate::Access) grants (D683.4).
+//! `char`, `panic`, `sync::atomic`, `sync::mpsc`, `thread` and `time` items
+//! for every program (D528.4). Every [`Engine`](crate::Engine) made by
+//! `Engine::new` declares them, and every runtime registry binds them, so a
+//! plain program, an embedding and an iced app all name
+//! `std::path::PathBuf` (`resolve::std_reexport` sends those modules
+//! here). The `fs` functions, `env::args` and `process::id` reach the
+//! operating system only as far as the calling program's
+//! [`Access`](crate::Access) grants (D683.4).
 //!
 //! The facade states its binds and nothing else (D711 step 6): each module
 //! binds std items to the Rust code rawr runs for them and says how rawr
@@ -14,6 +15,7 @@
 //! its final form ([`declared`]), which a new engine installs as it is
 //! ([`step`]): a start reads nothing of the table (#1526).
 
+mod atomic;
 mod buffered;
 mod case;
 mod command;
@@ -209,6 +211,7 @@ fn build() -> Result<facade::Definition, host::Error> {
     panic::register_debug();
     case::register_debug();
     sync::register_debug();
+    atomic::register_debug();
     thread::register_debug();
     time::register_debug();
     let mut builder = facade::Builder::new(ROOT, facade::Abi::new(1)?)?;
@@ -233,6 +236,7 @@ fn held() -> Vec<held::Held> {
         fmt::HELD.as_slice(),
         panic::HELD.as_slice(),
         sync::HELD.as_slice(),
+        atomic::HELD.as_slice(),
         thread::HELD.as_slice(),
         time::HELD.as_slice(),
     ]
@@ -256,6 +260,7 @@ fn bind(binds: &mut impl Bind) {
     panic::bind(binds);
     case::bind(binds);
     sync::bind(binds);
+    atomic::bind(binds);
     thread::bind(binds);
     time::bind(binds);
 }

@@ -2078,6 +2078,18 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
         if host.entry(&reexported).is_some() {
             return reexported.into();
         }
+        // A member of a type the facade holds as another's own, as
+        // `std::path::Path::new` is `PathBuf`'s: `path::Path` stands for
+        // `path::PathBuf`, which declares both types' functions.
+        if let Some((owner, member)) = reexported.rsplit_once("::")
+            && let Some(host::Entry::Type(definition)) = host.entry(owner)
+            && definition.path() != owner
+        {
+            let held = format!("{}::{member}", definition.path());
+            if host.entry(&held).is_some() {
+                return held.into();
+            }
+        }
     }
     // A std item the core future runs, by its definition, as
     // `std::task::Poll` or `core::future::poll_fn` (`future::facade::STD`).

@@ -288,6 +288,30 @@ pub(super) fn definition(path: &'static str) -> &'static str {
     std_table::definition_of(path).unwrap_or(path)
 }
 
+/// The type the public path `path` names: its own, or the one std's type
+/// alias of no parameters names, as `std::sync::atomic::AtomicUsize` names
+/// `std::sync::atomic::Atomic<usize>`.
+pub(super) fn named(path: &'static str) -> Written {
+    read(std_table::aliased(path).unwrap_or(path))
+}
+
+/// The definition of the type the public path `path` names
+/// ([`named`]): `core::sync::atomic::Atomic` of
+/// `std::sync::atomic::AtomicUsize`.
+pub(super) fn named_definition(path: &'static str) -> &'static str {
+    match named(path) {
+        Written::Path { path, .. } => definition(path),
+        _ => definition(path),
+    }
+}
+
+/// Whether `concrete` is an instance of `pattern`, whose `variables` may
+/// stand for any type: an impl's self type `Cursor<Vec<u8>>` is one of a
+/// held `Cursor<T>`, and `Atomic<bool>` is none of `Atomic<usize>`.
+pub(super) fn instance(pattern: &Written, concrete: &Written, variables: &[&'static str]) -> bool {
+    matches(pattern, concrete, variables, &mut Binding::new())
+}
+
 /// The impl's type parameters, which its header's types bind.
 fn variables(implementation: &Impl) -> Vec<&'static str> {
     implementation
@@ -453,6 +477,84 @@ fn clause(
         None if found.is_empty() => Vec::new(),
         None => vec![binding],
     }
+}
+
+/// The types std implements `trait_<arguments>` for whose associated
+/// types are those `bindings` give: `Vec<String>`, `&[String]`, .. of
+/// `IntoIterator<Item = String>`. A blanket impl, as the one for every
+/// iterator, gives none: an iterator a program passes where an item takes
+/// an iterable is collected into the `Vec` the item takes. rawr has no
+/// borrows of its own, so a borrow `&str` is the borrow of a borrow
+/// `&&str` too: `&[&str]` is an `IntoIterator<Item = &str>`.
+pub(super) fn bound_by(
+    trait_: &str,
+    arguments: &[Written],
+    bindings: &[(&'static str, Written)],
+) -> Vec<Written> {
+    let mut alternatives = vec![bindings.to_vec()];
+    for (index, (_, bound)) in bindings.iter().enumerate() {
+        if !matches!(bound, Written::Reference { mutable: false, .. }) {
+            continue;
+        }
+        let borrowed = alternatives
+            .iter()
+            .map(|alternative| {
+                let mut alternative = alternative.clone();
+                alternative[index].1 = Written::Reference {
+                    mutable: false,
+                    target: Box::new(bound.clone()),
+                };
+                alternative
+            })
+            .collect::<Vec<_>>();
+        alternatives.extend(borrowed);
+    }
+    alternatives
+        .iter()
+        .flat_map(|bindings| bound_exactly(trait_, arguments, bindings))
+        .collect()
+}
+
+/// [`bound_by`], of one reading of `bindings`.
+fn bound_exactly(
+    trait_: &str,
+    arguments: &[Written],
+    bindings: &[(&'static str, Written)],
+) -> Vec<Written> {
+    let mut found = Vec::new();
+    for implementation in impls(trait_, None) {
+        let variables = variables(&implementation);
+        let own = read(implementation.self_ty);
+        if matches!(&own, Written::Path { path, .. } if variables.contains(path)) {
+            continue;
+        }
+        let mut binding = Binding::new();
+        let written = implementation.arguments();
+        let fits = arguments.iter().enumerate().all(|(index, argument)| {
+            let pattern = written
+                .get(index)
+                .map_or_else(|| own.clone(), |text| read(text));
+            matches(&pattern, argument, &variables, &mut binding)
+        }) && bindings.iter().all(|(name, bound)| {
+            implementation
+                .associated(name)
+                .is_some_and(|ty| matches(&read(ty), bound, &variables, &mut binding))
+        });
+        if !fits {
+            continue;
+        }
+        let self_ty = substitute(&own, &binding);
+        if !where_clauses(&implementation, &variables, binding, &[], DEPTH - 1).is_empty() {
+            found.push(self_ty);
+        }
+    }
+    found
+}
+
+/// Whether `written` names one of `names` as a type: `Map<I, F>` names
+/// `I`.
+pub(super) fn mentions(written: &Written, names: &[&'static str]) -> bool {
+    holds_free(written, names)
 }
 
 /// Whether `written` names one of `variables`.

@@ -166,12 +166,26 @@ impl<'a> Reader<'a> {
             }
             _ => {}
         }
+        let written = Written::Path {
+            path,
+            arguments: arguments.to_vec(),
+            bindings: Vec::new(),
+        };
         for held in self.held {
             match held {
+                // A held type is its definition at any arguments, or the
+                // one type its std alias names: `Atomic<usize>` is
+                // `AtomicUsize`.
                 Held::Value(value)
-                    if value
-                        .forms()
-                        .any(|form| solve::definition(form) == definition) =>
+                    if value.forms().any(|form| {
+                        let named = solve::named(form);
+                        match &named {
+                            Written::Path { path, .. } if *path == form => {
+                                solve::definition(form) == definition
+                            }
+                            _ => solve::same(&named, &written),
+                        }
+                    }) =>
                 {
                     let facade = super::held::Value::facade(value.std);
                     if value.parameters.is_empty() {
@@ -295,19 +309,41 @@ impl<'a> Reader<'a> {
     }
 
     /// The bindings of the declaration's names with each of its parameters
-    /// bound to each type its bounds give it.
+    /// bound to each type its bounds give it. A parameter whose bound
+    /// binds an associated type to another parameter (`I: IntoIterator<Item
+    /// = S>`) is bound after that one, at each type it takes.
     fn expansions(&self, parameters: &[(&'static str, Vec<&'static str>)]) -> Vec<Binding> {
+        let declared = parameters.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        let coupled = |bounds: &[&'static str]| {
+            bounds.iter().any(|bound| match solve::read(bound) {
+                Written::Path { bindings, .. } => bindings
+                    .iter()
+                    .any(|(_, bound)| solve::mentions(bound, &declared)),
+                _ => false,
+            })
+        };
+        let ordered = parameters
+            .iter()
+            .filter(|(_, bounds)| !coupled(bounds))
+            .chain(parameters.iter().filter(|(_, bounds)| coupled(bounds)));
         let mut expansions = vec![self.names.clone()];
-        for (name, bounds) in parameters {
-            let types = self.types(bounds);
+        for (name, bounds) in ordered {
             expansions = expansions
                 .iter()
                 .flat_map(|names| {
-                    types.iter().map(|ty| {
-                        let mut names = names.clone();
-                        names.push((*name, ty.clone()));
-                        names
-                    })
+                    self.scoped(names.clone(), self.associated.clone())
+                        .types(bounds)
+                        .into_iter()
+                        // A type of an impl's own parameter the declaration
+                        // names too, as a blanket impl's `I`, is no type of
+                        // the declaration's.
+                        .filter(|ty| !solve::mentions(ty, &declared))
+                        .map(|ty| {
+                            let mut names = names.clone();
+                            names.push((*name, ty));
+                            names
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect();
         }
@@ -324,15 +360,20 @@ impl<'a> Reader<'a> {
             .iter()
             .filter(|bound| **bound != "?Sized" && !bound.starts_with('\''))
             .map(|bound| self.bound(bound));
-        let Some(Some((trait_, arguments))) = traits.next() else {
+        let Some(Some((trait_, arguments, bindings))) = traits.next() else {
             return Vec::new();
         };
         let Some(rest) = traits.collect::<Option<Vec<_>>>() else {
             return Vec::new();
         };
-        let slots = arguments.into_iter().map(Slot::Known).collect::<Vec<_>>();
+        let solved = if bindings.is_empty() {
+            let slots = arguments.into_iter().map(Slot::Known).collect::<Vec<_>>();
+            solve::solve(trait_, &Slot::Unknown, &slots, &[], solve::DEPTH)
+        } else {
+            solve::bound_by(trait_, &arguments, &bindings)
+        };
         let mut types = Vec::<Written>::new();
-        for ty in solve::solve(trait_, &Slot::Unknown, &slots, &[], solve::DEPTH) {
+        for ty in solved {
             let ty = match ty {
                 Written::Reference { target, .. } => Written::Reference {
                     mutable: false,
@@ -343,7 +384,7 @@ impl<'a> Reader<'a> {
             let fits = (!sized || self.sized(&ty))
                 && rest
                     .iter()
-                    .all(|(trait_, arguments)| solve::holds(trait_, &ty, arguments));
+                    .all(|(trait_, arguments, _)| solve::holds(trait_, &ty, arguments));
             if fits && !types.iter().any(|known| solve::same(known, &ty)) {
                 types.push(ty);
             }
@@ -351,10 +392,13 @@ impl<'a> Reader<'a> {
         types
     }
 
-    /// The trait a bound names, with its arguments in this scope.
-    fn bound(&self, bound: &'static str) -> Option<(&'static str, Vec<Written>)> {
+    /// The trait a bound names, with its arguments and its associated
+    /// types' bindings (`Item = S`) in this scope.
+    fn bound(&self, bound: &'static str) -> Option<(&'static str, Vec<Written>, Binding)> {
         let Written::Path {
-            path, arguments, ..
+            path,
+            arguments,
+            bindings,
         } = solve::read(bound)
         else {
             return None;
@@ -364,7 +408,11 @@ impl<'a> Reader<'a> {
             .iter()
             .map(|argument| solve::substitute(argument, &self.names))
             .collect();
-        Some((trait_, arguments))
+        let bindings = bindings
+            .iter()
+            .map(|(name, bound)| (*name, solve::substitute(bound, &self.names)))
+            .collect();
+        Some((trait_, arguments, bindings))
     }
 
     /// Whether a where-clause on a type the scope fixes holds.
@@ -374,8 +422,9 @@ impl<'a> Reader<'a> {
             .iter()
             .filter(|bound| **bound != "?Sized" && !bound.starts_with('\''))
             .all(|bound| {
-                self.bound(bound)
-                    .is_some_and(|(trait_, arguments)| solve::holds(trait_, &subject, &arguments))
+                self.bound(bound).is_some_and(|(trait_, arguments, _)| {
+                    solve::holds(trait_, &subject, &arguments)
+                })
             })
     }
 

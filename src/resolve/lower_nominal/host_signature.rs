@@ -211,6 +211,55 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Whether an array or an iterator fills a facade item's `Vec` of its
+    /// items, as an `IntoIterator<Item = S>` parameter takes it: the call
+    /// takes the array as a `Vec` and collects the iterator
+    /// (`collect_iterable`). rawr has no borrows of its own, so an item
+    /// `&&str` is the `&str` the item takes.
+    fn iterable_fits(&mut self, expected: &Ty, actual: &Ty) -> bool {
+        match (
+            self.inference.resolve(expected),
+            self.inference.resolve(actual),
+        ) {
+            (
+                Ty::Array {
+                    element: expected,
+                    kind: sequence::Kind::Vec,
+                },
+                Ty::Array {
+                    element: item,
+                    kind: sequence::Kind::Array(_),
+                }
+                | Ty::Iter(item, _, _),
+            ) => self.unify_type(&expected, &lent_item(*item)),
+            // `&[S; N]` where the item takes `&[S]`: Rust's unsized
+            // coercion.
+            (
+                Ty::Reference {
+                    mutable: false,
+                    target: expected,
+                },
+                Ty::Reference {
+                    mutable: false,
+                    target: actual,
+                },
+            ) => match (*expected, *actual) {
+                (
+                    Ty::Array {
+                        element: expected,
+                        kind: sequence::Kind::Slice,
+                    },
+                    Ty::Array {
+                        element: item,
+                        kind: sequence::Kind::Array(_),
+                    },
+                ) => self.unify_type(&expected, &item),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     pub(super) fn select_host_signature_form(
         &mut self,
         items: &[crate::host::item::Definition],
@@ -391,9 +440,10 @@ impl<'a> Parser<'a> {
                         |(index, (expected, argument))| {
                             self.unify_type(expected, &argument.ty)
                                 || facade
-                                    && self
+                                    && (self
                                         .number_into_parameter(item, index, expected, &argument.ty)
                                         .is_some()
+                                        || self.iterable_fits(expected, &argument.ty))
                         },
                     )
             };
@@ -2597,4 +2647,24 @@ pub(super) struct OpaqueValue {
     pub(super) value: Ty,
     pub(super) written: type_ref::Type,
     pub(super) substitution: BTreeMap<ImmutableString, Ty>,
+}
+
+/// An iterable's item as a facade item takes it: rawr has no borrows of its
+/// own, so a `&&str` is the `&str` it borrows, and a `&String` is the
+/// `&str` its deref gives, as `AsRef<OsStr>` reads both.
+pub(super) fn lent_item(item: Ty) -> Ty {
+    match item {
+        Ty::Reference {
+            mutable: false,
+            target,
+        } => match *target {
+            Ty::String | Ty::Str => Ty::Str,
+            target @ Ty::Reference { mutable: false, .. } => lent_item(target),
+            target => Ty::Reference {
+                mutable: false,
+                target: Box::new(target),
+            },
+        },
+        item => item,
+    }
 }

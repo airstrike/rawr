@@ -1184,6 +1184,17 @@ core::convert::From	core::range::Range	std::range::Range<T>	std::ops::Range<T>	T
 core::convert::From	core::range::RangeFrom	std::range::RangeFrom<T>	std::ops::RangeFrom<T>	T		
 core::convert::From	core::range::RangeInclusive	std::range::RangeInclusive<T>	std::ops::RangeInclusive<T>	T		
 core::convert::From	core::range::RangeToInclusive	std::range::RangeToInclusive<T>	std::ops::RangeToInclusive<T>	T		
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<bool>	bool			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i16>	i16			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i32>	i32			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i64>	i64			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i8>	i8			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<isize>	isize			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u16>	u16			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u32>	u32			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u64>	u64			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u8>	u8			
+core::convert::From	core::sync::atomic::Atomic	std::sync::atomic::Atomic<usize>	usize			
 core::convert::From	core::task::poll::Poll	std::task::Poll<T>	T	T		
 core::convert::From	core::task::wake::RawWaker	std::task::RawWaker	std::sync::Arc<W>	W	W: std::task::Wake + Send + Sync	
 core::convert::From	core::task::wake::Waker	std::task::Waker	std::sync::Arc<W>	W	W: std::task::Wake + Send + Sync	
@@ -1666,6 +1677,17 @@ core::default::Default	core::pin::Pin	std::pin::Pin<std::sync::Arc<T>>		T	std::s
 core::default::Default	core::range::Range	std::range::Range<Idx>		Idx	Idx: Default	
 core::default::Default	core::slice::iter::Iter	std::slice::Iter<T>		T		
 core::default::Default	core::slice::iter::IterMut	std::slice::IterMut<T>		T		
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<bool>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i16>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i32>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i64>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i8>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<isize>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u16>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u32>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u64>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u8>				
+core::default::Default	core::sync::atomic::Atomic	std::sync::atomic::Atomic<usize>				
 core::default::Default	core::time::Duration	std::time::Duration				
 core::default::Default	f128	f128				
 core::default::Default	f16	f16				
@@ -2021,6 +2043,17 @@ core::fmt::Debug	core::str::iter::SplitAsciiWhitespace	std::str::SplitAsciiWhite
 core::fmt::Debug	core::str::iter::SplitWhitespace	std::str::SplitWhitespace				
 core::fmt::Debug	core::str::lossy::Utf8Chunk	std::str::Utf8Chunk				
 core::fmt::Debug	core::str::lossy::Utf8Chunks	std::str::Utf8Chunks				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<bool>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i16>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i32>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i64>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<i8>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<isize>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u16>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u32>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u64>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<u8>				
+core::fmt::Debug	core::sync::atomic::Atomic	std::sync::atomic::Atomic<usize>				
 core::fmt::Debug	core::sync::atomic::Ordering	std::sync::atomic::Ordering				
 core::fmt::Debug	core::task::poll::Poll	std::task::Poll<T>		T	T: std::fmt::Debug	
 core::fmt::Debug	core::task::wake::Context	std::task::Context				

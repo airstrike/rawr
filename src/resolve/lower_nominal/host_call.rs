@@ -498,7 +498,7 @@ impl<'a> Parser<'a> {
                 let Some((source, item)) = self.collected_items(argument) else {
                     return;
                 };
-                (source, Box::new(item))
+                (source, Box::new(super::host_signature::lent_item(item)))
             }
             ty @ Ty::Host { .. } if self.type_implements(&ty, "Iterator") => {
                 let Some((source, item)) = self.collected_items(argument) else {

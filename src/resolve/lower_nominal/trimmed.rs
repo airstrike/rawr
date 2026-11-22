@@ -40,16 +40,22 @@ pub(super) fn std_name(definition: &'static str, models: &Models) -> Cow<'static
 /// rustc names std's own: by its name alone where it is `unique`, else by
 /// its std path, as `std::fmt::Alignment` is beside `std::mem::Alignment`,
 /// and `std::path::PathBuf` beside the program's own `PathBuf`. `None` for
-/// any other type.
+/// any other type. A type std's alias names is named as the type it
+/// names, as rustc names an `AtomicUsize` `Atomic<usize>`.
 pub(super) fn std_type_name(path: &str, models: &Models) -> Option<String> {
     let rest = path
         .strip_prefix(crate::std_facade::ROOT)?
         .strip_prefix("::")?;
-    let name = rest.rsplit("::").next().unwrap_or(rest);
+    let std = format!("std::{rest}");
+    let (std, arguments) = match std_table::aliased(&std) {
+        Some(target) => target.split_at(target.find('<').unwrap_or(target.len())),
+        None => (std.as_str(), ""),
+    };
+    let name = std.rsplit("::").next().unwrap_or(std);
     Some(if unique(name, models) {
-        name.to_owned()
+        format!("{name}{arguments}")
     } else {
-        format!("std::{rest}")
+        format!("{std}{arguments}")
     })
 }
 

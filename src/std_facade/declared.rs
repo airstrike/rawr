@@ -19,6 +19,7 @@ pub(super) static STEPS: &[Step] = &[
     Step::Module("path"),
     Step::Module("process"),
     Step::Module("sync"),
+    Step::Module("sync::atomic"),
     Step::Module("sync::mpsc"),
     Step::Module("thread"),
     Step::Module("time"),
@@ -204,6 +205,17 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Debug,
             capability::Kind::Clone,
             capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::process::Output",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
             capability::Kind::PartialEq,
             capability::Kind::Eq,
             capability::Kind::Send,
@@ -425,6 +437,129 @@ pub(super) static STEPS: &[Step] = &[
         path: "sync::mpsc::RecvTimeoutError",
         variants: &[("Timeout", &[]), ("Disconnected", &[])],
         non_exhaustive: false,
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicBool",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicI8",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicI16",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicI32",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicI64",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicIsize",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicU8",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicU16",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicU32",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicU64",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::AtomicUsize",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::atomic::Ordering",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Hash,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Variants {
+        path: "sync::atomic::Ordering",
+        variants: &[
+            ("Relaxed", &[]),
+            ("Release", &[]),
+            ("Acquire", &[]),
+            ("AcqRel", &[]),
+            ("SeqCst", &[]),
+        ],
+        non_exhaustive: true,
     },
     Step::Held {
         std: "std::thread::Builder",
@@ -4474,6 +4609,15 @@ pub(super) static STEPS: &[Step] = &[
         ),
     },
     Step::Item {
+        path: "process::Command::output",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("process::Output"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
         path: "process::Command::new",
         kind: Kind::AssociatedFunction,
         inputs: &[Ty::Reference {
@@ -4576,6 +4720,387 @@ pub(super) static STEPS: &[Step] = &[
         path: "process::Command::arg",
         kind: Kind::Method(Mode::Mutable),
         inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Registered("ffi::OsString")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Registered("ffi::OsString")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Registered("ffi::OsString")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("ffi::OsString"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("ffi::OsString"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("ffi::OsString"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Builtin(Builtin::String)),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Builtin(Builtin::String)),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Builtin(Builtin::String)),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Builtin(Builtin::String),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Builtin(Builtin::String),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Builtin(Builtin::String),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Registered("path::PathBuf")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Registered("path::PathBuf")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Registered("path::PathBuf")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("path::PathBuf"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("path::PathBuf"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("path::PathBuf"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Registered("ffi::OsString"))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Registered("ffi::OsString"))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Builtin(Builtin::String))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Builtin(Builtin::String))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Registered("path::PathBuf"))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Registered("path::PathBuf"))],
         output: Ty::Reference {
             mutable: true,
             target: &Ty::Registered("process::Command"),
@@ -5263,6 +5788,24 @@ pub(super) static STEPS: &[Step] = &[
         },
     },
     Step::Item {
+        path: "process::Output::status",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Registered("process::ExitStatus"),
+    },
+    Step::Item {
+        path: "process::Output::stdout",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Vec(&Ty::Builtin(Builtin::U8)),
+    },
+    Step::Item {
+        path: "process::Output::stderr",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Vec(&Ty::Builtin(Builtin::U8)),
+    },
+    Step::Item {
         path: "process::ExitStatus::success",
         kind: Kind::Method(Mode::Shared),
         inputs: &[],
@@ -5414,6 +5957,1634 @@ pub(super) static STEPS: &[Step] = &[
         kind: Kind::Method(Mode::Shared),
         inputs: &[],
         output: Ty::Builtin(Builtin::String),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Registered("sync::atomic::AtomicBool"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicBool"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicBool")],
+        output: Ty::Registered("sync::atomic::AtomicBool"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Registered("sync::atomic::AtomicBool"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::Bool), &Ty::Builtin(Builtin::Bool)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::Bool), &Ty::Builtin(Builtin::Bool)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Bool),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicBool::fetch_not",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I8)],
+        output: Ty::Registered("sync::atomic::AtomicI8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicI8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicI8")],
+        output: Ty::Registered("sync::atomic::AtomicI8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I8)],
+        output: Ty::Registered("sync::atomic::AtomicI8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I8), &Ty::Builtin(Builtin::I8)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I8), &Ty::Builtin(Builtin::I8)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI8::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I16)],
+        output: Ty::Registered("sync::atomic::AtomicI16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicI16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicI16")],
+        output: Ty::Registered("sync::atomic::AtomicI16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I16)],
+        output: Ty::Registered("sync::atomic::AtomicI16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I16), &Ty::Builtin(Builtin::I16)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I16), &Ty::Builtin(Builtin::I16)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI16::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I32)],
+        output: Ty::Registered("sync::atomic::AtomicI32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicI32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicI32")],
+        output: Ty::Registered("sync::atomic::AtomicI32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I32)],
+        output: Ty::Registered("sync::atomic::AtomicI32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I32), &Ty::Builtin(Builtin::I32)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I32), &Ty::Builtin(Builtin::I32)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI32::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I64)],
+        output: Ty::Registered("sync::atomic::AtomicI64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicI64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicI64")],
+        output: Ty::Registered("sync::atomic::AtomicI64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::I64)],
+        output: Ty::Registered("sync::atomic::AtomicI64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I64), &Ty::Builtin(Builtin::I64)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::I64), &Ty::Builtin(Builtin::I64)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicI64::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::I64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::I64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Isize)],
+        output: Ty::Registered("sync::atomic::AtomicIsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicIsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicIsize")],
+        output: Ty::Registered("sync::atomic::AtomicIsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Isize)],
+        output: Ty::Registered("sync::atomic::AtomicIsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::Isize), &Ty::Builtin(Builtin::Isize)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::Isize), &Ty::Builtin(Builtin::Isize)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicIsize::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Isize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Isize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U8)],
+        output: Ty::Registered("sync::atomic::AtomicU8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicU8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicU8")],
+        output: Ty::Registered("sync::atomic::AtomicU8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U8)],
+        output: Ty::Registered("sync::atomic::AtomicU8"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U8), &Ty::Builtin(Builtin::U8)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U8), &Ty::Builtin(Builtin::U8)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU8::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U8),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U8),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U16)],
+        output: Ty::Registered("sync::atomic::AtomicU16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicU16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicU16")],
+        output: Ty::Registered("sync::atomic::AtomicU16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U16)],
+        output: Ty::Registered("sync::atomic::AtomicU16"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U16), &Ty::Builtin(Builtin::U16)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U16), &Ty::Builtin(Builtin::U16)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU16::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U16),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U16),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U32)],
+        output: Ty::Registered("sync::atomic::AtomicU32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicU32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicU32")],
+        output: Ty::Registered("sync::atomic::AtomicU32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U32)],
+        output: Ty::Registered("sync::atomic::AtomicU32"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U32), &Ty::Builtin(Builtin::U32)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U32), &Ty::Builtin(Builtin::U32)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU32::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U32),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U64)],
+        output: Ty::Registered("sync::atomic::AtomicU64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicU64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicU64")],
+        output: Ty::Registered("sync::atomic::AtomicU64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U64)],
+        output: Ty::Registered("sync::atomic::AtomicU64"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U64), &Ty::Builtin(Builtin::U64)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::U64), &Ty::Builtin(Builtin::U64)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicU64::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::U64),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Usize)],
+        output: Ty::Registered("sync::atomic::AtomicUsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::AtomicUsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("sync::atomic::AtomicUsize")],
+        output: Ty::Registered("sync::atomic::AtomicUsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Usize)],
+        output: Ty::Registered("sync::atomic::AtomicUsize"),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::load",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("sync::atomic::Ordering")],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::store",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::swap",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::compare_exchange",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Builtin(Builtin::Usize)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::compare_exchange_weak",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Builtin(Builtin::Usize)),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_and",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_nand",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_or",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_xor",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_add",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_sub",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_max",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::AtomicUsize::fetch_min",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[
+            Ty::Builtin(Builtin::Usize),
+            Ty::Registered("sync::atomic::Ordering"),
+        ],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "sync::atomic::Ordering::Relaxed",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::Ordering"),
+    },
+    Step::Item {
+        path: "sync::atomic::Ordering::Release",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::Ordering"),
+    },
+    Step::Item {
+        path: "sync::atomic::Ordering::Acquire",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::Ordering"),
+    },
+    Step::Item {
+        path: "sync::atomic::Ordering::AcqRel",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::Ordering"),
+    },
+    Step::Item {
+        path: "sync::atomic::Ordering::SeqCst",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::atomic::Ordering"),
     },
     Step::Item {
         path: "thread::Builder::new",
@@ -6254,10 +8425,6 @@ pub(super) static STEPS: &[Step] = &[
         std: "std::process::ExitStatusError",
     },
     Step::StdAlias {
-        path: "process::Output",
-        std: "std::process::Output",
-    },
-    Step::StdAlias {
         path: "process::Stdio",
         std: "std::process::Stdio",
     },
@@ -6376,6 +8543,46 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "sync::Weak",
         std: "std::sync::Weak",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::ATOMIC_BOOL_INIT",
+        std: "std::sync::atomic::ATOMIC_BOOL_INIT",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::ATOMIC_ISIZE_INIT",
+        std: "std::sync::atomic::ATOMIC_ISIZE_INIT",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::ATOMIC_USIZE_INIT",
+        std: "std::sync::atomic::ATOMIC_USIZE_INIT",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::Atomic",
+        std: "std::sync::atomic::Atomic",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::AtomicPrimitive",
+        std: "std::sync::atomic::AtomicPrimitive",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::AtomicPtr",
+        std: "std::sync::atomic::AtomicPtr",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::atomic_compare_exchange",
+        std: "std::sync::atomic::atomic_compare_exchange",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::compiler_fence",
+        std: "std::sync::atomic::compiler_fence",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::fence",
+        std: "std::sync::atomic::fence",
+    },
+    Step::StdAlias {
+        path: "sync::atomic::spin_loop_hint",
+        std: "std::sync::atomic::spin_loop_hint",
     },
     Step::StdAlias {
         path: "sync::mpsc::IntoIter",

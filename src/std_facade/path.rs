@@ -148,7 +148,11 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
     bind("path::PathBuf::from", |args| {
         Ok(Dynamic::from(path_like(args[0])?))
     });
-    bind("ffi::OsString::new", |_| Ok(Dynamic::from(OsString::new())));
+    // `OsString::new()`, and `OsStr::new(s)` of the `OsStr` it stands for.
+    bind("ffi::OsString::new", |args| match args {
+        [] => Ok(Dynamic::from(OsString::new())),
+        [text, ..] => Ok(Dynamic::from(os_like(text)?)),
+    });
     bind("ffi::OsString::default", |_| {
         Ok(Dynamic::from(OsString::new()))
     });

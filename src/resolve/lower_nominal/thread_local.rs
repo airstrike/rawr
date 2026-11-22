@@ -15,10 +15,6 @@
 
 use super::*;
 
-/// The methods std's `impl LocalKey<RefCell<T>>` shares a name with
-/// `impl LocalKey<Cell<T>>`'s, whose declaration the std table keeps alone.
-const REFCELL_NAMESAKES: [&str; 3] = ["set", "take", "replace"];
-
 impl Parser<'_> {
     /// The runtime value of the key `key`, whose initializer `initializer`
     /// renders a `T` of: `thread(|| initializer, local_key, [key, glue])`,
@@ -83,10 +79,10 @@ impl Parser<'_> {
             Ty::Cell(kind, inside) => Some((kind, *inside)),
             _ => None,
         };
+        // Of the impls that declare the member (`set` of `LocalKey<Cell<T>>`
+        // and of `LocalKey<RefCell<T>>`), the one whose self type fits.
         let found = std_method::inherent(&owner, &member);
-        let namesake = matches!(cell, Some((CellKind::RefCell, _)))
-            && REFCELL_NAMESAKES.contains(&member.as_str());
-        if found.is_none() && !namesake {
+        if found.is_none() {
             return Err(Error::UnknownMember {
                 owner: owner.name(&self.models),
                 member,

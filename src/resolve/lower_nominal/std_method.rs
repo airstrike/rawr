@@ -170,14 +170,13 @@ pub(super) fn mode_of(item: &Item) -> Option<receiver::Mode> {
 /// one whose impl's self type fits.
 pub(super) fn inherent(ty: &Ty, member: &str) -> Option<Inherent> {
     for (index, step) in steps(ty).into_iter().enumerate() {
-        let Some((item, mode)) = stable(step.owner, member) else {
+        // Of the impls that declare it, the one whose self type fits.
+        let Some((item, mode)) = stables(step.owner, member).find(|(item, _)| {
+            item.impl_self()
+                .is_none_or(|own| fits(&std_table::written(own), &step.ty))
+        }) else {
             continue;
         };
-        if let Some(own) = item.impl_self()
-            && !fits(&std_table::written(own), &step.ty)
-        {
-            continue;
-        }
         let step_rank = index as u8 * 3;
         let rank = match mode {
             receiver::Mode::Owned => step_rank,
@@ -199,12 +198,18 @@ pub(super) fn inherent(ty: &Ty, member: &str) -> Option<Inherent> {
 /// The stable function `member` that `owner` declares, and how it takes its
 /// receiver.
 fn stable(owner: &str, member: &str) -> Option<(Item, receiver::Mode)> {
-    let item = std_table::item(&format!("{owner}::{member}"))?;
-    if item.kind != "assoc-fn" || item.stability != Stability::Stable {
-        return None;
-    }
-    let mode = mode_of(&item)?;
-    Some((item, mode))
+    stables(owner, member).next()
+}
+
+/// The stable functions `member` that `owner`'s impls declare, each with
+/// how it takes its receiver.
+fn stables(owner: &str, member: &str) -> impl Iterator<Item = (Item, receiver::Mode)> {
+    std_table::items(&format!("{owner}::{member}")).filter_map(|item| {
+        if item.kind != "assoc-fn" || item.stability != Stability::Stable {
+            return None;
+        }
+        Some((item, mode_of(&item)?))
+    })
 }
 
 /// The stable method `member` that std's iterator traits declare, of those
@@ -399,11 +404,12 @@ pub(super) fn lending_trait(ty: &Ty, member: &str) -> Option<&'static str> {
 /// implements for it.
 pub(super) fn path_function(ty: &Ty, member: &str) -> Option<PathFunction> {
     let own = steps(ty).into_iter().next().and_then(|step| {
-        let item = std_table::item(&format!("{}::{member}", step.owner))?;
-        let fits = item
-            .impl_self()
-            .is_none_or(|own| fits(&std_table::written(own), &step.ty));
-        (item.kind == "assoc-fn" && item.stability == Stability::Stable && fits).then_some(item)
+        std_table::items(&format!("{}::{member}", step.owner)).find(|item| {
+            let fits = item
+                .impl_self()
+                .is_none_or(|own| fits(&std_table::written(own), &step.ty));
+            item.kind == "assoc-fn" && item.stability == Stability::Stable && fits
+        })
     });
     let item = match own {
         Some(item) => item,

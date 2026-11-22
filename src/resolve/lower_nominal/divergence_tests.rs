@@ -8653,6 +8653,140 @@ main();
 }
 
 #[test]
+fn std_command_args_and_output_run_as_stds() {
+    // `args` takes any iterable of `AsRef<OsStr>` items, and `output`
+    // collects the child's stdout and stderr into `Output`'s public fields
+    // (#2082).
+    let program = r#"
+use std::process::Command;
+fn main() {
+    let out = Command::new("sh").args(["-c", "echo hi; echo oops >&2; exit 2"]).output().unwrap();
+    println!("{} {:?}", out.status.success(), out.status.code());
+    print!("{}", String::from_utf8_lossy(&out.stdout));
+    println!("{:?} {}", out.stderr, out.stdout.len());
+    let words = vec!["a", "b"];
+    let listed = Command::new("echo").args(words.iter().map(|w| w.to_uppercase())).arg("c").output().unwrap();
+    print!("{}", String::from_utf8(listed.stdout).unwrap());
+    let mut cmd = Command::new("printf");
+    cmd.args(&["%s-%s", "x"]);
+    cmd.args(vec![String::from("y")]);
+    let printed = cmd.output().unwrap().stdout;
+    println!("{:?} {:?}", cmd, printed);
+}
+main();
+"#;
+    assert_eq!(
+        printed_with(program, crate::Access::all()),
+        "false Some(2)\nhi\n[111, 111, 112, 115, 10] 3\nA B c\n\"printf\" \"%s-%s\" \"x\" \"y\" [120, 45, 121]\n"
+    );
+}
+
+#[test]
+fn a_held_types_functions_take_its_borrowed_forms_by_any_path() {
+    // `Path::new(&os)` and `OsString::from(&path)` select their borrowed
+    // forms (#836), by an import or by the full path, and `OsStr::new` is
+    // the text it is given.
+    let output = printed(
+        r#"
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+fn main() {
+    let os = OsString::from("a/b");
+    let path = PathBuf::from("x/y");
+    println!("{} {}", Path::new(&os).display(), std::path::Path::new(&os).display());
+    println!("{:?} {:?}", OsString::from(&path), OsStr::new("s"));
+    println!("{:?} {}", std::ffi::OsStr::new(&os), std::path::Path::new("p/q").display());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a/b a/b\n\"x/y\" \"s\"\n\"a/b\" p/q\n");
+    // A member std declares and rawr doesn't bind is the not-yet error,
+    // never an unknown member (#837).
+    for (call, path) in [
+        ("p.capacity()", "PathBuf::capacity"),
+        ("PathBuf::with_capacity(3)", "PathBuf::with_capacity"),
+        ("p.components()", "Path::components"),
+    ] {
+        let report = refused(&format!(
+            "use std::path::PathBuf;\nfn main() {{\n    let p = PathBuf::new();\n    let _ = {call};\n}}\nmain();\n"
+        ));
+        assert!(
+            report.contains(&format!("rawr doesn't run `{path}` yet")),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn std_atomics_run_as_stds() {
+    // Each atomic has its own impl's members (`Atomic<usize>`'s), its
+    // value is shared by a static, a borrow and an `Arc` on threads, and
+    // rustc names it by the type its alias names (#1549).
+    let output = printed(
+        r#"
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+static NEXT: AtomicUsize = AtomicUsize::new(1);
+struct Counter {
+    hits: AtomicI32,
+}
+fn main() {
+    let a = AtomicUsize::new(5);
+    let old = a.fetch_add(2, Ordering::SeqCst);
+    println!("{old} {} {:?}", a.load(Ordering::Relaxed), a);
+    println!("{:?} {:?}", a.compare_exchange(7, 9, Ordering::SeqCst, Ordering::SeqCst),
+        a.compare_exchange_weak(7, 1, Ordering::SeqCst, Ordering::Relaxed));
+    let b = AtomicBool::default();
+    println!("{} {} {}", b.fetch_not(Ordering::SeqCst), b.swap(false, Ordering::AcqRel), b.into_inner());
+    let small = AtomicU8::from(250);
+    small.fetch_add(10, Ordering::SeqCst);
+    let wide = AtomicU64::new(u64::MAX);
+    println!("{:?} {}", small, wide.fetch_sub(1, Ordering::SeqCst));
+    let counter = Counter { hits: AtomicI32::new(-4) };
+    let borrowed = &counter;
+    borrowed.hits.fetch_max(3, Ordering::SeqCst);
+    println!("{:?}", counter.hits);
+    let shared = Arc::new(AtomicUsize::new(0));
+    let handles = (0..4).map(|_| {
+        let shared = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            for _ in 0..100 {
+                shared.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+    }).collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    NEXT.fetch_add(1, Ordering::Relaxed);
+    println!("{} {} {:?}", shared.load(Ordering::SeqCst), NEXT.load(Ordering::Relaxed), Ordering::SeqCst);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "5 7 7\nOk(7) Err(9)\nfalse true false\n4 18446744073709551615\n3\n400 2 SeqCst\n"
+    );
+    let report = refused(
+        "use std::sync::atomic::*;\nfn main() {\n    let x: () = AtomicUsize::new(0);\n}\nmain();\n",
+    );
+    assert!(
+        report.contains("expected `()`, found `Atomic<usize>`"),
+        "{report}"
+    );
+    let report = refused(
+        "use std::sync::atomic::*;\nfn main() {\n    AtomicUsize::new(0).nope();\n}\nmain();\n",
+    );
+    assert!(
+        report.contains("no method named `nope` found for struct `Atomic<T>`")
+            && report.contains("method not found in `Atomic<usize>`"),
+        "{report}"
+    );
+}
+
+#[test]
 fn std_items_by_their_paths_and_impls() {
     // `std::rc::Rc::new` by its full path (#1253), `SystemTime`'s `Ord`
     // (#1471) and `SeekFrom`'s tuple variants built by their paths (#1978).
@@ -11705,6 +11839,31 @@ fn a_local_key_method_std_declares_for_another_inner_type_is_e0599() {
         report.starts_with("error[E0277]: the trait bound `S: Default` is not satisfied"),
         "{report}"
     );
+}
+
+#[test]
+fn a_refcell_keys_set_take_and_replace_are_its_impls() {
+    // std declares `set`, `take` and `replace` in `impl LocalKey<Cell<T>>`
+    // and in `impl LocalKey<RefCell<T>>`; the std table keeps both (#1549).
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+thread_local! {
+    static NAMES: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static COUNT: Cell<u32> = Cell::new(0);
+}
+fn main() {
+    NAMES.set(vec!["a".to_string()]);
+    let old = NAMES.replace(vec!["b".to_string()]);
+    let now = NAMES.take();
+    COUNT.set(3);
+    println!("{old:?} {now:?} {} {}", COUNT.replace(4), COUNT.take());
+    NAMES.with_borrow(|names| println!("{}", names.len()));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[\"a\"] [\"b\"] 3 4\n0\n");
 }
 
 #[test]
