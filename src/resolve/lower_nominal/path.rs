@@ -1208,10 +1208,12 @@ impl<'a> Parser<'a> {
                 path.push((member.clone(), member_span));
                 self.unresolved_root_error(&path)
             } else {
+                // A path's first segment is a type or a module, as rustc
+                // offers to import it: `Rc::new`, `mem::swap` (#809).
                 let imports = if owner.contains("::") {
                     Box::default()
                 } else {
-                    self.imports(&owner, Wanted::Type)
+                    self.imports(&owner, Wanted::Path)
                 };
                 Error::UnknownType {
                     name: owner,
