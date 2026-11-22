@@ -1469,13 +1469,11 @@ impl<'a> Parser<'a> {
             if self.host_from(&target, &source) {
                 return true;
             }
-            // A crate's `impl From<Its> for PathBuf` or `From<Its> for
-            // f32`, of its type into a std type Rawr's std holds or a
-            // number: the `into` it gives `Its`, which a generic so bounded
-            // runs where it is compiled at `Its` (`imported::instanced`).
-            if (conversion::held_std(&target) || matches!(target, Ty::Int(_) | Ty::Float(_)))
-                && self.source_into(&target, &source)
-            {
+            // A crate's `impl From<Its> for PathBuf`, of its type into a
+            // std type Rawr's std holds: the `into` it gives `Its`, which a
+            // generic so bounded runs where it is compiled at `Its`
+            // (`imported::instanced`).
+            if conversion::held_std(&target) && self.source_into(&target, &source) {
                 return true;
             }
             if trait_name != "From" {
