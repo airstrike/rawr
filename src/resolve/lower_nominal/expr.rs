@@ -1646,6 +1646,18 @@ impl<'a> Parser<'a> {
                 let ty = Ty::sequence(kind, self.inference.fresh());
                 let Some(op) = self.std_conversion(&ty, &value.ty) else {
                     let source = self.inference.resolve(&value.ty);
+                    // `Vec::from(bytes)`: a crate's `impl From<Bytes> for
+                    // Vec<u8>`, which is the argument's own `into` (core's
+                    // blanket `Into`), as `PathBuf::from(handle)` is.
+                    if self.source_into(&ty, &source) {
+                        let (forms, owner) = self.conversion_forms(&source).unwrap_or_default();
+                        self.settle_source_into(&ty, &source, &forms);
+                        let [value] = <[ParsedExpr; 1]>::try_from(arguments)
+                            .unwrap_or_else(|_| unreachable!("the call's one argument"));
+                        let value = self.parse_target_into(value, &source, forms, owner, end);
+                        self.unify_type(&value.ty, &ty);
+                        return Ok(value);
+                    }
                     if let Some(error) = self.conversion_not_yet(&ty, &source, call) {
                         return Err(error);
                     }

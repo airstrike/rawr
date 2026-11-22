@@ -509,6 +509,14 @@ pub mod deref {
     #[derive(Clone)]
     pub struct Bytes(Vec<u8>);
 
+    /// The bytes as a `Vec`, as the `bytes` crate's `From<Bytes> for
+    /// Vec<u8>` gives them.
+    impl From<Bytes> for Vec<u8> {
+        fn from(bytes: Bytes) -> Vec<u8> {
+            bytes.0
+        }
+    }
+
     impl Deref for Bytes {
         type Target = [u8];
 

@@ -85,10 +85,15 @@ fn a_crate_types_deref_gives_its_targets_members() {
 
 /// A borrow of a crate struct's field that derefs to `[u8]`, as iced's
 /// `&screenshot.rgba`, is the `&[u8]` a function or a `let` takes, and a
-/// borrow of the struct, whose other fields are read after.
+/// borrow of the struct, whose other fields are read after. Its target's
+/// `to_vec` copies the bytes, and `Vec::from` and `.into()` call the
+/// crate's `From<Bytes> for Vec<u8>` (#460).
 #[test]
 fn a_borrowed_crate_field_derefs_without_moving_its_owner() {
-    runs_as_cargo_does("deref_field", "7\n4 2\n4 Some(1)\n4\n");
+    runs_as_cargo_does(
+        "deref_field",
+        "7\n4 2\n4 Some(1)\n4\n[1, 2, 3, 4] [1, 2, 3, 4] [1, 2, 3, 4]\n",
+    );
 }
 
 /// The same field's deref where the program names no path to its type,

@@ -501,6 +501,35 @@ impl<'a> Parser<'a> {
         Some((forms, self.models.item_owner(&path).cloned()))
     }
 
+    /// The one form of `forms`, a facade type `source`'s own `into`s, whose
+    /// output `target` fits gives `target` its types, as rustc selects the
+    /// one impl: `Vec::from(bytes)` is a `Vec<u8>` by the crate's
+    /// `From<Bytes> for Vec<u8>`.
+    pub(super) fn settle_source_into(
+        &mut self,
+        target: &Ty,
+        source: &Ty,
+        forms: &[crate::host::item::Definition],
+    ) {
+        let gives = |parser: &mut Self, item: &crate::host::item::Definition| {
+            parser
+                .instantiate_host_signature(item, Some(source), Some(&[]), Span::NONE)
+                .is_ok_and(|signature| parser.unify_type(&signature.output, target))
+        };
+        let fitting = forms
+            .iter()
+            .filter(|item| {
+                let checkpoint = self.inference.checkpoint();
+                let fits = gives(self, item);
+                self.inference.rollback(checkpoint);
+                fits
+            })
+            .collect::<Vec<_>>();
+        if let [item] = fitting[..] {
+            gives(self, item);
+        }
+    }
+
     /// Whether one of the facade type `source`'s own `into` forms gives
     /// `target`: a crate's `impl From<Its> for PathBuf` is the `into` of
     /// core's blanket `Into` on `Its`, as `From<Degrees> for f32` is, and
