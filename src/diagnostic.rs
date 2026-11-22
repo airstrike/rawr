@@ -5,6 +5,7 @@ mod arguments;
 mod arm;
 pub mod code;
 mod definition;
+mod implemented;
 mod panic;
 mod render;
 mod report;

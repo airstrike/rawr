@@ -5542,3 +5542,39 @@ fn an_into_to_a_type_with_no_from_impl_for_the_value_is_e0277() {
         "{literal}"
     );
 }
+
+/// An `into` to a std type none of whose `From` impls takes the value
+/// lists the impls, as rustc's help does, each type forced trimmed and
+/// with its elided lifetimes: `Cow<'_, str>` (#671). What `rustc --edition
+/// 2021` reports.
+#[test]
+fn an_into_to_a_std_type_lists_its_from_impls() {
+    let shown = rendered("struct P;\nfn main() {\n    let s: String = P.into();\n}\n");
+    let expected = [
+        "error[E0277]: the trait bound `String: From<P>` is not satisfied",
+        " --> main.rs:3:23",
+        "  |",
+        "3 |     let s: String = P.into();",
+        "  |                       ^^^^ the trait `From<P>` is not implemented for `String`",
+        "  |",
+        "  = help: `String` implements trait `From<T>`:",
+        "            From<&String>",
+        "            From<&mut str>",
+        "            From<&str>",
+        "            From<Box<str>>",
+        "            From<Cow<'_, str>>",
+        "            From<char>",
+        "  = note: required for `P` to implement `Into<String>`",
+    ]
+    .join("\n");
+    assert_eq!(shown.trim_end(), expected);
+    let path = rendered("fn main() {\n    let s: std::path::PathBuf = 5u8.into();\n}\n");
+    assert!(
+        path.contains(
+            "  = help: `PathBuf` implements trait `From<T>`:\n            From<&T>\n            \
+             From<Box<Path>>\n            From<Cow<'_, Path>>\n            From<OsString>\n            \
+             From<String>\n  = note: required for `u8` to implement `Into<PathBuf>`\n"
+        ),
+        "{path}"
+    );
+}

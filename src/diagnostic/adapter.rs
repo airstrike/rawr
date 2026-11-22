@@ -2576,6 +2576,15 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             } else {
                 builder
             };
+            // A std target's `From` impls, which rustc lists for an `into`
+            // none of them takes.
+            let builder = match into_bound(error) && declared.is_none() && !*derive {
+                true => match super::implemented::help(owner, "core::convert::From") {
+                    Some(help) => builder.help(help),
+                    None => builder,
+                },
+                false => builder,
+            };
             // An `into`'s requirement follows the help at the definition
             // (`sections`) when there is one.
             let builder = if into_bound(error) && declared.is_some() {
