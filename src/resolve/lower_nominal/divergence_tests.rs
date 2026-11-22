@@ -9115,3 +9115,41 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn std_trait_functions_without_self_run_by_path() {
+    // `TryFrom::try_from`, `FromIterator::from_iter`, `Sum::sum` and
+    // `Product::product` take `Self` from the expected type, as the std
+    // methods whose bodies call them do; `Vec::from_iter` and
+    // `String::from_iter` name it; an operator trait's function is its
+    // operator (#759).
+    let output = printed(
+        r#"
+use std::convert::TryFrom;
+use std::iter::FromIterator;
+use std::ops::{Add, Mul, Neg, Not};
+#[derive(Debug, Clone, Copy)]
+struct P(i32);
+impl Add for P {
+    type Output = P;
+    fn add(self, o: P) -> P { P(self.0 + o.0) }
+}
+fn main() {
+    let small: Result<u8, _> = TryFrom::try_from(300i32);
+    let fits: Result<i8, std::num::TryFromIntError> = std::convert::TryFrom::try_from(5u64);
+    let v: Vec<i32> = FromIterator::from_iter(1..4);
+    let w = Vec::from_iter(v.iter().map(|x| x * 2));
+    let s = String::from_iter(['a', 'b']);
+    let total: i32 = std::iter::Sum::sum(v.iter());
+    let product: i64 = std::iter::Product::product([2i64, 3].into_iter());
+    println!("{small:?} {fits:?} {v:?} {w:?} {s} {total} {product}");
+    println!("{} {} {} {} {:?}", Add::add(1, 2) * 10, Mul::mul(2.5, 2.0), Neg::neg(3), Not::not(true), Add::add(P(1), P(2)));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Err(TryFromIntError(PosOverflow)) Ok(5) [1, 2, 3] [2, 4, 6] ab 6 6\n30 5 -3 false P(3)\n"
+    );
+}

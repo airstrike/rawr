@@ -2161,6 +2161,9 @@ impl<'a> Parser<'a> {
             };
             return Ok(self.literal(text, builtin, span(name_span.start(), member_span.end())));
         }
+        if builtin == Ty::String && member.as_str() == "from_iter" {
+            return self.parse_from_iter(builtin, name_span.start());
+        }
         let (mut arguments, end) = self.parse_call_arguments("associated function arguments")?;
         let expression = span(name_span.start(), end);
         let owner = owner_id(&builtin);

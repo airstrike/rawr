@@ -1549,9 +1549,12 @@ impl<'a> Parser<'a> {
                 _ => "Vec",
             };
             if let Some(value) =
-                self.std_method_path(owner, written, &member, name_span, member_span)
+                self.std_method_path(owner.clone(), written, &member, name_span, member_span)
             {
                 return value;
+            }
+            if member.as_str() == "from_iter" {
+                return self.parse_from_iter(owner, name_span.start());
             }
             let (arguments, end) = self.parse_call_arguments(&format!("`{name}` arguments"))?;
             // `Vec<T>` from `[T; N]`, or `VecDeque<T>` from a `Vec<T>` or

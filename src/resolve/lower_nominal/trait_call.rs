@@ -558,6 +558,38 @@ impl<'a> Parser<'a> {
                 tokens.extend(without_reference(value));
                 tokens.push((Token::RightParen, close));
             }
+            // An operator trait's function is its operator, as std's impls
+            // for the primitives are: `Add::add(a, b)` is `a + b`.
+            _ if let Some(text) = operator_template(trait_name, member) => {
+                let (left, rest) = split_first_argument(arguments);
+                let (right, extra) = split_first_argument(rest);
+                let unary = !text.contains("__rawr_right");
+                if right.is_empty() != unary || !extra.is_empty() {
+                    return Err(expects(if unary { 1 } else { 2 }));
+                }
+                let tokens = template_tokens(
+                    &text,
+                    &[("__rawr_left", left), ("__rawr_right", right)],
+                    start,
+                );
+                self.splice_tokens(tokens);
+                return self.parse_primary();
+            }
+            // A function without `self` whose `Self` the expected type
+            // gives is the std method whose body calls it, on its first
+            // argument: `Sum::sum(it)` is `it.sum()`.
+            _ if let Some(text) = calling_method(trait_name, member) => {
+                let (first, extra) = split_first_argument(arguments);
+                if !extra.is_empty() {
+                    return Err(expects(1));
+                }
+                if turbofish.is_some() {
+                    return Err(turbofish_not_yet());
+                }
+                let tokens = template_tokens(text, &[("__rawr_value", first)], start);
+                self.splice_tokens(tokens);
+                return self.parse_primary();
+            }
             // Any other trait function that takes `self` is the method call
             // on its first argument, which method lookup resolves as Rust's
             // does: `Iterator::next(&mut it)` is `it.next()`,
@@ -1796,6 +1828,70 @@ impl<'a> Parser<'a> {
             self.require_type(&fresh, &argument, call)?;
         }
         Ok(())
+    }
+}
+
+/// The expression std's impls for the primitives give the operator
+/// trait `trait_name`'s function `member`, with holes for its operands:
+/// `Add::add` is `(__rawr_left + __rawr_right)`, `Neg::neg` is
+/// `(-__rawr_left)`. An assigning operator's function has none.
+fn operator_template(trait_name: &str, member: &str) -> Option<String> {
+    let (symbol, ..) = crate::resolve::OPERATOR_TRAITS
+        .iter()
+        .find(|(_, name, function)| *name == trait_name && *function == member)?;
+    Some(match *symbol {
+        "neg" => "(-__rawr_left)".to_owned(),
+        "!" => "(!__rawr_left)".to_owned(),
+        symbol if symbol.ends_with('=') => return None,
+        symbol => format!("(__rawr_left {symbol} __rawr_right)"),
+    })
+}
+
+/// The std method whose body is the call of `trait_name`'s function
+/// `member` without `self` on the method's receiver, with a hole for that
+/// receiver: `Iterator::sum` is `Sum::sum(self)`, `TryInto::try_into` is
+/// `U::try_from(self)`, and `Iterator::collect` is
+/// `FromIterator::from_iter(self)`, of an `IntoIterator`.
+fn calling_method(trait_name: &str, member: &str) -> Option<&'static str> {
+    Some(match (trait_name, member) {
+        ("Sum", "sum") => "__rawr_value.sum()",
+        ("Product", "product") => "__rawr_value.product()",
+        ("TryFrom", "try_from") => "__rawr_value.try_into()",
+        ("FromIterator", "from_iter") => FROM_ITER,
+        _ => return None,
+    })
+}
+
+/// `FromIterator::from_iter(it)`, as `Iterator::collect` calls it: one
+/// primary expression.
+const FROM_ITER: &str = "(__rawr_value.into_iter().collect())";
+
+impl Parser<'_> {
+    /// `Vec::from_iter(it)`, `String::from_iter(it)`: std's
+    /// `FromIterator` for the std type `owner`, as `Iterator::collect`
+    /// calls it, once the path up to `from_iter` is read.
+    pub(super) fn parse_from_iter(
+        &mut self,
+        owner: Ty,
+        start: Position,
+    ) -> Result<ParsedExpr, Error> {
+        let (arguments, close) = self.take_argument_tokens()?;
+        let call = span(start, close);
+        let (first, extra) = split_first_argument(arguments);
+        if first.is_empty() || !extra.is_empty() {
+            return Err(Error::argument_count(
+                Callee::AssociatedFunction,
+                crate::resolve::Qualified(&owner.name(&self.models), "from_iter").to_string(),
+                1,
+                argument_count(&first) + argument_count(&extra),
+                call,
+            ));
+        }
+        let tokens = template_tokens(FROM_ITER, &[("__rawr_value", first)], start);
+        self.splice_tokens(tokens);
+        let value = self.parse_primary()?;
+        self.require_type(&owner, &value.ty, call)?;
+        Ok(value)
     }
 }
 
