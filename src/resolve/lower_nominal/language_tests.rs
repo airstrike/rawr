@@ -12943,7 +12943,7 @@ main();
     "#,
     );
     assert!(
-        error.contains("usize (`<impl Iterator<Item = i64> as Iterator>::Item`)"),
+        error.contains("usize (`<Range<i64> as Iterator>::Item`)"),
         "{error}"
     );
     let error = rejected(

@@ -782,6 +782,22 @@ impl Model {
                     "f64" => Ok(0.0_f64.into()),
                     "String" => Ok(ImmutableString::new().into()),
                     "Duration" => Ok(Dynamic::from(std::time::Duration::ZERO)),
+                    // `Range<T>`'s derived `Default`, `T`'s at both ends.
+                    "Range" => {
+                        let element = match path.arguments.first() {
+                            Some(type_ref::Argument::Type(element)) => {
+                                self.default_for_type(element, active)?
+                            }
+                            _ => Dynamic::UNIT,
+                        };
+                        crate::resolve::lower_nominal::range::empty(&element).ok_or_else(|| {
+                            construction::Error::ValueType {
+                                expected: path.name.clone(),
+                                actual: "no executable Default implementation".into(),
+                            }
+                        })
+                    }
+                    "RangeFull" => Ok(Dynamic::from(..)),
                     _ => Err(construction::Error::ValueType {
                         expected: path.name.clone(),
                         actual: "no executable Default implementation".into(),

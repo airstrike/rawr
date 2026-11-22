@@ -474,29 +474,14 @@ impl<'a> Parser<'a> {
                 capability == capability::Kind::Copy
                     || crate::capability::builtin_supports("String", capability)
             }
-            // `RangeInclusive<T>` is `Clone` and `Debug`, as `T` is, and an
-            // `Iterator` of an integer.
-            Ty::InclusiveRange(_) if capability == capability::Kind::Iterator => true,
-            range @ (Ty::InclusiveRange(_) | Ty::FloatRange) => {
-                let element = match range {
-                    Ty::InclusiveRange(kind) => Ty::Int(kind),
-                    _ => Ty::Float(Float::F64),
-                };
-                matches!(
-                    capability,
-                    capability::Kind::Clone | capability::Kind::Debug
-                ) && self.type_provides(&element, capability)
-            }
-            Ty::Range(element)
-                if capability == capability::Kind::Iterator && matches!(*element, Ty::Int(_)) =>
-            {
-                true
-            }
-            // `Range<T>` and `RangeInclusive<T>` derive from `T`, but are
-            // never `Copy`.
-            Ty::Range(element) | Ty::InclusiveOf(element) => {
-                capability != capability::Kind::Copy && self.type_provides(&element, capability)
-            }
+            // std's ranges derive from `T`, as each struct does.
+            range @ (Ty::InclusiveRange(_)
+            | Ty::FloatRange
+            | Ty::Range(_)
+            | Ty::InclusiveOf(_)
+            | Ty::OpenRange(..)) => self
+                .range_provides(&range, capability)
+                .expect("a range type has std's range parts"),
             Ty::ParseError(error) => crate::capability::builtin_supports(error.name(), capability),
             // `fmt::Arguments<'_>` is `Copy` and writes its text.
             Ty::Arguments => matches!(
@@ -836,6 +821,7 @@ impl<'a> Parser<'a> {
                 "RangeInclusive<Dynamic>",
                 TypeId::of::<std::ops::RangeInclusive<Dynamic>>(),
             ),
+            Ty::OpenRange(open, _) => intrinsic::Type::builtin(open.name(), range::type_id(open)),
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Time(Time::Duration) => {
                 intrinsic::Type::builtin("Duration", TypeId::of::<std::time::Duration>())

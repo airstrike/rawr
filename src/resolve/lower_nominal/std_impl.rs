@@ -103,6 +103,8 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
             "core::ops::range::RangeInclusive",
             vec![Ty::Float(Float::F64)],
         ),
+        Ty::OpenRange(range::Open::Full, _) => (range::Open::Full.definition(), Vec::new()),
+        Ty::OpenRange(open, element) => (open.definition(), one(element)),
         _ => return None,
     })
 }
@@ -163,6 +165,15 @@ pub(super) fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
         "alloc::string::FromUtf8Error" => Ty::ParseError(ParseError::Utf8),
         "core::num::error::TryFromIntError" => Ty::ParseError(ParseError::TryFromInt),
         "core::ops::range::Range" => Ty::Range(first()?),
+        "core::ops::range::RangeInclusive" => match arguments.first()? {
+            Ty::Int(kind) => Ty::InclusiveRange(*kind),
+            Ty::Float(_) => Ty::FloatRange,
+            element => Ty::InclusiveOf(Box::new(element.clone())),
+        },
+        "core::ops::range::RangeFrom" => Ty::OpenRange(range::Open::From, first()?),
+        "core::ops::range::RangeTo" => Ty::OpenRange(range::Open::To, first()?),
+        "core::ops::range::RangeToInclusive" => Ty::OpenRange(range::Open::ToInclusive, first()?),
+        "core::ops::range::RangeFull" => Ty::OpenRange(range::Open::Full, Box::new(Ty::Unit)),
         _ => return None,
     })
 }

@@ -488,6 +488,20 @@ def_package! {
         // element's place, or a copy of a `Copy` element, as `v[i]` reads
         // it, never a copy of the sequence.
         lib.set_iter_result(TypeId::of::<crate::place::Place>(), place_elements);
+        // std's ranges of chars, and a `RangeFrom` or a `RangeInclusive`
+        // of a program's values, by std's `Step`.
+        lib.set_iter(
+            TypeId::of::<std::ops::Range<char>>(),
+            crate::resolve::lower_nominal::range::steps,
+        );
+        lib.set_iter(
+            TypeId::of::<std::ops::RangeInclusive<Dynamic>>(),
+            crate::resolve::lower_nominal::range::steps,
+        );
+        lib.set_iter(
+            TypeId::of::<std::ops::RangeFrom<Dynamic>>(),
+            crate::resolve::lower_nominal::range::steps,
+        );
         // A channel's receiver, as `for v in rx` walks it.
         lib.set_iter(
             TypeId::of::<crate::resolve::lower_nominal::thread::Receiver>(),
