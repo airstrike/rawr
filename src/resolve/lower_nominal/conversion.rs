@@ -584,11 +584,26 @@ impl<'a> Parser<'a> {
     /// converts into where its template bounds it by `Into<U>`
     /// (`Instances::conversions`).
     pub(super) fn instance_into_target(&self, value: &ParsedExpr) -> Option<Ty> {
-        if self.instance_conversions.is_empty() || !value.is_local() {
+        if self.instance_conversions.is_empty() {
             return None;
         }
-        let declaration = self.bindings.get(value.source.as_str())?.declaration;
-        self.instance_conversions.get(&declaration).cloned()
+        if value.is_local()
+            && let Some(binding) = self.bindings.get(value.source.as_str())
+            && let Some(target) = self.instance_conversions.get(&binding.declaration)
+        {
+            return Some(target.clone());
+        }
+        // A value of the parameter's type reached another way, as `let p =
+        // path; p.into()` or a tuple's field: its type is the generic's,
+        // whose bound rustc reads.
+        let ty = self.inference.resolve(&value.ty);
+        self.bindings
+            .values()
+            .filter_map(|binding| {
+                let target = self.instance_conversions.get(&binding.declaration)?;
+                (self.inference.resolve(&binding.ty) == ty).then(|| target.clone())
+            })
+            .next()
     }
 
     /// Keep the `into` of the imported type `ty` as a miss when none of

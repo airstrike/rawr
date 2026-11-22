@@ -3300,7 +3300,9 @@ fn string_like_generics_take_what_their_bounds_impls_take() {
 /// Rawr's std holds, seen as rustc sees it: a program function's and
 /// method's `impl Into<PathBuf>`, compiled at each caller's type, and the
 /// crate's take a `Picked` and a literal, and `.into()` into a `PathBuf`
-/// and `PathBuf::from` call the crate's impl. The output is `cargo run`'s.
+/// and `PathBuf::from` call the crate's impl. A value of the generic's
+/// type that reaches `.into()` by another binding and a tuple converts by
+/// the bound too (#1720). The output is `cargo run`'s.
 #[test]
 fn a_crates_from_impl_for_a_held_std_type_is_callable() {
     let (rawr, cargo) = both_printed("picked.rs", "");
@@ -3308,7 +3310,7 @@ fn a_crates_from_impl_for_a_held_std_type_is_callable() {
     assert_eq!(
         rawr,
         "loaded picked/a.txt\nloaded b.txt\npicked/c.txt\npicked/d.txt\npicked/e/owned\n\
-         docs opened picked/f.txt\ndocs opened g.txt"
+         docs opened picked/f.txt\ndocs opened g.txt\nmoved picked/h.txt\nmoved i.txt"
     );
 }
 
