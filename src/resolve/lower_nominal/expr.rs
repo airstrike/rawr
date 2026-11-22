@@ -394,7 +394,7 @@ impl<'a> Parser<'a> {
                 }
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
-                self.flow().borrow(
+                let loan = self.flow().borrow(
                     operand.span.start(),
                     operand.span,
                     whole,
@@ -402,6 +402,7 @@ impl<'a> Parser<'a> {
                     inner,
                     reference,
                 );
+                self.reborrowed(loan);
                 self.flow().alias(operand.span.start(), start);
                 operand.ty = Ty::Reference {
                     mutable: true,
@@ -422,7 +423,7 @@ impl<'a> Parser<'a> {
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
-                self.flow().borrow(
+                let loan = self.flow().borrow(
                     operand.span.start(),
                     operand.span,
                     whole,
@@ -430,6 +431,7 @@ impl<'a> Parser<'a> {
                     inner,
                     reference,
                 );
+                self.reborrowed(loan);
             } else {
                 // `&String::from("a")`, `&(n + 1)`: a borrow of a temporary.
                 self.borrow_temporary(&operand, whole);
@@ -455,7 +457,8 @@ impl<'a> Parser<'a> {
             let start = self.next().1;
             let operand = self.parse_operand()?;
             // `*r` reads what the holder `r` refers to: its use's place.
-            self.flow().deref(operand.span.start(), start);
+            let reference = matches!(self.inference.resolve(&operand.ty), Ty::Reference { .. });
+            self.flow().deref(operand.span.start(), start, reference);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
             // `*w` of a program type is `*Deref::deref(&w)`, and
             // `*DerefMut::deref_mut(&mut w)` where it is assigned, as
@@ -908,15 +911,10 @@ impl<'a> Parser<'a> {
                 };
                 let (ty, declaration) = (binding.ty.clone(), binding.declaration);
                 // `self` is a local of the method's body, as rustc holds it:
-                // a move out of an owned one or of a part of it is followed,
-                // and what a `&self` holds flows where it is read (#170). A
-                // `&mut self` is not yet: a move of it into a generic
-                // parameter is not followed.
-                let mutable = matches!(
-                    self.inference.resolve(&ty),
-                    Ty::Reference { mutable: true, .. }
-                );
-                if self.closures.is_empty() && !mutable {
+                // a move out of an owned one, a `&mut` one or a part of one
+                // is followed, and what a `&self` or a `&mut self` holds
+                // flows where it is read (#170).
+                if self.closures.is_empty() {
                     self.mention("self", declaration, &ty, token_span);
                 }
                 // A closure reads `self` through the local its outermost

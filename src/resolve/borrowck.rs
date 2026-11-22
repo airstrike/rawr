@@ -165,6 +165,24 @@ pub(crate) struct Loan {
     /// A borrow of a reference itself (`&r`), which a deref coercion may
     /// make a reborrow of what it refers to (`&*r`).
     pub(crate) of_reference: bool,
+    /// A reborrow's references it lasts within ([`Reborrow::through`]),
+    /// where these facts place them.
+    pub(crate) through: Option<Vec<Path>>,
+}
+
+/// A value read through references that lasts within them, as rustc's
+/// reborrow constraints have it: `&**x`, or `self.a` of a `&mut` returned
+/// from a `&mut self`.
+#[derive(Clone, Debug)]
+pub(crate) struct Reborrow {
+    /// The local the value is held in.
+    pub(crate) value: Local,
+    /// The local its place is below.
+    pub(crate) place: Local,
+    /// The region positions, in the type of `place`, of the references the
+    /// value lasts within: from the innermost one its place goes through
+    /// out to the first shared one.
+    pub(crate) through: Vec<Path>,
 }
 
 /// Whether a loan is a closure's capture, and which kind, as rustc reports
@@ -230,6 +248,11 @@ pub(crate) struct Body {
     /// The function's own signature, which what it returns is checked
     /// against.
     pub(crate) own: Option<OwnSignature>,
+    /// Each `&mut` place the function returns, read through a reference,
+    /// which rustc reborrows there.
+    pub(crate) returned_reborrows: Vec<Reborrow>,
+    /// Each value the body stores below a reference.
+    pub(crate) stores: Vec<Store>,
     /// Each closure body's first block, with a hidden local its body reads
     /// a capture by, or one of its parameters, which has its value again
     /// each time the body starts.
@@ -239,12 +262,29 @@ pub(crate) struct Body {
     pub(crate) single_assignments: Vec<(Point, Local)>,
 }
 
+/// A value the body stores below a reference (`v.push(x)`, `*r = x`):
+/// what it stores through a parameter outlives what the parameter's type
+/// says is there.
+#[derive(Clone, Debug)]
+pub(crate) struct Store {
+    /// A hidden local holding what is stored, at the positions of the value
+    /// stored into.
+    pub(crate) value: Local,
+    /// The local the value stored into is below, and where each position
+    /// of the value is in the local's type, by prefix.
+    pub(crate) place: Local,
+    pub(crate) positions: Vec<(Path, Path)>,
+    /// The call or the assignment that stores it.
+    pub(crate) span: Span,
+    pub(crate) cause: super::outlives::Cause,
+}
+
 /// A function's own signature, as its body is checked against it.
 #[derive(Clone, Debug)]
 pub(crate) struct OwnSignature {
     /// Each parameter, `self` first, with the regions of its type and
     /// whether it is `self`.
-    pub(crate) parameters: Vec<(Local, signature::Regions, bool)>,
+    pub(crate) parameters: Vec<(Local, signature::Parameter, bool)>,
     pub(crate) output: signature::Output,
     pub(crate) names: Names,
 }
@@ -254,6 +294,9 @@ pub(crate) struct OwnSignature {
 #[derive(Clone, Debug)]
 pub(crate) struct Names {
     pub(crate) item: super::outlives::Item,
+    /// A method's name: the lifetimes declared after it are its own, and
+    /// the others its impl's. A function declares them all.
+    pub(crate) name: Span,
     /// Each lifetime parameter, and where it is declared.
     pub(crate) declared: Vec<(ImmutableString, Span)>,
     /// Each elided input lifetime's reference, by its number less one.
@@ -361,7 +404,10 @@ pub(crate) struct Conflict {
 /// runs, as rustc reports the first of a place's conflicts at one access.
 pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
     let reach = region::reach(body);
-    if let Some(returned) = returned_local(body, &reach).or_else(|| returned::parameter(body)) {
+    if let Some(returned) = returned_local(body, &reach)
+        .or_else(|| returned::parameter(body))
+        .or_else(|| returned::stored(body))
+    {
         return Some(returned);
     }
     if body.loans.is_empty() {

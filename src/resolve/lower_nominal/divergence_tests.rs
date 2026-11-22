@@ -3352,3 +3352,319 @@ main();
     );
     assert_eq!(output, "Some(1) (2, 4, 1) (2, 4, 1) Some(3) 4\n");
 }
+
+#[test]
+fn a_mut_reborrow_lasts_within_every_reference_it_goes_through() {
+    // rustc: `&mut **x` is within `'a`, and `self.a` within the `&mut
+    // self` it goes through (#2476).
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a mut &'b mut i32) -> &'b mut i32 { &mut **x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:55
+  |
+2 | fn f<'a, 'b>(x: &'a mut &'b mut i32) -> &'b mut i32 { &mut **x }
+  |      --  -- lifetime `'b` defined here                ^^^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> { fn get(&mut self) -> &'a mut i32 { self.a } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:53
+  |
+3 | impl<'a> S<'a> { fn get(&mut self) -> &'a mut i32 { self.a } }
+  |      --                 -                           ^^^^^^ method was supposed to return data with lifetime `'a` but it is returning data with lifetime `'1`
+  |      |                  |
+  |      |                  let's call the lifetime of this reference `'1`
+  |      lifetime `'a` defined here
+"#),
+    );
+    // A `&mut self` moved out of is moved.
+    signature_verdict(
+        r#"
+struct S { a: i32 }
+impl S {
+    fn get(&mut self) -> &mut i32 {
+        let t = self;
+        t.a += 1;
+        &mut self.a
+    }
+}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0382]: borrow of moved value: `self`
+ --> <script>:7:9
+  |
+4 |     fn get(&mut self) -> &mut i32 {
+  |            --------- move occurs because `self` has type `&mut S`, which does not implement the `Copy` trait
+5 |         let t = self;
+  |                 ---- value moved here
+6 |         t.a += 1;
+7 |         &mut self.a
+  |         ^^^^^^^^^^^ value borrowed here after move
+"#),
+    );
+    // So is one given to a generic parameter, which rustc doesn't reborrow.
+    signature_verdict(
+        r#"
+struct X(u32);
+impl X {
+    fn f(&mut self) {
+        generic(self);
+        self.0 += 1;
+    }
+}
+fn generic<T>(_x: T) {}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0382]: use of moved value: `self`
+ --> <script>:6:9
+  |
+4 |     fn f(&mut self) {
+  |          --------- move occurs because `self` has type `&mut X`, which does not implement the `Copy` trait
+5 |         generic(self);
+  |                 ---- value moved here
+6 |         self.0 += 1;
+  |         ^^^^^^^^^^^ value used here after move
+  |
+help: consider creating a fresh reborrow of `self` here
+  |
+5 |         generic(&mut *self);
+  |                 ++++++
+"#),
+    );
+    // So is any `&mut` a `let` takes without its type written.
+    signature_verdict(
+        r#"
+fn f(r: &mut i32) {
+    let t = r;
+    *t += 1;
+    *r += 1;
+}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0382]: use of moved value: `r`
+ --> <script>:5:5
+  |
+2 | fn f(r: &mut i32) {
+  |      - move occurs because `r` has type `&mut i32`, which does not implement the `Copy` trait
+3 |     let t = r;
+  |             - value moved here
+4 |     *t += 1;
+5 |     *r += 1;
+  |     ^^^^^^^ value used here after move
+"#),
+    );
+    // rustc accepts each: the reborrow is within the output's lifetime.
+    signature_verdict(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> {
+    fn get(&mut self) -> &mut i32 { self.a }
+    fn whole(&'a mut self) -> &'a mut i32 { self.a }
+}
+fn inner<'a, 'b>(x: &'a mut &'b mut i32) -> &'a mut i32 { &mut **x }
+fn take(s: &mut i32) -> &mut i32 { let t = s; t }
+fn main() {
+    let mut m = 5;
+    let mut r = &mut m;
+    *inner(&mut r) += 1;
+    *take(&mut m) += 1;
+    println!("{}", m);
+}
+main();
+"#,
+        Ok("7\n"),
+    );
+}
+
+#[test]
+fn a_range_slice_lasts_within_the_str_it_slices() {
+    // rustc: `&x[1..]` of a `&'a str` is within `'a` (#2477).
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a str, _y: &'b str) -> &'b str { &x[1..] }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:52
+  |
+2 | fn f<'a, 'b>(x: &'a str, _y: &'b str) -> &'b str { &x[1..] }
+  |      --  -- lifetime `'b` defined here             ^^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    // So is one of a `&'a [i32]`.
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a [i32], _y: &'b [i32]) -> &'b [i32] { &x[1..] }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:58
+  |
+2 | fn f<'a, 'b>(x: &'a [i32], _y: &'b [i32]) -> &'b [i32] { &x[1..] }
+  |      --  -- lifetime `'b` defined here                   ^^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+}
+
+#[test]
+fn a_borrow_stored_through_a_mut_parameter_outlives_what_it_refers_to() {
+    // rustc: what a `&mut` parameter refers to keeps the borrows stored in
+    // it for its own lifetimes (#2478).
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(v: &mut Vec<&'a i32>, x: &'b i32) { v.push(x); }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:50
+  |
+2 | fn f<'a, 'b>(v: &mut Vec<&'a i32>, x: &'b i32) { v.push(x); }
+  |      --  -- lifetime `'b` defined here           ^^^^^^^^^ argument requires that `'b` must outlive `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+  = note: requirement occurs because of a mutable reference to `Vec<&i32>`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
+    );
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(r: &mut &'a i32, x: &'b i32) { *r = x; }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:45
+  |
+2 | fn f<'a, 'b>(r: &mut &'a i32, x: &'b i32) { *r = x; }
+  |      --  -- lifetime `'b` defined here      ^^^^^^ assignment requires that `'b` must outlive `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+"#),
+    );
+    signature_verdict(
+        r#"
+struct H<'a> { x: &'a i32 }
+fn f<'a, 'b>(h: &mut H<'a>, x: &'b i32) { h.x = x; }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:43
+  |
+3 | fn f<'a, 'b>(h: &mut H<'a>, x: &'b i32) { h.x = x; }
+  |      --  -- lifetime `'b` defined here    ^^^^^^^ assignment requires that `'b` must outlive `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+"#),
+    );
+    // rustc runs each: the stored borrow outlives the lifetime it is
+    // stored at.
+    signature_verdict(
+        r#"
+struct H<'a> { x: &'a i32 }
+fn push<'a, 'b: 'a>(v: &mut Vec<&'a i32>, x: &'b i32) { v.push(x); }
+fn set<'a, 'b: 'a>(r: &mut &'a i32, x: &'b i32) { *r = x; }
+fn field<'a>(h: &mut H<'a>, x: &'a i32) { h.x = x; }
+fn slice<'a, 'b>(x: &'a str, _y: &'b str) -> &'a str { &x[1..] }
+fn main() {
+    let (a, b, c) = (1, 2, 3);
+    let mut v = vec![&a];
+    push(&mut v, &b);
+    let mut r = &a;
+    set(&mut r, &c);
+    let mut h = H { x: &a };
+    field(&mut h, &b);
+    println!("{:?} {} {} {}", v, r, h.x, slice("hey", "x"));
+}
+main();
+"#,
+        Ok("[1, 2] 3 2 ey\n"),
+    );
+}
+
+#[test]
+fn a_fn_field_is_contravariant_and_a_struct_implies_its_bounds() {
+    // rustc: `F<'a>` of a `fn(&'a i32)` field is contravariant in `'a`,
+    // and `S<'a, 'b>` of a `&'a &'b i32` field implies `'b: 'a` (#2479).
+    signature_verdict(
+        r#"
+struct S<'a> { f: fn(&'a i32) }
+fn f<'a, 'b>(x: S<'a>, _y: &'b i32) -> S<'b> { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:48
+  |
+3 | fn f<'a, 'b>(x: S<'a>, _y: &'b i32) -> S<'b> { x }
+  |      --  -- lifetime `'b` defined here         ^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+"#),
+    );
+    signature_verdict(
+        r#"
+struct F<'a> { f: fn(&'a i32) -> i32 }
+struct S<'a, 'b> { x: &'a &'b i32 }
+fn shorten<'a, 'b: 'a>(x: F<'a>, _y: &'b i32) -> F<'b> { x }
+fn implied<'a, 'b>(s: S<'a, 'b>) -> &'a i32 { *s.x }
+fn one(x: &i32) -> i32 { *x + 1 }
+fn main() {
+    let n = 1;
+    let f = shorten(F { f: one }, &n);
+    let r = &n;
+    println!("{} {}", (f.f)(&n), implied(S { x: &r }));
+}
+main();
+"#,
+        Ok("2 1\n"),
+    );
+}

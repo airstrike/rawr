@@ -74,7 +74,9 @@ impl<'a> Parser<'a> {
         }
         let rest = Span::new(at.end(), Position::new(u16::MAX, u16::MAX)).text(self.text);
         let token = &rest[..token_length(rest)];
-        if token.is_empty() {
+        // A span that ends where its text does already (`&mut x`'s): no
+        // token starts with a blank, a `;` or a `,` and ends a value.
+        if token.is_empty() || rest.starts_with([' ', '\t', '\r', '\n', ';', ',']) {
             return at;
         }
         let mut end = at.end();

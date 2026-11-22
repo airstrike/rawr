@@ -44,6 +44,9 @@ pub(super) struct MoveSite {
     pub(super) ty: Ty,
     /// The crate function's parameter the move passes the value to.
     pub(super) parameter: Option<crate::resolve::OwningParameter>,
+    /// A `&mut` given to a generic parameter, which a fresh reborrow would
+    /// keep.
+    pub(super) reborrow: bool,
 }
 
 /// An array literal being parsed, for the frames its elements open: a

@@ -646,6 +646,7 @@ impl Parser<'_> {
             },
             receiver.and(definition.receiver_span()),
             definition.parameters(),
+            definition.name_span(),
         )
     }
 
@@ -653,9 +654,11 @@ impl Parser<'_> {
     /// body ([`Parser::check_signature`]).
     pub(super) fn check_function_signature(&self, function: &item::Function) -> Result<(), Error> {
         // A constant's type is `'static` where it leaves a lifetime out.
-        let (Some(output), false) = (&function.output, function.body.constant) else {
+        if function.body.constant {
             return Ok(());
-        };
+        }
+        let unit = type_ref::Type::Unit(function.body.span);
+        let output = function.output.as_ref().unwrap_or(&unit);
         self.check_signature(
             &signature::Signature {
                 receiver: None,
@@ -669,6 +672,7 @@ impl Parser<'_> {
             },
             None,
             &function.parameters,
+            Span::NONE,
         )
     }
 
@@ -681,6 +685,7 @@ impl Parser<'_> {
         signature: &signature::Signature<'_>,
         receiver: Option<Span>,
         parameters: &[item::Parameter],
+        name: Span,
     ) -> Result<(), Error> {
         let declared = |target: &type_ref::Target| self.declared_lifetimes(target);
         if let Some(at) = signature::missing_lifetime(signature, &declared) {
@@ -692,7 +697,7 @@ impl Parser<'_> {
             });
         }
         let visiting = RefCell::new(Vec::new());
-        let variance = |target: &type_ref::Target| self.invariant_positions(target, &visiting);
+        let variance = |target: &type_ref::Target| self.type_fields(target, &visiting);
         let own = signature::own(signature, &declared, &variance);
         // A parameter a pattern destructures is not one local.
         let named = parameters
@@ -743,10 +748,16 @@ impl Parser<'_> {
         let variances = own
             .output
             .invariances()
+            .chain(
+                parameters
+                    .iter()
+                    .flat_map(|(_, _, parameter, _)| parameter.invariances()),
+            )
             .filter_map(|invariance| Some((invariance.clone(), self.variance(invariance)?)))
             .collect();
         let names = borrowck::Names {
             item,
+            name,
             declared: signature.lifetimes.declared.to_vec(),
             elided,
             variances,
@@ -835,20 +846,20 @@ impl Parser<'_> {
         })
     }
 
-    /// The positions of the crate type `target` below which its fields make
-    /// it invariant ([`signature::Variance`]). A type `visiting` holds is
-    /// one whose fields name it again, read as covariant there: the rest of
-    /// its fields say where it is invariant.
-    fn invariant_positions(
+    /// What the fields of the crate type `target` make of its parameters
+    /// ([`signature::Fields`]). A type `visiting` holds is one whose fields
+    /// name it again, read as covariant there and implying nothing: the
+    /// rest of its fields say the rest.
+    fn type_fields(
         &self,
         target: &type_ref::Target,
         visiting: &RefCell<Vec<type_def::Id>>,
-    ) -> Vec<Path> {
+    ) -> signature::Fields {
         let type_ref::Target::Script { definition, .. } = target else {
-            return Vec::new();
+            return signature::Fields::default();
         };
         if visiting.borrow().contains(definition) {
-            return Vec::new();
+            return signature::Fields::default();
         }
         visiting.borrow_mut().push(*definition);
         let (regions, generics, fields): (_, _, Vec<&type_ref::Type>) =
@@ -872,17 +883,36 @@ impl Parser<'_> {
             .map(|generic| generic.name.text.clone())
             .collect();
         let declared = |target: &type_ref::Target| self.declared_lifetimes(target);
-        let variance = |target: &type_ref::Target| self.invariant_positions(target, visiting);
-        let mut invariant: Vec<Path> = Vec::new();
+        let variance = |target: &type_ref::Target| self.type_fields(target, visiting);
+        let mut varies: Vec<(Path, signature::Varies)> = Vec::new();
+        let mut outlives = Vec::new();
         for ty in fields {
-            for path in signature::invariant_in(ty, regions, &parameters, &declared, &variance) {
-                if !invariant.contains(&path) {
-                    invariant.push(path);
+            let field = signature::field_variance(ty, regions, &parameters, &declared, &variance);
+            for (path, at) in field.varies {
+                match varies.iter_mut().find(|(known, _)| *known == path) {
+                    Some((_, known)) => *known = known.join(at),
+                    None => varies.push((path, at)),
+                }
+            }
+            for bound in field.outlives {
+                if !outlives.contains(&bound) {
+                    outlives.push(bound);
                 }
             }
         }
         visiting.borrow_mut().pop();
-        invariant
+        let with = |kind| {
+            varies
+                .iter()
+                .filter(|(_, at)| *at == kind)
+                .map(|(path, _)| *path)
+                .collect()
+        };
+        signature::Fields {
+            invariant: with(signature::Varies::Invariant),
+            contravariant: with(signature::Varies::Contravariant),
+            outlives,
+        }
     }
 
     /// What a call of the crate function `function` keeps of its inputs.
@@ -1056,11 +1086,134 @@ impl Parser<'_> {
             return;
         }
         match origins {
-            Some(origins) => self.flow().give_back(&origins, value),
+            Some(origins) => {
+                self.flow().give_back(&origins, value);
+                // A `&mut` place read through a reference is reborrowed.
+                let mutable = matches!(
+                    self.inference.resolve(ty),
+                    Ty::Reference { mutable: true, .. }
+                );
+                let reborrow = mutable
+                    .then(|| self.flow().value_place(value.start()))
+                    .flatten();
+                if let Some(place) = reborrow
+                    && let Some(through) = self.reborrow_regions(&place)
+                {
+                    self.flow().returned_reborrow(place.local, through);
+                }
+            }
             None => self.flow().unmodeled(
                 "a borrow a function returns that these facts do not follow",
                 value,
             ),
+        }
+    }
+
+    /// `loan`, a reborrow, lasts within the references its place goes
+    /// through ([`Parser::reborrow_regions`]).
+    pub(super) fn reborrowed(&self, loan: Option<borrowck::LoanId>) {
+        let Some(loan) = loan else {
+            return;
+        };
+        let place = self.flow().loan_place(loan).clone();
+        if let Some(through) = self.reborrow_regions(&place) {
+            self.flow().reborrow_through(loan, through);
+        }
+    }
+
+    /// The region positions, in the type of its local, of the references a
+    /// reborrow of `place` lasts within, as rustc's reborrow constraints
+    /// have them: from the innermost reference the place goes through out
+    /// to the first shared one. `None` where these facts don't place them.
+    fn reborrow_regions(&self, place: &Place) -> Option<Vec<Path>> {
+        if !place.projection.contains(&Projection::Deref) {
+            return None;
+        }
+        let mut through = Vec::new();
+        for deref in self.walk_place(place)?.derefs.into_iter().rev() {
+            through.push(deref.own);
+            if !deref.mutable {
+                break;
+            }
+        }
+        Some(through)
+    }
+
+    /// Where `place` is in the type of its local ([`Walked`]), or `None`
+    /// where these facts don't place it.
+    fn walk_place(&self, place: &Place) -> Option<Walked> {
+        let info = self.flow().local_info(place.local).clone();
+        let binding = self
+            .bindings
+            .get(info.name.as_str())
+            .filter(|binding| binding.declaration == info.declaration)?;
+        let mut ty = self.inference.resolve(&binding.ty);
+        let mut positions = vec![(Path::ROOT, Path::ROOT)];
+        let mut derefs = Vec::new();
+        for step in &place.projection {
+            let (below, next) = match (step, &ty) {
+                (Projection::Deref, Ty::Reference { mutable, target }) => {
+                    derefs.push(Deref {
+                        own: locate(&positions, Path::OWN)?,
+                        mutable: *mutable,
+                    });
+                    (descend(&positions, Step::Arg(0)), (**target).clone())
+                }
+                (Projection::Deref, Ty::Boxed(target)) => {
+                    (descend(&positions, Step::Arg(0)), (**target).clone())
+                }
+                (Projection::Field(member), Ty::Tuple(members)) => {
+                    let index = member.parse::<usize>().ok()?;
+                    let member = members.get(index)?.clone();
+                    (descend(&positions, Step::Arg(index as u8)), member)
+                }
+                (Projection::Field(member), Ty::Script(id, _)) => {
+                    let Nominal::Struct { item, .. } = self.models.definition(*id) else {
+                        return None;
+                    };
+                    let slot = item
+                        .fields
+                        .iter()
+                        .position(|field| field.name.text == *member)?;
+                    let below = self
+                        .field_positions(*id, None, slot)?
+                        .into_iter()
+                        .filter_map(|(field, at)| Some((field, locate(&positions, at?)?)))
+                        .collect();
+                    (below, self.part_ty(&ty, std::slice::from_ref(step))?)
+                }
+                _ => return None,
+            };
+            positions = below;
+            ty = self.inference.resolve(&next);
+        }
+        Some(Walked { positions, derefs })
+    }
+
+    /// The place the use starting at `start` reads, below a reference, takes
+    /// `held` at the positions of its value, or of the value it is a field
+    /// of when `field`, by the call or the assignment spanning `span`: what
+    /// a parameter's place takes is checked against the signature.
+    fn stored_below(
+        &self,
+        start: Position,
+        held: &[(Path, Origin)],
+        field: bool,
+        span: Span,
+        cause: outlives::Cause,
+    ) {
+        let Some(mut place) = self.flow().place_at(start) else {
+            return;
+        };
+        if field && matches!(place.projection.last(), Some(Projection::Field(_))) {
+            place.projection.pop();
+        }
+        if !place.projection.contains(&Projection::Deref) {
+            return;
+        }
+        if let Some(walked) = self.walk_place(&place) {
+            self.flow()
+                .store_below(place.local, walked.positions, held, span, cause);
         }
     }
 
@@ -1501,7 +1654,17 @@ impl Parser<'_> {
                         (Some(stored), _) if stored.is_empty() => {}
                         (Some(stored), Some(receiver)) if receiver.place => {
                             let stored = region::place(&stored, tap.into);
-                            known &= self.flow().store(receiver.start, &stored);
+                            let kept = self.flow().store(receiver.start, &stored);
+                            if !kept {
+                                self.stored_below(
+                                    receiver.start,
+                                    &stored,
+                                    false,
+                                    call,
+                                    outlives::Cause::Argument,
+                                );
+                            }
+                            known &= kept;
                         }
                         _ => known = false,
                     }
@@ -1758,11 +1921,24 @@ impl Parser<'_> {
     /// the value is read: one given new borrows is a runtime local of its
     /// own (`reborrow.rs`), but not yet one that borrows a field or an
     /// element, or one in an async body, for which a new borrow would write
-    /// the place instead.
+    /// the place instead. A shared reference written through it (`*r = x`,
+    /// `h.x = x`) is a value its place takes.
     pub(super) fn refuse_rebound_alias(&mut self, target: Span, ty: &Ty) -> Result<(), Error> {
         let Some((name, declaration)) = self.flow().mentioned_local(target.start()) else {
             return Ok(());
         };
+        let through = self
+            .flow()
+            .value_place(target.start())
+            .is_some_and(|place| !place.projection.is_empty());
+        if through
+            && matches!(
+                self.inference.resolve(ty),
+                Ty::Reference { mutable: false, .. }
+            )
+        {
+            return Ok(());
+        }
         let alias = self
             .aliases
             .get(name.as_str())
@@ -1850,7 +2026,8 @@ impl Parser<'_> {
         let stored = holds
             && !compound
             && self.may_hold_borrow(target_ty)
-            && origins.is_some_and(|origins| self.store_borrows(target.start(), lvalue, &origins));
+            && origins
+                .is_some_and(|origins| self.store_borrows(target.start(), lvalue, &origins, whole));
         // `s += &t` of a `String` makes a new value that holds no borrow.
         let holds = holds && self.may_hold_borrow(target_ty);
         if !stored {
@@ -1861,7 +2038,13 @@ impl Parser<'_> {
     /// The place the use starting at `start` reads, the target `lvalue`,
     /// takes `held`: a crate type's field of a local at the field's
     /// positions in the local's type. Whether these facts follow it.
-    fn store_borrows(&self, start: Position, lvalue: &Lvalue, held: &[(Path, Origin)]) -> bool {
+    fn store_borrows(
+        &self,
+        start: Position,
+        lvalue: &Lvalue,
+        held: &[(Path, Origin)],
+        whole: Span,
+    ) -> bool {
         if let Lvalue::Field(field) = lvalue
             && let Some(positions) = self.field_positions(field.definition.id(), None, field.slot)
         {
@@ -1877,9 +2060,17 @@ impl Parser<'_> {
             if !statics.is_empty() {
                 self.flow().forever(&statics);
             }
-            return self.flow().store_field(start, &placed);
+            let kept = self.flow().store_field(start, &placed);
+            if !kept {
+                self.stored_below(start, &placed, true, whole, outlives::Cause::Assignment);
+            }
+            return kept;
         }
-        self.flow().store(start, held)
+        let kept = self.flow().store(start, held);
+        if !kept {
+            self.stored_below(start, held, false, whole, outlives::Cause::Assignment);
+        }
+        kept
     }
 
     /// Whether a value of type `ty` may hold a borrow: its loans then flow
@@ -1958,8 +2149,8 @@ impl Parser<'_> {
                 .as_ref()
                 .is_none_or(|conflict| moved.access.start() <= conflict.access.start())
         {
-            // The facts' spans are where each token starts: a use or a
-            // move of one token is that token whole.
+            // The facts' spans are where each token starts: a move of one
+            // token is that token whole, and a move site is whole already.
             let whole = |at: Span| {
                 if at.start() == at.end() {
                     self.expression_span(at)
@@ -1976,7 +2167,13 @@ impl Parser<'_> {
                 ),
                 name: moved.name.into(),
                 moved: whole(self.move_span(moved.moved)),
-                reference: whole(moved.access),
+                // A use ends where its last token starts, and a `&mut`
+                // borrow where its text does.
+                reference: if moved.whole {
+                    moved.access
+                } else {
+                    self.expression_span(moved.access)
+                },
                 borrowed: moved.borrowed,
                 partial: moved.partial,
                 // A move in a loop's body, made again on its next iteration.
@@ -2001,6 +2198,49 @@ impl Parser<'_> {
             }),
         }
     }
+}
+
+/// Where a place is in the type of its local.
+struct Walked {
+    /// Where each position of the place's value is in the local's type, by
+    /// prefix.
+    positions: Vec<(Path, Path)>,
+    /// Each reference the place goes through, outermost first.
+    derefs: Vec<Deref>,
+}
+
+/// A reference a place goes through.
+struct Deref {
+    /// Its own region's position in the local's type.
+    own: Path,
+    mutable: bool,
+}
+
+/// Where the position `at` of a value is in a local's type, by the
+/// value's `positions` there.
+fn locate(positions: &[(Path, Path)], at: Path) -> Option<Path> {
+    positions
+        .iter()
+        .filter(|(value, _)| at.starts_with(*value))
+        .max_by_key(|(value, _)| value.len())
+        .map(|(value, local)| local.join(at.strip(*value)))
+}
+
+/// The `positions` of what is at `step` below a value.
+fn descend(positions: &[(Path, Path)], step: Step) -> Vec<(Path, Path)> {
+    let below = path(&[step]);
+    positions
+        .iter()
+        .filter_map(|&(value, local)| {
+            if value.starts_with(below) {
+                Some((value.strip(below), local))
+            } else if value.is_root() {
+                Some((Path::ROOT, local.push(step)))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// The path through the references and boxes of `ty` to the value they

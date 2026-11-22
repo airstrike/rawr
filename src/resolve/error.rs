@@ -724,6 +724,9 @@ pub enum Cloning {
         /// The type's name where it is defined, in the move's source.
         name: Span,
     },
+    /// A `&mut` given to a generic parameter: "consider creating a fresh
+    /// reborrow of `r` here", with `&mut *` before it.
+    Reborrow,
     /// Neither: rustc suggests nothing.
     None,
 }
