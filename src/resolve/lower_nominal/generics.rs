@@ -1252,6 +1252,9 @@ pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
         Ty::Cow(inner) => Ty::Cow(Box::new(substitute(inner, replaced))),
         Ty::Range(element) => Ty::Range(Box::new(substitute(element, replaced))),
         Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(substitute(element, replaced))),
+        Ty::OpenRange(open, element) => {
+            Ty::OpenRange(*open, Box::new(substitute(element, replaced)))
+        }
         Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(substitute(inner, replaced))),
         Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(substitute(inner, replaced))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(

@@ -131,12 +131,16 @@ impl Parser<'_> {
     pub(super) fn iterator_receiver(&self, ty: &Ty, member: &str) -> bool {
         match self.inference.resolve(ty) {
             Ty::Iter(..) => true,
-            ty @ Ty::InclusiveRange(_) => {
-                let Some((definition, _)) = std_impl::std_definition(&ty) else {
+            // A range's `next` steps the place that holds it, and its
+            // `into_iter` is itself (`parse_range_method`).
+            ty if self.stepped_item(&ty).is_some() => {
+                if matches!(member, "next" | "into_iter") {
                     return false;
-                };
+                }
+                // The traits std implements for the range at its element,
+                // as `ExactSizeIterator` for `Range<u8>` and not `Range<i64>`.
                 std_method::iterator(member, |trait_| {
-                    crate::std_table::impls(trait_, definition).next().is_some()
+                    std_impl::holds(&mut std_impl::Probe(self), trait_, &ty, &[], true, 0).is_ok()
                 })
                 .is_some()
             }
@@ -457,7 +461,8 @@ impl Parser<'_> {
         expr
     }
 
-    /// `low..high`, `low..` and, kept as Rawr's range value, `low..=high`.
+    /// `low..high`, `low..=high` and `low..`: std's range values, each with
+    /// its chain kept for the consumer that iterates it.
     pub(super) fn range_iterator(
         &mut self,
         low: &ParsedExpr,
@@ -485,27 +490,52 @@ impl Parser<'_> {
         };
         let pipeline = self.source_pipeline(source);
         let end = high.map_or(low.span.end(), |high| high.span.end());
-        // An integer range is Rawr's range value of its kind, but for an `i128`
-        // or a `u128`, whose bounds may be wider than its `i64`s.
-        let kind = match self.inference.resolve(&item) {
-            Ty::Int(kind) if !kind.wide() => Some(kind),
-            _ => None,
+        // The range is std's value of its kind (`Range<T>`,
+        // `RangeInclusive<T>`, `RangeFrom<T>`), its chain kept for the
+        // consumer that iterates it.
+        let value = match (high, inclusive) {
+            (Some(high), _) if !char => {
+                let mut value = low.rendered_source().surrounded("(", ")");
+                value.push_text(if inclusive { " ..= " } else { " .. " });
+                value.push(high.rendered_source().surrounded("(", ")"));
+                value
+            }
+            (Some(high), false) => self.prelude_op(
+                super::PreludeOp::RangeNew,
+                [
+                    range::CHAR_RANGE.to_string().into(),
+                    low.rendered_source(),
+                    high.rendered_source(),
+                ],
+            ),
+            (Some(high), true) => self.prelude_op(
+                super::PreludeOp::RangeNew,
+                [
+                    range::INCLUSIVE_OF.to_string().into(),
+                    low.rendered_source(),
+                    high.rendered_source(),
+                ],
+            ),
+            (None, _) => self.prelude_op(
+                super::PreludeOp::RangeNew,
+                [
+                    range::Open::From.code().to_string().into(),
+                    low.rendered_source(),
+                    "()".into(),
+                ],
+            ),
         };
-        let mut expr = self.iterator_expr(pipeline.clone(), item, span(low.span.start(), end));
-        if inclusive && let Some(kind) = kind {
-            // `a..=b` stays the range value hosts take; its chain is kept.
-            let mut value = low.rendered_source();
-            value.push_text(" ..= ");
-            value.push(
-                high.expect("an inclusive range has an end")
-                    .rendered_source(),
-            );
-            expr.source = value;
-            expr.ty = Ty::InclusiveRange(kind);
-            expr = expr.retain_origin();
-            self.pipelines
-                .insert(expr.source.as_str().to_string(), pipeline);
-        }
+        let ty = match (high, inclusive) {
+            (None, _) => Ty::OpenRange(range::Open::From, Box::new(item)),
+            (Some(_), false) => Ty::Range(Box::new(item)),
+            (Some(_), true) => match self.inference.resolve(&item) {
+                Ty::Int(kind) => Ty::InclusiveRange(kind),
+                item => Ty::InclusiveOf(Box::new(item)),
+            },
+        };
+        let expr = self.operator_expr(value.surrounded("(", ")"), ty, span(low.span.start(), end));
+        self.pipelines
+            .insert(expr.source.as_str().to_string(), pipeline);
         expr
     }
 
@@ -692,7 +722,7 @@ impl Parser<'_> {
         }
         let item = match &ty {
             Ty::Iter(item, _) => (**item).clone(),
-            Ty::InclusiveRange(kind) => Ty::Int(*kind),
+            range if let Some(item) = self.stepped_item(range) => item,
             Ty::Array { element, .. } => (**element).clone(),
             // A map's or set's sorted entries.
             Ty::Keyed(kind, arguments) => keyed::keyed_item(*kind, arguments, None),
@@ -711,11 +741,18 @@ impl Parser<'_> {
         {
             return Some((pipeline.clone(), item));
         }
+        let range = range::parts(&ty).map(|(kind, _)| kind);
         let source = Source::Values {
             values: value.rendered_source(),
-            array: !matches!(ty, Ty::InclusiveRange(_)),
+            array: range.is_none(),
         };
-        Some((self.source_pipeline(source), item))
+        let mut pipeline = self.source_pipeline(source);
+        // A `Range` or a `RangeInclusive` knows its length, as std's
+        // `ExactSizeIterator` for it does.
+        if matches!(range, Some(range::Kind::Range | range::Kind::Inclusive)) {
+            pipeline.exact = true;
+        }
+        Some((pipeline, item))
     }
 
     /// What ends every loop of the chain.
@@ -1468,7 +1505,7 @@ impl Parser<'_> {
                         let inner_item = match inner_ty {
                             Ty::Iter(item, _) => *item,
                             Ty::Array { element, .. } => *element,
-                            Ty::InclusiveRange(kind) => Ty::Int(kind),
+                            range if let Some(item) = self.stepped_item(&range) => item,
                             Ty::Reference { mutable, target } => match *target {
                                 Ty::Array { element, .. } => Ty::Reference {
                                     mutable,
@@ -1626,7 +1663,7 @@ impl Parser<'_> {
                 arity(0, &arguments)?;
                 match pipeline.reversible.clone() {
                     Some(reversible) if !reversible.dropping => {
-                        (Self::source_length(&reversible.source), Ty::Int(Int::Usize))
+                        (self.source_length(&reversible.source), Ty::Int(Int::Usize))
                     }
                     _ => {
                         let n = self.temporary("count");
@@ -2095,9 +2132,17 @@ impl Parser<'_> {
     }
 
     /// The number of values a source walks.
-    fn source_length(source: &Source) -> origin::Fragment {
+    fn source_length(&mut self, source: &Source) -> origin::Fragment {
         match source {
-            Source::Values { values, .. } => values.clone().surrounded("(", ").len()"),
+            Source::Values {
+                values,
+                array: true,
+            } => values.clone().surrounded("(", ").len()"),
+            // A range value: the items its bounds hold.
+            Source::Values { values, .. } => self.prelude_op(
+                super::PreludeOp::RangeMethod,
+                [values.clone(), "6".into(), "()".into()],
+            ),
             Source::Range {
                 low,
                 high: Some(high),
@@ -2290,7 +2335,8 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     pub(super) fn program_iterator(&self, ty: &Ty) -> bool {
         match self.inference.resolve(ty) {
-            Ty::Iter(..) | Ty::InclusiveRange(_) => true,
+            Ty::Iter(..) => true,
+            range if self.stepped_item(&range).is_some() => true,
             ty @ Ty::Script(..) => self.type_implements(&ty, "Iterator"),
             _ => false,
         }

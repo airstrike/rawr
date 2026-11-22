@@ -53,21 +53,26 @@ impl<'a> Parser<'a> {
         names
     }
 
-    /// A local annotation: `_`, `()`, `&T`, or a type name with generic
-    /// arguments (`Element<'_, Message>`, `Element<_>`); lifetimes are erased.
-    /// `RangeInclusive<T>` (a range of numbers) or `Range<T>` (an iterator
-    /// of `T` in Rawr), after its name.
+    /// One of std's ranges (`Range<T>`, `RangeInclusive<T>`, `RangeFrom<T>`,
+    /// `RangeTo<T>`, `RangeToInclusive<T>`, `RangeFull`), after its name.
     pub(super) fn parse_range_type(&mut self, range: &str) -> Result<Ty, Error> {
+        if range == "RangeFull" {
+            return Ok(Ty::OpenRange(range::Open::Full, Box::new(Ty::Unit)));
+        }
         self.expect(Token::LessThan, "'<' after a range type")?;
         let element = self.parse_local_type()?;
         self.expect_close_angle("'>' after a range type's element")?;
+        if let Some(open) = range::Open::named(range) {
+            return Ok(Ty::OpenRange(open, Box::new(element)));
+        }
         if range != "RangeInclusive" {
-            return Ok(Ty::iter(element));
+            return Ok(Ty::Range(Box::new(element)));
         }
         Ok(match element {
             Ty::Float(_) => Ty::FloatRange,
             Ty::Int(kind) => Ty::InclusiveRange(kind),
-            _ => Ty::InclusiveRange(Int::Var(self.inference.fresh_id())),
+            Ty::Infer(_) => Ty::InclusiveRange(Int::Var(self.inference.fresh_id())),
+            element => Ty::InclusiveOf(Box::new(element)),
         })
     }
 
@@ -81,6 +86,8 @@ impl<'a> Parser<'a> {
         self.parse_local_type()
     }
 
+    /// A local annotation: `_`, `()`, `&T`, or a type name with generic
+    /// arguments (`Element<'_, Message>`, `Element<_>`); lifetimes are erased.
     pub(super) fn parse_local_type(&mut self) -> Result<Ty, Error> {
         // `t!()`: the type the program's own macro expands to.
         if self.splice_macro_ahead(super::expand::Place::Type)? {
@@ -662,7 +669,7 @@ impl<'a> Parser<'a> {
             return self.parse_thread_type(kind);
         }
         if let Some(range) = scoped.as_deref().and_then(crate::resolve::std_range)
-            && matches!(self.peek(), Token::LessThan)
+            && (matches!(self.peek(), Token::LessThan) || range == "RangeFull")
         {
             return self.parse_range_type(range);
         }

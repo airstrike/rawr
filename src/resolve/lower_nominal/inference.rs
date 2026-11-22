@@ -327,6 +327,7 @@ impl Inference {
             Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
             Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(self.resolve(element))),
+            Ty::OpenRange(open, element) => Ty::OpenRange(*open, Box::new(self.resolve(element))),
             Ty::InclusiveRange(kind) => match self.resolve(&Ty::Int(*kind)) {
                 Ty::Int(kind) => Ty::InclusiveRange(kind),
                 _ => ty.clone(),

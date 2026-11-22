@@ -5363,3 +5363,197 @@ note: function defined here
 "#),
     );
 }
+
+#[test]
+fn every_range_form_is_a_value_of_std_s_range_type() {
+    // `a..b`, `a..=b`, `a..`, `..b`, `..=b` and `..` of integers, chars
+    // and floats, with their fields, `contains` and `Debug` (#1106, #1260),
+    // and the 128-bit ones as ranges, not iterators (#1063).
+    let output = printed(
+        r#"
+use std::ops::{Range, RangeInclusive};
+fn main() {
+    let r = 1..4;
+    let half: Range<i8> = -3..0;
+    println!("{:?} {:?} {:?} {} {} {}", r, 1..=4, 'a'..'c', r.start, r.end, half.start);
+    let to = ..2;
+    let all = ..;
+    println!("{:?} {:?} {:?} {:?} {}", to, all, 2.., ..=3, to.end);
+    println!("{} {} {}", (0.5..1.0).contains(&0.7), (..1.5).contains(&2.0), (3..).contains(&2));
+    println!("{:?} {:?} {:?}", 0.5..=1.0, 0.5..1.0, 0.5..);
+    let wide: RangeInclusive<i128> = 0..=5;
+    let unsigned = 0u128..=3;
+    let narrow = 0i128..5;
+    println!("{:?} {} {:?} {:?} {}", wide, wide.clone().sum::<i128>(), unsigned, narrow, narrow.start);
+    let huge = (i128::MAX - 2)..=i128::MAX;
+    println!("{:?} {}", huge, huge.clone().count());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "1..4 1..=4 'a'..'c' 1 4 -3\n..2 .. 2.. ..=3 2\ntrue false false\n\
+         0.5..=1.0 0.5..1.0 0.5..\n0..=5 15 0..=3 0..5 0\n\
+         170141183460469231731687303715884105725..=170141183460469231731687303715884105727 3\n"
+    );
+}
+
+#[test]
+fn ranges_derive_compare_and_key_sets_as_std_s_do() {
+    // std's ranges are `Clone`, `Debug`, `PartialEq`, `Eq` and `Hash`
+    // where their element is, and `Range` and `RangeFull` are `Default`
+    // (#1062).
+    let output = printed(
+        r#"
+use std::collections::{BTreeSet, HashSet};
+use std::ops::{Range, RangeFrom, RangeFull, RangeInclusive, RangeTo};
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct S { a: Range<usize>, b: RangeInclusive<isize> }
+#[derive(Debug, Default)]
+struct D { r: Range<usize>, all: RangeFull }
+struct Opts { from: RangeFrom<i32>, to: RangeTo<i32>, letters: RangeInclusive<char> }
+fn main() {
+    let s = S { a: 1..3, b: -1..=1 };
+    let t = s.clone();
+    println!("{:?} {} {}", s, s == t, s.a.len());
+    println!("{:?}", D::default());
+    println!("{} {} {}", (1..4) == (1..4), (1..=4) != (1..=5), (..) == (..));
+    let mut h = HashSet::new();
+    h.insert(1..3);
+    h.insert(1..3);
+    let b: BTreeSet<RangeInclusive<u8>> = BTreeSet::new();
+    println!("{} {}", h.len(), b.len());
+    let o = Opts { from: 3.., to: ..4, letters: 'x'..='z' };
+    let first: Vec<i32> = o.from.clone().take(2).collect();
+    println!("{:?} {:?} {:?} {} {:?}", o.from, o.to, o.letters, o.to.contains(&3), first);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "S { a: 1..3, b: -1..=1 } true 2\nD { r: 0..0, all: .. }\ntrue true true\n1 0\n\
+         3.. ..4 'x'..='z' true [3, 4]\n"
+    );
+}
+
+#[test]
+fn a_range_s_methods_and_its_iterator_are_std_s() {
+    // `len`, `is_empty`, `rev`, `step_by`, `start()`, `end()`,
+    // `into_inner()`, and `next()`, which steps the range where it is.
+    let output = printed(
+        r#"
+fn main() {
+    let r = 1..5;
+    println!("{} {} {}", r.len(), r.is_empty(), (5..1).is_empty());
+    let back: Vec<i32> = r.clone().rev().collect();
+    let odd: Vec<i32> = r.step_by(2).collect();
+    println!("{:?} {:?}", back, odd);
+    let i = 1..=3;
+    println!("{} {} {:?} {} {}", i.start(), i.end(), i.clone().into_inner(), i == (1..=3), (1..=1).is_empty());
+    let mut it = 0..3;
+    println!("{:?}", it.next());
+    while let Some(x) = it.next() { print!("{x} "); }
+    println!("{:?}", it);
+    let mut c = 'x'..;
+    println!("{:?} {:?} {:?}", c.next(), c.next(), c);
+    let mut n = 0..=3;
+    n.next();
+    let rest: Vec<i32> = n.clone().collect();
+    println!("{:?} {:?} {:?}", n, rest, (1..=3).into_iter());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "4 false true\n[4, 3, 2, 1] [1, 3]\n1 3 (1, 3) true false\nSome(0)\n1 2 3..3\n\
+         Some('x') Some('y') 'z'..\n1..=3 [1, 2, 3] 1..=3\n"
+    );
+    // `ExactSizeIterator` is std's for a `RangeInclusive<i16>`, not an
+    // `i64` one, and its fields are private.
+    let report = refused("fn main() { let r = 1..=4i64; println!(\"{}\", r.len()); }");
+    assert!(
+        report.starts_with("error[E0599]: no method named `len` found"),
+        "{report}"
+    );
+    let report = refused("fn main() { let r = 1..=4; println!(\"{}\", r.start); }");
+    assert!(
+        report.starts_with(
+            "error[E0616]: field `start` of struct `std::ops::RangeInclusive` is private"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_range_value_is_its_own_iterator_where_one_is_taken() {
+    // A range kept, passed, returned, boxed or given to a generic `T` is
+    // the range, and an iterator where the code takes one (#1105).
+    let output = printed(
+        r#"
+use std::ops::Range;
+fn make(n: usize) -> Range<usize> { 0..n }
+fn total(r: Range<usize>) -> usize { r.sum() }
+fn upto(n: u32) -> impl Iterator<Item = u32> { 0..n }
+fn sum(it: impl Iterator<Item = i64>) -> i64 { it.sum() }
+fn gather<I: IntoIterator<Item = i32>>(items: I) -> i32 { items.into_iter().sum() }
+fn show<T: std::fmt::Debug>(t: T) -> String { format!("{:?}", t) }
+fn main() {
+    let r = make(4);
+    println!("{:?} {} {}", r, total(r.clone()), r.len());
+    for i in r { print!("{i} "); }
+    println!("{:?}", upto(3).collect::<Vec<_>>());
+    println!("{} {} {} {}", sum(1..=3), sum(1..3), gather(1..4), gather(1..=4));
+    let boxed: Box<dyn Iterator<Item = i32>> = Box::new(0..3);
+    let ranges = vec![0..2, 3..5];
+    let flat: Vec<i32> = ranges.iter().flat_map(|r| r.clone()).collect();
+    println!("{} {:?} {:?} {:?}", boxed.count(), ranges, flat, Some(1..4));
+    println!("{} {} {} {}", show(1..4), show(..), show('a'..'c'), show(2.5..=3.0));
+    let mut w = vec![0];
+    w.extend(1..3);
+    let z: Vec<(i64, char)> = (1..=3).zip("abc".chars()).collect();
+    println!("{:?} {:?}", w, z);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "0..4 6 4\n0 1 2 3 [0, 1, 2]\n6 3 6 10\n3 [0..2, 3..5] [0, 1, 3, 4] Some(1..4)\n\
+         1..4 .. 'a'..'c' 2.5..=3.0\n[0, 1, 2] [(1, 'a'), (2, 'b'), (3, 'c')]\n"
+    );
+}
+
+#[test]
+fn a_range_kept_in_a_local_drains_and_slices_and_moves() {
+    // `v.drain(r)` and `&v[r]` read a range a local holds, as std's
+    // `RangeBounds` does, and iterating a range moves it.
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3, 4, 5, 6];
+    let r = 1..3;
+    let gone: Vec<i32> = v.drain(r).collect();
+    let tail = 2..;
+    println!("{:?} {:?} {:?}", v, gone, &v[tail]);
+    let all = ..;
+    let t: Vec<i32> = v.drain(all).collect();
+    println!("{:?} {:?}", v, t);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 4, 5, 6] [2, 3] [5, 6]\n[] [1, 4, 5, 6]\n");
+    for program in [
+        "fn main() { let r = 0..3; let v: Vec<i32> = r.collect(); println!(\"{:?} {:?}\", v, r); }",
+        "fn main() { let r = 0..3; for x in r { print!(\"{x}\"); } println!(\"{:?}\", r); }",
+    ] {
+        let report = refused(program);
+        assert!(
+            report.starts_with("error[E0382]: borrow of moved value: `r`"),
+            "{report}"
+        );
+    }
+}
