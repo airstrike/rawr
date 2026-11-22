@@ -4821,3 +4821,257 @@ main();
     );
     assert_eq!(output, "1 A\n");
 }
+
+#[test]
+fn a_mut_local_takes_a_new_borrow_of_a_field_or_an_element() {
+    // `r = &mut s.right` and `e = &mut v[1]` move a `&mut` local on to a
+    // part of a local, in a loop too, as rustc's build runs them (#121).
+    let output = printed(
+        r#"
+struct S { left: i32, right: i32 }
+struct Node { val: i32, kids: Vec<i32> }
+fn main() {
+    let mut s = S { left: 1, right: 2 };
+    let mut v = vec![10, 20];
+    let mut r = &mut s.left;
+    *r += 10;
+    r = &mut s.right;
+    *r += 20;
+    let mut e = &mut v[0];
+    *e += 1;
+    e = &mut v[1];
+    *e += 2;
+    println!("{} {} {:?}", s.left, s.right, v);
+    let mut nodes = vec![Node { val: 1, kids: vec![] }, Node { val: 2, kids: vec![] }];
+    let mut whole = 0;
+    let mut r = &mut whole;
+    for i in 0..2 {
+        *r += 1;
+        r = &mut nodes[i].val;
+        *r *= 10;
+    }
+    *r += 5;
+    let mut k = &mut nodes[0].kids;
+    k.push(1);
+    k = &mut nodes[1].kids;
+    k.push(2);
+    println!("{} {} {} {:?} {:?}", whole, nodes[0].val, nodes[1].val, nodes[0].kids, nodes[1].kids);
+    let mut t = (1, 2);
+    let mut a = [5, 6, 7];
+    let mut m = &mut t.0;
+    *m += 1;
+    m = &mut t.1;
+    *m += 1;
+    let i = 2;
+    m = &mut a[i];
+    *m += 1;
+    println!("{:?} {:?}", t, a);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "11 22 [11, 22]\n1 11 25 [1] [2]\n(2, 3) [5, 6, 8]\n"
+    );
+    // The new borrow conflicts as rustc's does.
+    let report = refused(
+        r#"
+struct S { left: i32, right: i32 }
+fn main() {
+    let mut s = S { left: 1, right: 2 };
+    let mut r = &mut s.left;
+    r = &mut s.right;
+    let q = &mut s.right;
+    *r += 1;
+    *q += 1;
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0499]: cannot borrow `s.right` as mutable more than once at a time"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+struct S { left: i32, right: i32 }
+fn main() {
+    let mut s = S { left: 1, right: 2 };
+    let mut r = &mut s.left;
+    *r += 1;
+    r = &mut s.right;
+    s.right = 5;
+    *r += 1;
+    println!("{}", s.left);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0506]: cannot assign to `s.right` because it is borrowed"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_chosen_by_a_branch_refers_to_the_place_the_run_chose() {
+    // `if c { &mut a } else { &mut b }` and a `match` choosing a field
+    // give a `&mut` local the place the run chose, as rustc's build runs
+    // them, in a loop and in a `&mut self` method too (#122).
+    let output = printed(
+        r#"
+struct S { x: Vec<i32>, y: Vec<i32>, z: Vec<i32> }
+struct T { a: i32, b: i32 }
+impl T {
+    fn bump(&mut self, first: bool) {
+        let r = if first { &mut self.a } else { &mut self.b };
+        *r += 1;
+    }
+}
+fn main() {
+    let mut a = 1;
+    let mut b = 2;
+    let c = a < b;
+    let r = if c { &mut a } else { &mut b };
+    *r += 10;
+    println!("{} {}", a, b);
+    let mut s = S { x: vec![], y: vec![], z: vec![] };
+    for k in 0..6 {
+        let r = match k % 3 { 0 => &mut s.x, 1 => { &mut s.y } _ => if k > 4 { &mut s.z } else { &mut s.x } };
+        r.push(k);
+    }
+    println!("{:?} {:?} {:?}", s.x, s.y, s.z);
+    let mut r = &mut a;
+    for i in 0..4 {
+        *r += i;
+        r = if i % 2 == 0 { &mut b } else { &mut a };
+    }
+    *r += 100;
+    println!("{} {}", a, b);
+    let mut v = vec![1, 2, 3];
+    let mut w = 0;
+    let i = 2;
+    let e = if i < v.len() { &mut v[i] } else { &mut w };
+    *e *= 7;
+    println!("{:?} {}", v, w);
+    let mut t = T { a: 0, b: 0 };
+    t.bump(true);
+    t.bump(false);
+    t.bump(false);
+    println!("{} {}", t.a, t.b);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "11 2\n[0, 2, 3] [1, 4] [5]\n113 6\n[1, 2, 21] 0\n1 2\n"
+    );
+    // A loan of one branch is not live through the other, nor through a
+    // loop's next iteration, as a shared one's isn't.
+    let output = printed(
+        r#"
+fn main() {
+    let mut x = vec![1];
+    let y = vec![2];
+    for k in 0..3 {
+        let r = if k > 1 { &x } else { &y };
+        println!("{:?}", r);
+        x.push(k);
+    }
+    let mut p = vec![];
+    let mut q = vec![];
+    for k in 0..3 {
+        let r = if k > 1 { &mut p } else { &mut q };
+        r.push(k);
+        p.push(9);
+    }
+    println!("{:?} {:?}", p, q);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[2]\n[2]\n[1, 0, 1]\n[9, 9, 2, 9] [0, 1]\n");
+    let report = refused(
+        r#"
+fn main() {
+    let mut a = 1;
+    let mut b = 2;
+    let c = a < b;
+    let r = if c { &mut a } else { &mut b };
+    a += 1;
+    *r += 10;
+    println!("{} {}", a, b);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0503]: cannot use `a` because it was mutably borrowed\n --> <script>:7:5"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_self_chain_runs_on_a_temporary_kept_to_the_statement_end() {
+    // `Config::new().time().io().build()` of the program's own `&mut self
+    // -> &mut Self` methods: the temporary is made once and lives to the
+    // statement's end, as rustc keeps it (#2074).
+    let program = |main: &str| {
+        format!(
+            r#"
+struct Config {{ time: bool, io: bool, n: u32 }}
+impl Config {{
+    fn new() -> Config {{ println!("new"); Config {{ time: false, io: false, n: 0 }} }}
+    fn time(&mut self) -> &mut Self {{ self.time = true; self.n += 1; self }}
+    fn io(&mut self) -> &mut Self {{ self.io = true; self.n += 10; self }}
+    fn build(&self) -> String {{ format!("{{}} {{}} {{}}", self.time, self.io, self.n) }}
+}}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    let output = printed(&program(
+        r#"let s = Config::new().time().io().build();
+    println!("{}", s);
+    println!("{}", Config::new().io().time().time().build());"#,
+    ));
+    assert_eq!(output, "new\ntrue true 11\nnew\ntrue true 12\n");
+    let report = refused(&program(
+        r#"let c = Config::new().time(); println!("{}", c.n);"#,
+    ));
+    assert!(
+        report.starts_with("error[E0716]: temporary value dropped while borrowed"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_local_in_an_array_or_vec_literal_moves_into_it() {
+    // rustc reborrows a `&mut` only where a reference is expected, so
+    // `vec![r]` and `[r]` move `r` (#2502).
+    for literal in ["vec![r]", "[r]"] {
+        let report = refused(&format!(
+            "fn main() {{ let mut x = 1; let r = &mut x; let v = {literal}; *r += 1; drop(v); }}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with("error[E0382]: use of moved value: `r`"),
+            "{report}"
+        );
+    }
+    // A `Vec<&mut i32>` parameter expects a reference: `r` is reborrowed.
+    let output = printed(
+        r#"
+fn take(v: Vec<&mut i32>) { println!("{}", v.len()); }
+fn main() { let mut x = 1; let r = &mut x; take(vec![r]); *r += 1; println!("{}", x); }
+main();
+"#,
+    );
+    assert_eq!(output, "1\n2\n");
+}

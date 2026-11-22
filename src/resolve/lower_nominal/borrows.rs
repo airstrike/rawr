@@ -1919,9 +1919,9 @@ impl Parser<'_> {
 
     /// `r = ..` of a `&mut` local `r` that is its place at run time, before
     /// the value is read: one given new borrows is a runtime local of its
-    /// own (`reborrow.rs`), but not yet one that borrows a field or an
-    /// element, or one in an async body, for which a new borrow would write
-    /// the place instead. A shared reference written through it (`*r = x`,
+    /// own (`reborrow.rs`), but not yet one whose place no runtime local
+    /// can hold (`reborrow_source`), or one in an async body, for which a
+    /// new borrow would write the place instead. A shared reference written through it (`*r = x`,
     /// `h.x = x`) is a value its place takes.
     pub(super) fn refuse_rebound_alias(&mut self, target: Span, ty: &Ty) -> Result<(), Error> {
         let Some((name, declaration)) = self.flow().mentioned_local(target.start()) else {
@@ -1952,8 +1952,8 @@ impl Parser<'_> {
         if alias && matches!(self.inference.resolve(ty), Ty::Reference { .. }) && !same {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
-                    "giving the `&mut` local `{name}` a new borrow when it borrows a field or \
-                     an element, or in an async body: not supported in Rawr yet"
+                    "giving the `&mut` local `{name}` a new borrow when it borrows a place no \
+                     runtime local can hold, or in an async body: not supported in Rawr yet"
                 )
                 .into(),
                 source: target,

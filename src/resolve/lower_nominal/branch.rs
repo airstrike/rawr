@@ -581,9 +581,10 @@ impl<'a> Parser<'a> {
 
         let end = self.expect(Token::RightBrace, "'}' to close a match")?;
         self.flow().join(&arm_ends);
-        let arm_spans: Vec<Span> = arms
+        let arm_spans: Vec<(Span, borrowck::Block)> = arms
             .iter()
             .map(|(_, _, action, _)| action.value.span)
+            .zip(arm_ends.iter().copied())
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
@@ -1009,9 +1010,10 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect(Token::RightBrace, "'}' to close a match")?;
         self.flow().join(&arm_ends);
-        let arm_spans: Vec<Span> = arms
+        let arm_spans: Vec<(Span, borrowck::Block)> = arms
             .iter()
             .map(|(_, _, action)| action.value.span)
+            .zip(arm_ends.iter().copied())
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
@@ -1378,9 +1380,10 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect(Token::RightBrace, "'}' to close a match")?;
         self.flow().join(&arm_ends);
-        let arm_spans: Vec<Span> = arms
+        let arm_spans: Vec<(Span, borrowck::Block)> = arms
             .iter()
             .map(|(_, _, action)| action.value.span)
+            .zip(arm_ends.iter().copied())
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
@@ -1821,8 +1824,13 @@ impl<'a> Parser<'a> {
         )?;
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
-        self.flow()
-            .either(span, &[consequent.value.span, alternative.value.span]);
+        self.flow().either(
+            span,
+            &[
+                (consequent.value.span, consequent_end),
+                (alternative.value.span, alternative_end),
+            ],
+        );
         let (hit, value) = (self.temporary("hit"), self.temporary("chain"));
         let mut source =
             origin::Fragment::plain(format!("{{\nlet {hit} = false;\nlet {value} = ();\n"));
@@ -1975,8 +1983,13 @@ impl<'a> Parser<'a> {
         )?;
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
-        self.flow()
-            .either(span, &[consequent.value.span, alternative.value.span]);
+        self.flow().either(
+            span,
+            &[
+                (consequent.value.span, consequent_end),
+                (alternative.value.span, alternative_end),
+            ],
+        );
         if let Some((subject, arm, binds)) = pattern {
             let matched = if after.is_empty() {
                 String::new()
