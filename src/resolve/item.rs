@@ -502,6 +502,9 @@ pub(crate) struct Function {
     /// The parameter written `&mut fmt::Formatter`, through any path to
     /// it, whose body writes into it as a `fmt` body does.
     pub formatter: Option<crate::ImmutableString>,
+    /// `Self` of `where Self: Sized`: a trait's method that `dyn Trait`
+    /// does not have.
+    pub sized_self: Option<Span>,
 }
 
 /// An `impl Bounds` a function's output writes (D1109): the type parameter

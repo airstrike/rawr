@@ -982,6 +982,13 @@ impl<'a> Parser<'a> {
                 lent = true;
             }
         }
+        // `let e: E = Fail::fail("x")`: a function without `self` is for
+        // the type its output gives the expected type, as rustc infers
+        // `Self` there.
+        let self_ty = match self_ty {
+            None if function.receiver.is_none() => self.expected_self(&function),
+            self_ty => self_ty,
+        };
         let (mut arguments, end) = if function.body.constant {
             (Vec::new(), text_end(member_span.start(), &member))
         } else {
@@ -1006,13 +1013,14 @@ impl<'a> Parser<'a> {
         let Some(receiver_mode) = &function.receiver else {
             // `<T as Make>::make()`: the written type's witness picks the impl.
             let Some(self_ty) = self_ty else {
-                return Err(Error::InvalidMethodCall {
-                    owner: trait_name.clone(),
-                    method: member,
-                    reason: "has no `self`, so the type it is for cannot be inferred here; \
-                             write `<Type as Trait>::function(..)`"
+                return Err(Error::StdPath {
+                    code: "E0790",
+                    message: "cannot call associated function on trait without specifying the \
+                              corresponding `impl` type"
                         .into(),
-                    call,
+                    label: Some("cannot call associated function of trait".into()),
+                    note: None,
+                    reference: call,
                 });
             };
             let self_ty = self.inference.resolve(&self_ty);
@@ -1814,5 +1822,31 @@ fn scalar_name(ty: &Ty) -> Option<&'static str> {
             .find(|(_, known)| known == kind)
             .map(|(name, _)| *name),
         _ => None,
+    }
+}
+
+impl Parser<'_> {
+    /// The `Self` of the trait function `function`, which takes no `self`,
+    /// that its output gives the type the call is expected to have: `E1` of
+    /// `let e: E1 = Fail::fail("x")` for `fn fail(msg: &str) -> Self`.
+    /// `None` when there is no expectation or it leaves `Self` open.
+    fn expected_self(&mut self, function: &item::Function) -> Option<Ty> {
+        let expected = self.coercion_target()?;
+        let output = Ty::from_resolved(function.output.as_ref()?);
+        let fresh = self.inference.fresh();
+        let substitution = BTreeMap::from([(ImmutableString::from("Self"), fresh.clone())]);
+        let output = instantiate(&output, &substitution);
+        let checkpoint = self.inference.checkpoint();
+        if !self.unify_type(&output, &expected) {
+            self.inference.rollback(checkpoint);
+            return None;
+        }
+        let self_ty = self.inference.resolve(&fresh);
+        if contains_inference(&self_ty) {
+            self.inference.rollback(checkpoint);
+            return None;
+        }
+        self.inference.commit(checkpoint);
+        Some(self_ty)
     }
 }

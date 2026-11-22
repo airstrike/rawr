@@ -883,6 +883,16 @@ impl Models {
                 .zip(declared.associated_equalities.iter())
                 .filter(|(_, equalities)| !equalities.is_empty())
             {
+                if !declared.generics.is_empty() {
+                    associated.trait_parameters.insert(
+                        declared.name.text.clone(),
+                        declared
+                            .generics
+                            .iter()
+                            .map(|generic| generic.name.text.clone())
+                            .collect(),
+                    );
+                }
                 associated.equalities.insert(
                     (declared.name.text.clone(), name.text.clone()),
                     equalities

@@ -994,7 +994,9 @@ pub struct GenericParam {
     pub constant: Option<type_ref::Type>,
     /// The type a function's `where` bound on a type other than its
     /// parameters bounds (`Vec<T>` of `where Vec<T>: Debug`), which this
-    /// lifted parameter is wherever the function is called.
+    /// lifted parameter is wherever the function is called; or the type
+    /// that stands for a parameter bounded by `Fn(A) -> B` or `Iterator<Item
+    /// = T>` (`erase_fn_bounds`).
     pub fixed: Option<type_ref::Type>,
 }
 
@@ -1195,6 +1197,9 @@ pub struct Function {
     /// `async fn`: the declared output is the future's, and the body runs
     /// as an `async move` block.
     pub(crate) asynchronous: bool,
+    /// `Self` of `where Self: Sized`: a trait's method that `dyn Trait`
+    /// does not have, so it may name `Self` or take no `self`.
+    pub(crate) sized_self: Option<Span>,
     /// Complete item span.
     pub span: Span,
 }

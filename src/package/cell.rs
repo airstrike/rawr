@@ -32,7 +32,7 @@ use crate::{parse, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 20;
+const FORMAT: u32 = 21;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`), whether it
@@ -570,7 +570,7 @@ record! {
     }
     item::Function {
         header, name, generics, lifetimes, receiver_lifetime, receiver, parameters, output,
-        body_span, body_syntax, constant, static_item, asynchronous, span,
+        body_span, body_syntax, constant, static_item, asynchronous, sized_self, span,
     }
     item::Lifetimes { params, bounds }
     item::TypeAlias { header, name, generics, target, span }

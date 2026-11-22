@@ -90,6 +90,7 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_DUPLICATE_IMPORT, "E0252", "Two imports of one name in one namespace, as rustc reports it."),
     (RESOLVE_REDEFINED, "E0255", "An import of a name a declaration of its module binds in one namespace, as rustc reports it."),
     (RESOLVE_UNKNOWN_TYPE, "E0425", "A type name nothing in scope declares, as rustc reports it."),
+    (RESOLVE_SELF_OUTSIDE, "E0411", "`Self` written outside an impl, a trait or a type definition, as rustc reports it."),
     (RESOLVE_UNKNOWN_IMPORT, "E0432", "A `use` of a path that doesn't exist, as rustc reports it."),
     (RESOLVE_INVALID_IMPORT, "RAWR-RESOLVE-INVALID-IMPORT", "Invalid compile-time import."),
     (RESOLVE_TYPE_ARGUMENTS, "RAWR-RESOLVE-TYPE-ARGUMENTS", "Invalid structural type arguments."),
@@ -186,6 +187,8 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_PRIVATE_FIELD_NAMED, "E0451", "A struct literal or pattern that names a field from outside the module it is private to, as rustc reports it."),
     (RESOLVE_PRIVATE_REEXPORT, "E0364", "A `use` that re-exports an item further than the item is visible, as rustc reports it."),
     (RESOLVE_VISIBILITY_ANCESTOR, "E0742", "A `pub(in path)` whose path names a module that is not an ancestor, as rustc reports it."),
+    (RESOLVE_ASSOCIATED_EQUALITY, "E0271", "An associated type whose own associated type is not the one its trait's bound says it is, as rustc reports it."),
+    (RESOLVE_TRAIT_FUNCTION_SELF, "E0790", "A trait's function without `self` called through the trait where nothing gives the type it is for, as rustc reports it."),
     (RESOLVE_ARGUMENT_COUNT, "E0061", "A call with more or fewer arguments than its function, method or constructor takes, as rustc reports it."),
     (RESOLVE_ARGUMENT_SIGNATURE, "E0631", "A closure or function whose parameters differ from those of the callable it is passed as, as rustc reports it."),
     (RESOLVE_CANNOT_COMPARE, "E0277", "An `==` or `!=` whose left operand's type has no `PartialEq` impl for the right operand's, as rustc reports it."),
@@ -321,6 +324,8 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0560" => RESOLVE_LITERAL_FIELD,
         "E0559" => RESOLVE_VARIANT_FIELD,
         "E0026" => RESOLVE_PATTERN_FIELD,
+        "E0790" => RESOLVE_TRAIT_FUNCTION_SELF,
+        "E0271" => RESOLVE_ASSOCIATED_EQUALITY,
         _ => RESOLVE_UNSTABLE,
     }
 }

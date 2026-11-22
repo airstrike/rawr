@@ -232,3 +232,92 @@ main();
     );
     assert_eq!(output, "(0.1, 0.2) 0.3\n0.8\n0.3\n");
 }
+
+#[test]
+fn a_closure_is_read_after_the_argument_that_fixes_its_parameter() {
+    // rustc checks closure arguments after the others, so `4usize` gives
+    // `x` its type (#409).
+    let output = printed(
+        r#"
+fn each2<T: Copy, F: Fn(&T) -> T>(f: F, x: T) -> T { f(&x) }
+fn apply<T, U, F: Fn(T, T) -> U>(f: F, a: T, b: T) -> U { f(a, b) }
+fn main() {
+    let k = 10;
+    println!("{} {}", each2(|x| *x * 4, 4usize), each2(move |x| x.wrapping_mul(100), 3u8));
+    println!("{:?}", apply(|a, b| (a.max(b), k), 3u8, 9));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "16 44\n(9, 10)\n");
+}
+
+#[test]
+fn a_turbofish_counts_a_parameter_an_fn_bound_gives() {
+    // `F: Fn(T) -> T` is a parameter a turbofish fills, as rustc's E0107
+    // counts it (#408).
+    let output = printed(
+        r#"
+fn each<T, F: Fn(T) -> T>(xs: Vec<T>, f: F) -> Vec<T> { xs.into_iter().map(f).collect() }
+fn main() {
+    println!("{:?}", each::<usize, _>(vec![1, 2], |x| x + 1));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[2, 3]\n");
+    let report = refused(
+        "fn each<T, F: Fn(T) -> T>(xs: Vec<T>, f: F) -> Vec<T> { xs.into_iter().map(f).collect() }\n\
+         fn main() { let v = each::<usize>(vec![1, 2], |x| x + 1); }\nmain();\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0107]: function takes 2 generic arguments but 1 generic argument was supplied\n"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_trait_function_without_self_is_for_the_expected_type() {
+    // `Fail::fail(..)` where an `E1` is expected is `<E1 as Fail>::fail`:
+    // in a `let`, an `Err(..)`, a tail and an argument (#1033). With no
+    // expected type it is rustc's E0790.
+    let output = printed(
+        r#"
+trait Fail { fn fail(msg: &str) -> Self; }
+#[derive(Debug)]
+struct E1(String);
+impl Fail for E1 { fn fail(msg: &str) -> Self { E1(msg.to_string()) } }
+#[derive(Debug)]
+struct E2;
+impl Fail for E2 { fn fail(_: &str) -> Self { E2 } }
+fn make() -> Result<i32, E2> { Err(Fail::fail("z")) }
+fn tail() -> E1 { Fail::fail("t") }
+fn wrap(e: E1) -> E1 { e }
+fn main() {
+    let e: E1 = Fail::fail("x");
+    let r: Result<(), E1> = Err(Fail::fail("y"));
+    println!("{:?} {:?} {:?}", e, r, make());
+    println!("{:?} {:?}", tail(), wrap(Fail::fail("w")));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "E1(\"x\") Err(E1(\"y\")) Err(E2)\nE1(\"t\") E1(\"w\")\n"
+    );
+    let report = refused(
+        "trait Fail { fn fail(msg: &str) -> Self; }\nstruct E1;\n\
+         impl Fail for E1 { fn fail(_: &str) -> Self { E1 } }\n\
+         fn main() { let e = Fail::fail(\"x\"); }\nmain();\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0790]: cannot call associated function on trait without specifying the \
+             corresponding `impl` type\n"
+        ),
+        "{report}"
+    );
+}

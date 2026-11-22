@@ -12958,7 +12958,9 @@ main();
     "#,
     );
     assert!(
-        error.contains("usize (`<Range<i64> as Iterator>::Item`)"),
+        error.contains(
+            "expected `Range<i64>` to be an iterator that yields `usize`, but it yields `i64`"
+        ),
         "{error}"
     );
     let error = rejected(
@@ -12973,7 +12975,7 @@ main();
     "#,
     );
     assert!(
-        error.contains("i64 (`<Square as Shape>::Output`)"),
+        error.contains("type mismatch resolving `<Square as Shape>::Output == i64`"),
         "{error}"
     );
 }

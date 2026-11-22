@@ -9379,3 +9379,211 @@ main();
          drop D6\ndrop D9\ndrop D7\ndrop D8\ndrop D5\ndrop D4\ndrop D2\ndrop D1\ndrop D3\n"
     );
 }
+
+#[test]
+fn language_a_qualified_path_without_a_trait_is_the_types_path() {
+    // `<T>::f(..)` means `T::f(..)`, with the turbofish a type's arguments
+    // take in an expression (#378).
+    let output = printed(
+        r#"
+struct S;
+impl S {
+    fn make() -> i32 { 7 }
+    fn twice(&self, x: i32) -> i32 { x * 2 }
+}
+trait Tr { fn tr() -> i32; }
+impl Tr for S { fn tr() -> i32 { 9 } }
+fn main() {
+    println!("{} {} {}", <S>::make(), <S>::twice(&S, 4), <S>::tr());
+    println!("{} {} {}", <i32>::max(3, 5), <Vec<i32>>::new().len(), <str>::len("abc"));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 8 9\n5 0 3\n");
+}
+
+#[test]
+fn language_question_mark_converts_an_error_through_std_from() {
+    // `?` returns `Err(From::from(e))`, through std's impls as through a
+    // program's: `&str` into `String`, `u8` into `u64` (#1034).
+    let output = printed(
+        r#"
+fn pick(x: Option<i32>) -> Result<i32, String> {
+    let v = x.ok_or("missing")?;
+    Ok(v + 1)
+}
+fn pick2(x: Result<i32, &str>) -> Result<i32, String> { Ok(x? * 2) }
+fn wide(x: Result<u8, u8>) -> Result<u8, u64> { Ok(x?) }
+fn main() {
+    println!("{:?} {:?} {:?} {:?}", pick(Some(1)), pick(None), pick2(Err("bad")), wide(Err(7)));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Ok(2) Err(\"missing\") Err(\"bad\") Err(7)\n");
+    let report = refused(
+        "fn bad(x: Result<i32, bool>) -> Result<i32, String> { Ok(x?) }\nfn main() {}\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: `?` couldn't convert the error to `String`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_an_error_in_an_arm_where_a_boxed_error_is_expected_is_e0308() {
+    // The expected `Result<_, Box<dyn Error>>` reaches each arm's
+    // `Err(..)`: a bare error there is rustc's E0308, and a boxed one
+    // coerces (#1430).
+    let declarations = "use std::error::Error;\nuse std::fmt;\n#[derive(Debug)]\nstruct MyErr;\n\
+        impl fmt::Display for MyErr {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, \"my\") }\n}\n\
+        impl Error for MyErr {}\n";
+    for body in [
+        "if c { Ok(1) } else { Err(MyErr) }",
+        "match c { true => Ok(1), false => Err(MyErr) }",
+    ] {
+        let report = refused(&format!(
+            "{declarations}fn run(c: bool) -> Result<i32, Box<dyn Error>> {{\n    {body}\n}}\n\
+             fn main() {{ println!(\"{{:?}}\", run(true).is_ok()); }}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with("error[E0308]: mismatched types\n"),
+            "{report}"
+        );
+        assert!(
+            report.contains("expected `Box<dyn Error>`, found `MyErr`"),
+            "{report}"
+        );
+    }
+    let output = printed(&format!(
+        "{declarations}fn run(c: bool) -> Result<i32, Box<dyn Error>> {{\n    \
+         if c {{ Ok(1) }} else {{ Err(Box::new(MyErr)) }}\n}}\n\
+         fn main() {{ println!(\"{{:?}} {{}}\", run(true).is_ok(), run(false).unwrap_err()); }}\nmain();\n"
+    ));
+    assert_eq!(output, "true my\n");
+}
+
+#[test]
+fn language_a_relaxed_sized_bound_bounds_nothing() {
+    // `?Sized` in a parameter's bounds and in a `where` clause (#801); no
+    // other trait is relaxed.
+    let output = printed(
+        r#"
+use std::fmt::Display;
+fn show<T: Display + ?Sized>(t: &T) -> String { format!("<{}>", t) }
+fn wrap<T>(t: &T) -> String where T: ?Sized + Display { format!("[{}]", t) }
+fn main() {
+    let s: &str = "hi";
+    println!("{} {} {}", show(s), show(&5), wrap("ab"));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "<hi> <5> [ab]\n");
+    let report = refused("fn f<T: ?Clone>(t: &T) {}\nfn main() {}\nmain();\n");
+    assert!(
+        report.starts_with("error: bound modifier `?` can only be applied to `Sized`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_a_method_where_self_is_sized_is_no_method_of_dyn_trait() {
+    // `where Self: Sized` keeps a method out of `dyn Trait`, so it may take
+    // no `self` or return `Self` (#802). Outside an impl or a trait there
+    // is no `Self` (E0411).
+    let output = printed(
+        r#"
+trait Shape {
+    fn area(&self) -> f64;
+    fn doubled(self) -> f64 where Self: Sized { self.area() * 2.0 }
+    fn make() -> Self where Self: Sized;
+}
+struct Sq(f64);
+impl Shape for Sq {
+    fn area(&self) -> f64 { self.0 * self.0 }
+    fn make() -> Self { Sq(3.0) }
+}
+fn main() {
+    let b: Box<dyn Shape> = Box::new(Sq(2.0));
+    println!("{} {} {}", b.area(), Sq(2.0).doubled(), Sq::make().area());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "4 8 9\n");
+    let report = refused("fn f() where Self: Sized {}\nfn main() {}\nmain();\n");
+    assert!(
+        report.starts_with("error[E0411]: cannot find type `Self` in this scope\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_a_generic_traits_associated_type_bound_names_its_parameters() {
+    // `type Out: Iterator<Item = T>` of `trait Conv<T>` is the iterator of
+    // the bound's or the impl's `T` (#382), and an impl whose type yields
+    // another is rustc's E0271.
+    let output = printed(
+        r#"
+trait Conv<T> {
+    type Out: Iterator<Item = T>;
+    fn conv(&self) -> Self::Out;
+}
+struct Up(u32);
+impl Conv<u32> for Up {
+    type Out = std::ops::Range<u32>;
+    fn conv(&self) -> Self::Out { 0..self.0 }
+}
+fn total<C: Conv<u32>>(c: &C) -> u32 { c.conv().sum() }
+fn firsts<T, C: Conv<T>>(c: &C) -> Option<T> { c.conv().next() }
+fn main() {
+    let s: Vec<u32> = Up(4).conv().collect();
+    let f: Option<u32> = firsts(&Up(3));
+    println!("{:?} {} {:?}", s, total(&Up(5)), f);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[0, 1, 2, 3] 10 Some(0)\n");
+    let report = refused(
+        "trait Conv<T> { type Out: Iterator<Item = T>; }\nstruct Up;\n\
+         impl Conv<u64> for Up { type Out = std::ops::Range<u32>; }\nfn main() {}\nmain();\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0271]: expected `Range<u32>` to be an iterator that yields `u64`, but it \
+             yields `u32`\n"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_blanket_impls_are_probed_by_the_bounds_that_hold() {
+    // Two blanket impls of different traits give `shout`: the one whose
+    // bounds hold for the receiver is called, and two that hold are
+    // rustc's E0034. `T::Item` in a blanket impl's signature is the
+    // receiver's item (#1555).
+    let declarations = "trait Named { fn name(&self) -> String; }\n\
+        trait Loud { fn shout(&self) -> String; }\n\
+        impl<T: Named> Loud for T { fn shout(&self) -> String { self.name().to_uppercase() } }\n\
+        trait Quiet { fn shout(&self) -> String; }\n\
+        impl<T: Clone> Quiet for T { fn shout(&self) -> String { \"shh\".into() } }\n";
+    let output = printed(&format!(
+        "{declarations}struct Dog;\nimpl Named for Dog {{ fn name(&self) -> String {{ \"dog\".into() }} }}\n\
+         trait Or {{ type Out; fn or(self, d: Self::Out) -> Self::Out; }}\n\
+         impl<T: Iterator> Or for T {{ type Out = T::Item; fn or(self, d: T::Item) -> T::Item {{ d }} }}\n\
+         fn main() {{ println!(\"{{}} {{}} {{}}\", Dog.shout(), 5.shout(), vec![4, 5].into_iter().or(9)); }}\nmain();\n"
+    ));
+    assert_eq!(output, "DOG shh 9\n");
+    let report = refused(&format!(
+        "{declarations}#[derive(Clone)]\nstruct Cat;\nimpl Named for Cat {{ fn name(&self) -> String {{ \"cat\".into() }} }}\n\
+         fn main() {{ println!(\"{{}}\", Cat.shout()); }}\nmain();\n"
+    ));
+    assert!(
+        report.starts_with("error[E0034]: multiple applicable items in scope\n"),
+        "{report}"
+    );
+}
