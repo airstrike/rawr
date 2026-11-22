@@ -445,8 +445,7 @@ impl<'a> Parser<'a> {
         self.exit_drop_uses(self.loops[target].drop_depth);
         self.flow().jump(flow_depth, breaking);
         let keyword = if breaking { "break" } else { "continue" };
-        let drops =
-            self.temporary_drops_here() + self.exit_drops(self.loops[target].drop_depth)?.as_str();
+        let drops = self.exit_drops(self.loops[target].drop_depth)?;
         if let Some(value) = &mut value {
             self.move_out_value(value)?;
         }
@@ -497,7 +496,7 @@ impl<'a> Parser<'a> {
         self.returns += 1;
         let mut source = origin::Fragment::plain("{ return");
         let mut end = start;
-        let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+        let drops = self.exit_drops(self.drop_base)?;
         if !begins_expr(&self.peek()) {
             if !self.unify_type(&output, &Ty::Unit) {
                 return Err(Error::ReturnWithoutValue {
@@ -533,7 +532,7 @@ impl<'a> Parser<'a> {
             self.consume_imported_value(&value, "returned value", value.span)?;
             self.move_out_value(&mut value)?;
             // The value's own temporaries drop once it is made.
-            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let drops = self.exit_drops(self.drop_base)?;
             let returned = value.rendered_source();
             if !drops.is_empty() {
                 let returned = self.copied_return(returned.clone()).unwrap_or(returned);

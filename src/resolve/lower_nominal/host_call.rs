@@ -3034,8 +3034,9 @@ impl<'a> Parser<'a> {
     /// Whether the field of type `ty` read from `receiver` is borrowed
     /// where it is read, as rustc borrows it: the whole operand of a `&`,
     /// the receiver of a method that takes it `&self`, its own or its
-    /// `Deref` target's, or the place a `Copy` field of it is copied out of
-    /// (`copied_below`).
+    /// `Deref` target's, the place a `Copy` field of it is copied out of
+    /// (`copied_below`), or what is indexed, which `Index::index` takes by
+    /// reference (`&req.comparators[0]`).
     #[cfg(feature = "rust-import")]
     pub(super) fn borrows_field(&mut self, receiver: &ParsedExpr, ty: &Ty) -> bool {
         match self.peek() {
@@ -3051,7 +3052,8 @@ impl<'a> Parser<'a> {
                 };
                 self.borrows_for_method(ty, member.as_str())
             }
-            Token::LeftParen | Token::Unit | Token::LeftBracket => false,
+            Token::LeftBracket => true,
+            Token::LeftParen | Token::Unit => false,
             _ => self.lent_field == Some(receiver.span.start()),
         }
     }

@@ -4516,7 +4516,7 @@ impl<'a> Parser<'a> {
             self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
             let mut value = value;
             self.move_out_value(&mut value)?;
-            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let drops = self.exit_drops(self.drop_base)?;
             let operand = self.temporary("try");
             let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
             source.push(value.rendered_source());
@@ -4548,7 +4548,7 @@ impl<'a> Parser<'a> {
             self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
             let mut value = value;
             self.move_out_value(&mut value)?;
-            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let drops = self.exit_drops(self.drop_base)?;
             let operand = self.temporary("try");
             let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
             source.push(value.rendered_source());
@@ -4609,7 +4609,7 @@ impl<'a> Parser<'a> {
             self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
             let mut value = value;
             self.move_out_value(&mut value)?;
-            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let drops = self.exit_drops(self.drop_base)?;
             let operand = self.temporary("try");
             let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
             source.push(value.rendered_source());
@@ -4637,7 +4637,7 @@ impl<'a> Parser<'a> {
         {
             let mut value = value;
             self.move_out_value(&mut value)?;
-            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let drops = self.exit_drops(self.drop_base)?;
             let operand = self.temporary("try");
             let placeholder =
                 call_placeholder(&conversion_placeholder(self.pending_conversions.len()));
@@ -4674,7 +4674,7 @@ impl<'a> Parser<'a> {
         // The early return is the operand itself: `None`, or `Err(error)`.
         let mut value = value;
         self.move_out_value(&mut value)?;
-        let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+        let drops = self.exit_drops(self.drop_base)?;
         let operand = self.temporary("try");
         let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
         source.push(value.rendered_source());

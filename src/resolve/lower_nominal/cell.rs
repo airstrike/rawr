@@ -128,6 +128,12 @@ pub(super) fn value(value: &Dynamic) -> Option<Dynamic> {
     cell(value).map(|cell| cell.value())
 }
 
+/// The value of a `RefCell`, `Cell` or `Mutex`, not of a borrow of one:
+/// what the cell's drop drops.
+pub(super) fn owned_value(value: &Dynamic) -> Option<Dynamic> {
+    value.read_lock::<Cell>().map(|cell| cell.0.value())
+}
+
 /// The cell's type name and value, for `Debug`.
 pub(super) fn named_value(value: &Dynamic) -> Option<(&'static str, Dynamic)> {
     cell(value).map(|cell| {
@@ -605,6 +611,7 @@ impl Parser<'_> {
             }
             ("replace", [replacement]) => {
                 self.coerce_expr(&inner, replacement)?;
+                self.move_into_cell(&inner, replacement, call)?;
                 let source = self.prelude_op(
                     PreludeOp::CellReplace,
                     [cell, replacement.rendered_source()],
@@ -638,6 +645,20 @@ impl Parser<'_> {
                 member_span,
             )),
         }
+    }
+
+    /// `value`, a cell's new value of type `inner`, moved out of its local
+    /// when it has drop glue, so the local's scope does not drop it too.
+    fn move_into_cell(
+        &mut self,
+        inner: &Ty,
+        value: &mut ParsedExpr,
+        call: Span,
+    ) -> Result<(), Error> {
+        if self.needs_drop(inner, call)? {
+            self.move_local(value)?;
+        }
+        Ok(())
     }
 
     /// Which of std's guards a borrow of the cell of type `cell` gives,
@@ -739,14 +760,31 @@ impl Parser<'_> {
                 let source = self.prelude_op(PreludeOp::CellGet, [cell]);
                 Ok(self.operator_expr(source, inner, call))
             }
+            // The value `set` replaces drops, as std's does.
             ("set", [replacement]) => {
                 self.coerce_expr(&inner, replacement)?;
-                let source =
-                    self.prelude_op(PreludeOp::CellSet, [cell, replacement.rendered_source()]);
+                if !self.needs_drop(&inner, call)? {
+                    let source =
+                        self.prelude_op(PreludeOp::CellSet, [cell, replacement.rendered_source()]);
+                    return Ok(self.operator_expr(source, Ty::Unit, call));
+                }
+                self.move_local(replacement)?;
+                let replaced = self.temporary("replaced");
+                let replace = self.prelude_op(
+                    PreludeOp::CellReplace,
+                    [cell, replacement.rendered_source()],
+                );
+                let mut source = origin::Fragment::plain(format!("{{ let {replaced} = "));
+                source.push(replace);
+                source.push_text(format!(
+                    "; {} }}",
+                    drops::glue_call(&replaced, &self.drop_shape(&inner))
+                ));
                 Ok(self.operator_expr(source, Ty::Unit, call))
             }
             ("replace", [replacement]) => {
                 self.coerce_expr(&inner, replacement)?;
+                self.move_into_cell(&inner, replacement, call)?;
                 let source = self.prelude_op(
                     PreludeOp::CellReplace,
                     [cell, replacement.rendered_source()],

@@ -11,7 +11,9 @@
 //! Where a local is, is its index in the function's scope, or the receiver.
 //! A local keeps its index while it lives, and NLL keeps a borrowed local
 //! alive while the borrow is used. An async body's locals move between
-//! scopes at each `.await`, so there a new borrow stays refused.
+//! scopes at each `.await`, so there a local is found by its name, as a
+//! place's root is there (`located_root`), unless a later binding of the
+//! block takes that name.
 
 use super::*;
 use crate::engine::{KEYWORD_LEND, KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
@@ -59,9 +61,6 @@ impl Parser<'_> {
     /// referent is (a local's slot, or a part's path), and whether it is
     /// another such local's. `None` where a new borrow can't be held yet.
     pub(super) fn reborrow_source(&mut self, value: &ParsedExpr) -> Option<(String, bool)> {
-        if self.in_async_body() {
-            return None;
-        }
         let lvalue = value.lvalue.as_ref()?;
         let root = match lvalue {
             Lvalue::Binding { binding, .. } => binding,
@@ -75,8 +74,14 @@ impl Parser<'_> {
             Lvalue::Nested(nested) => return self.part_source(&nested.binding, lvalue),
             Lvalue::Slice(_) => return None,
         };
-        self.reborrow_root(root)
-            .then(|| (format!("{KEYWORD_SLOT_OF}{root}"), false))
+        if !self.reborrow_root(root) {
+            return None;
+        }
+        if !self.in_async_body() {
+            return Some((format!("{KEYWORD_SLOT_OF}{root}"), false));
+        }
+        // The path of the whole local, by its name.
+        (!self.root_shadowed_later(root)).then(|| (format!("[{root:?}]"), false))
     }
 
     /// What a `&mut` local given new borrows holds for the field or

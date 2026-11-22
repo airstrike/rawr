@@ -96,6 +96,38 @@ pub(super) struct Scope {
     thread_end: Option<String>,
 }
 
+/// One temporary scope (a statement, a match arm, a condition): the hidden
+/// locals holding the values made in it that nothing moves, in the order
+/// made.
+pub(super) struct Temporaries {
+    /// How many drop scopes were open when it opened: it is inside the
+    /// last of them, so its temporaries drop before that scope's locals.
+    depth: usize,
+    pub(super) made: Vec<String>,
+    /// A statement's, before edition 2024: as a block's tail it keeps its
+    /// temporaries past the block's locals, which is known only at its end.
+    tail: bool,
+    /// The drops jumps out of it wrote before that is known.
+    exits: Vec<Exit>,
+}
+
+/// A jump's drops of a statement's temporaries before edition 2024: two
+/// places in the jump's text, before the locals of the statement's block
+/// and after them, and the drops, which go in the first unless the
+/// statement is the block's tail ([`Parser::hand_tail`]).
+pub(super) struct Exit {
+    early: String,
+    late: String,
+    drops: String,
+}
+
+impl Exit {
+    /// Each of the two places, as the text that marks it.
+    fn marks(&self) -> (String, String) {
+        (format!("/*{}*/", self.early), format!("/*{}*/", self.late))
+    }
+}
+
 /// Where a block's tail temporaries drop before edition 2024: after the
 /// block's locals, at the end of the temporary scope around the block, or,
 /// in a body's own tail, between its locals and its parameters. Edition
@@ -212,7 +244,9 @@ fn each_part(
         }
         Union::Shared(..) => each_part(&value.flatten_clone(), shape, models, each),
         Union::Variant(..) => {
-            if let Some(Some(inner)) = crate::option::read(value) {
+            if let Some(inner) = cell::owned_value(value) {
+                each(&inner, shape.clone());
+            } else if let Some(Some(inner)) = crate::option::read(value) {
                 each(&inner, shape.clone());
             } else if let Some(Ok(inner)) = crate::result::read(value) {
                 each(&inner, key(shape, "ok"));
@@ -538,8 +572,11 @@ impl Parser<'_> {
                 Shape::Walk => Shape::Walk,
                 element => Shape::Elements(Box::new(element)),
             },
-            // At run time, a `Box` is the value it holds.
-            Ty::Option(inner) | Ty::Boxed(inner) => self.shape_in(inner, visiting),
+            // At run time, a `Box` is the value it holds, and the glue walks
+            // a cell's value as its part.
+            Ty::Option(inner) | Ty::Boxed(inner) | Ty::Cell(_, inner) => {
+                self.shape_in(inner, visiting)
+            }
             Ty::Result(ok, err) => {
                 let (ok, err) = (self.shape_in(ok, visiting), self.shape_in(err, visiting));
                 if ok.walks() && err.walks() {
@@ -760,12 +797,8 @@ impl Parser<'_> {
                 false
             }
 
-            Ty::Cell(_, inner) => {
-                if self.needs_drop_in(inner, at, visiting)? {
-                    return Err(unsupported("a `RefCell`"));
-                }
-                false
-            }
+            // A `RefCell`, `Cell` or `Mutex` drops its value with it.
+            Ty::Cell(_, inner) => self.needs_drop_in(inner, at, visiting)?,
             Ty::Keyed(kind, arguments) => {
                 for argument in arguments.iter() {
                     if self.needs_drop_in(argument, at, visiting)? {
@@ -950,15 +983,47 @@ impl Parser<'_> {
         Ok(drops)
     }
 
-    /// The drops of every scope above `depth`, innermost first: what a jump
-    /// out of them drops.
-    pub(super) fn exit_drops(&self, depth: usize) -> Result<String, Error> {
+    /// What a jump out of every scope above `depth` drops, innermost
+    /// first: the temporaries made so far in each temporary scope inside
+    /// them, each before the locals of the scope it is in, as rustc drops
+    /// them. A statement's, which may be its block's tail before edition
+    /// 2024, go in a place its end chooses (`Exit`).
+    pub(super) fn exit_drops(&mut self, depth: usize) -> Result<String, Error> {
         if !self.drops() {
             return Ok(String::new());
         }
+        // The temporary scopes the jump leaves, innermost first, by
+        // position and depth.
+        let leaving: Vec<(usize, usize)> = (self.temporary_base..self.temporary_scopes.len())
+            .rev()
+            .map(|at| (at, self.temporary_scopes[at].depth))
+            .take_while(|&(_, inside)| inside > depth)
+            .collect();
+        let mut temporaries = leaving.into_iter().peekable();
         let mut text = String::new();
-        for scope in self.drop_scopes.iter().skip(depth).rev() {
-            text.push_str(&self.local_drops(&scope.locals)?);
+        for index in (depth..self.drop_scopes.len()).rev() {
+            let mut late = String::new();
+            while let Some((at, _)) = temporaries.next_if(|&(_, inside)| inside > index) {
+                let drops = self.temporary_drops(&self.temporary_scopes[at].made);
+                if !self.temporary_scopes[at].tail || drops.is_empty() {
+                    text.push_str(&drops);
+                    continue;
+                }
+                let exit = Exit {
+                    early: self.temporary("early"),
+                    late: self.temporary("late"),
+                    drops,
+                };
+                let (early_mark, late_mark) = exit.marks();
+                text.push_str(&early_mark);
+                late.push_str(&late_mark);
+                self.temporary_scopes[at].exits.push(exit);
+            }
+            let scope = &self.drop_scopes[index];
+            let (parameters, locals) = scope.locals.split_at(scope.parameters);
+            text.push_str(&self.local_drops(locals)?);
+            text.push_str(&late);
+            text.push_str(&self.local_drops(parameters)?);
             if let Some(end) = &scope.thread_end {
                 text.push_str(end);
             }
@@ -1637,7 +1702,7 @@ impl Parser<'_> {
     pub(super) fn scope_temporaries(&mut self, made: Vec<String>) -> Result<Vec<String>, Error> {
         if !self.drop_scoped() || self.drop_scopes.len() <= self.drop_base {
             if let Some(scope) = self.temporary_scopes.last_mut() {
-                scope.extend(made);
+                scope.made.extend(made);
             }
             return Ok(Vec::new());
         }
@@ -1730,7 +1795,7 @@ impl Parser<'_> {
     pub(super) fn escaped_tails(&mut self, temporaries: Vec<String>, escapes: bool) -> Vec<String> {
         match self.temporary_scopes.last_mut() {
             Some(scope) if escapes => {
-                scope.extend(temporaries);
+                scope.made.extend(temporaries);
                 Vec::new()
             }
             _ => temporaries,
@@ -1740,21 +1805,47 @@ impl Parser<'_> {
     /// The temporaries of the statement written from `start`, closed: a
     /// tail of a block or body that keeps them hands them to it, and none
     /// drop with the statement.
-    pub(super) fn hand_tail(&mut self, start: usize, temporaries: Vec<String>) -> Vec<String> {
-        match self.last_expression {
-            Some((tail, _)) if tail >= start && self.tails.kept => {
-                self.tails.handed.extend(temporaries);
-                Vec::new()
-            }
-            _ => temporaries,
+    /// A jump out of it put its drops of them before the block's locals,
+    /// or after them for a tail that keeps them (`Exit`).
+    pub(super) fn hand_tail(
+        &mut self,
+        start: usize,
+        (temporaries, exits): (Vec<String>, Vec<Exit>),
+    ) -> Vec<String> {
+        let kept =
+            matches!(self.last_expression, Some((tail, _)) if tail >= start) && self.tails.kept;
+        for exit in &exits {
+            let (early, late) = exit.marks();
+            let (now, never) = if kept { (late, early) } else { (early, late) };
+            self.output.replace(&now, &exit.drops);
+            self.output.replace(&never, "");
         }
+        if kept {
+            self.tails.handed.extend(temporaries);
+            return Vec::new();
+        }
+        temporaries
     }
 
     /// Open a temporary scope (a statement, a match arm, a condition): the
     /// values made in it that nothing moves drop at its end.
     pub(super) fn open_temporaries(&mut self) {
+        self.open_temporary_scope(false);
+    }
+
+    /// Open a statement's temporary scope, which may be its block's tail.
+    pub(super) fn open_statement_temporaries(&mut self) {
+        self.open_temporary_scope(self.tails.kept);
+    }
+
+    fn open_temporary_scope(&mut self, tail: bool) {
         if self.drops() {
-            self.temporary_scopes.push(Vec::new());
+            self.temporary_scopes.push(Temporaries {
+                depth: self.drop_scopes.len(),
+                made: Vec::new(),
+                tail,
+                exits: Vec::new(),
+            });
         }
     }
 
@@ -1763,7 +1854,19 @@ impl Parser<'_> {
         if !self.drops() {
             return Vec::new();
         }
-        self.temporary_scopes.pop().unwrap_or_default()
+        self.close_statement_temporaries().0
+    }
+
+    /// Close a statement's temporary scope: its temporaries, in the order
+    /// made, and the drops of them jumps out of it wrote (`hand_tail`).
+    pub(super) fn close_statement_temporaries(&mut self) -> (Vec<String>, Vec<Exit>) {
+        if !self.drops() {
+            return (Vec::new(), Vec::new());
+        }
+        self.temporary_scopes
+            .pop()
+            .map(|scope| (scope.made, scope.exits))
+            .unwrap_or_default()
     }
 
     /// `value` with the temporaries made in it: `{ let t = (); let v =
@@ -1802,15 +1905,6 @@ impl Parser<'_> {
             .collect()
     }
 
-    /// The drops of the current temporary scope's temporaries, made so
-    /// far: what a jump out of the statement drops first.
-    pub(super) fn temporary_drops_here(&self) -> String {
-        self.temporary_scopes
-            .last()
-            .map(|temporaries| self.temporary_drops(temporaries))
-            .unwrap_or_default()
-    }
-
     /// A value made by an expression, with drop glue, that a borrow,
     /// a field's read or a method by reference uses: it is kept in a
     /// temporary of the enclosing temporary scope, which drops it at its
@@ -1839,7 +1933,7 @@ impl Parser<'_> {
                 source: value.span,
             });
         };
-        scope.push(temporary.clone());
+        scope.made.push(temporary.clone());
         let shape = self.drop_shape(&value.ty);
         if shape != WALK {
             self.temporary_shapes.insert(temporary.clone(), shape);

@@ -979,9 +979,11 @@ struct Parser<'a> {
     /// The subject of the pattern being read starts with `*`: a place
     /// read through a reference, which a match does not own.
     subject_deref: bool,
-    /// The temporary scopes being read (`drops.rs`), innermost last: the
-    /// hidden locals holding the values made in each that nothing moves.
-    temporary_scopes: Vec<Vec<String>>,
+    /// The temporary scopes being read (`drops.rs`), innermost last.
+    temporary_scopes: Vec<drops::Temporaries>,
+    /// The first of `temporary_scopes` the current body or closure opened:
+    /// what a `return`, `break`, `continue` or `?` may leave.
+    temporary_base: usize,
     /// The `drops::Shape` of each temporary there whose type needs more
     /// than the walk of every part.
     temporary_shapes: BTreeMap<String, String>,
@@ -1268,6 +1270,7 @@ impl<'a> Parser<'a> {
             loop_drop_depth: None,
             subject_deref: false,
             temporary_scopes: Vec::new(),
+            temporary_base: 0,
             temporary_shapes: BTreeMap::new(),
             tails: drops::Tails::default(),
             cell_guard_types: BTreeMap::new(),

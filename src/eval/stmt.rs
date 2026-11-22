@@ -32,6 +32,32 @@ fn matches_nominal_payload_type(value: &Dynamic, expected: &NominalPayloadType) 
 struct Collected<'a> {
     bindings: &'a mut Vec<(ImmutableString, Dynamic)>,
     path: crate::Array,
+    /// The `&mut` bindings of a slice's rest, whose paths end with the
+    /// rest's range of elements.
+    windows: Vec<ImmutableString>,
+}
+
+impl<'a> Collected<'a> {
+    fn new(bindings: &'a mut Vec<(ImmutableString, Dynamic)>, path: crate::Array) -> Self {
+        Self {
+            bindings,
+            path,
+            windows: Vec::new(),
+        }
+    }
+
+    /// The path to the part being matched, which the `&mut` binding `name`
+    /// takes.
+    fn part_path(&mut self, name: &ImmutableString) -> Dynamic {
+        if self
+            .path
+            .last()
+            .is_some_and(|step| step.read_lock::<crate::ExclusiveRange>().is_some())
+        {
+            self.windows.push(name.clone());
+        }
+        Dynamic::from_array(self.path.clone())
+    }
 }
 
 impl Collected<'_> {
@@ -152,7 +178,7 @@ fn collect_nominal(
             if !matches_nominal_payload_type(value, expected) {
                 return Err(shape());
             }
-            let path = Dynamic::from_array(collected.path.clone());
+            let path = collected.part_path(name);
             collected.bindings.push((name.clone(), path));
             Ok(true)
         }
@@ -292,7 +318,7 @@ fn collect_nominal(
         } => {
             let original = collected.bindings.len();
             let bound = if *part {
-                Dynamic::from_array(collected.path.clone())
+                collected.part_path(name)
             } else {
                 value.clone()
             };
@@ -360,11 +386,13 @@ fn collect_slice(
             return Ok(false);
         }
     }
-    // A rest that binds takes a copy of the middle, which no path reaches:
-    // a `&mut` binding in it is refused where it is lowered.
+    // A rest that binds takes a copy of the middle, and a `&mut` binding of
+    // it the path to the middle's range of the array's elements.
     if let Some(rest) = rest.filter(|rest| !matches!(rest, NominalPattern::Discard { .. })) {
+        let range: crate::ExclusiveRange =
+            (offset + middle.start) as INT..(offset + middle.end) as INT;
         let middle = Dynamic::from_array(array[middle].to_vec());
-        collected.path.push(Dynamic::UNIT);
+        collected.path.push(Dynamic::from(range));
         let matched = collect_nominal(&middle, rest, false, collected, shape);
         collected.path.pop();
         if !matched? {
@@ -424,7 +452,7 @@ fn collect_nominal_root(
         value,
         pattern,
         true,
-        &mut Collected { bindings, path },
+        &mut Collected::new(bindings, path),
         &shape,
     )
 }
@@ -477,7 +505,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     fn collect_place(
         scope: &mut Scope,
-        this_ptr: Option<&mut Dynamic>,
+        mut this_ptr: Option<&mut Dynamic>,
         holder: &str,
         some: bool,
         pattern: &NominalPattern,
@@ -523,28 +551,51 @@ impl Engine {
             let index = scope.search(holder).ok_or_else(missing)?;
             Self::reach_stored(scope.get_mut_by_index(index), &steps, holder, expr)?
         } else {
-            Self::place_at(scope, this_ptr, &root, &steps, holder, expr)?
+            Self::place_at(scope, this_ptr.as_deref_mut(), &root, &steps, holder, expr)?
         };
         let place = target.as_ref();
-        let Some((low, high, inclusive)) = window else {
+        if some {
             let place = place.read_lock::<Dynamic>().ok_or_else(missing)?;
-            return Ok(if some {
-                collect_some_place(&place, pattern, bindings, &path)
-            } else {
-                collect_nominal_root(&place, pattern, bindings, path)
-            });
+            return Ok(collect_some_place(&place, pattern, bindings, &path));
+        }
+        let mut collected = Collected::new(bindings, path);
+        let matched = match window {
+            None => {
+                let place = place.read_lock::<Dynamic>().ok_or_else(missing)?;
+                let shape = || "a match subject no longer matches its proven shape".to_string();
+                collect_nominal(&place, pattern, true, &mut collected, &shape)
+            }
+            Some((low, high, inclusive)) => {
+                let array = place.as_array_ref().map_err(|_| missing())?;
+                let len = array.len();
+                let low = usize::try_from(low).unwrap_or(usize::MAX);
+                let high = match high {
+                    -1 => None,
+                    high => Some(usize::try_from(high).unwrap_or(usize::MAX)),
+                };
+                let (low, high) =
+                    crate::resolve::lower_nominal::slice_window(low, high, inclusive, len)
+                        .map_err(|message| ERR::ErrorRuntime(message.into(), expr.position()))?;
+                collect_window(&array[low..high], low, pattern, &mut collected)
+            }
         };
-        let array = place.as_array_ref().map_err(|_| missing())?;
-        let len = array.len();
-        let low = usize::try_from(low).unwrap_or(usize::MAX);
-        let high = match high {
-            -1 => None,
-            high => Some(usize::try_from(high).unwrap_or(usize::MAX)),
-        };
-        let (low, high) = crate::resolve::lower_nominal::slice_window(low, high, inclusive, len)
-            .map_err(|message| ERR::ErrorRuntime(message.into(), expr.position()))?;
-        let collected = &mut Collected { bindings, path };
-        Ok(collect_window(&array[low..high], low, pattern, collected))
+        let windows = std::mem::take(&mut collected.windows);
+        drop(target);
+        // A `&mut` binding of a rest reaches its range of elements through
+        // the reference to it, as a stored `&mut [T]` does (`view.rs`).
+        for (name, bound) in bindings.iter_mut() {
+            if !windows.contains(name) {
+                continue;
+            }
+            let path = bound.as_array_ref().map_err(|_| missing())?.to_vec();
+            let (root, steps) = path.split_first().ok_or_else(missing)?;
+            let handle =
+                crate::func::call::shared_root(scope, this_ptr.as_deref_mut(), root.clone())
+                    .ok_or_else(missing)?;
+            *bound = Self::reference(handle, steps)
+                .map_err(|message| ERR::ErrorRuntime(message.into(), expr.position()))?;
+        }
+        Ok(matched)
     }
 
     /// Evaluate a statements block.

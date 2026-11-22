@@ -10804,6 +10804,347 @@ fn main() {{
 }
 
 #[test]
+fn a_mut_binding_of_a_slice_patterns_rest_is_a_view_of_its_elements() {
+    // `[first, rest @ ..] = &mut v[..]`: `rest` is the `&mut [T]` of the
+    // elements between the pattern's ends, and a write through it, its
+    // methods and a call given it reach `v` itself, as rustc's build does
+    // (#163). So does a catch-all binding of a whole range of elements.
+    let output = printed(&format!(
+        "{}{}{}fn main() {{ first(); second(); third(); }}\nmain();\n",
+        r#"
+fn first() {
+    let mut v = vec![1, 2, 3];
+    if let [first, rest @ ..] = &mut v[..] {
+        *first += 10;
+        rest[0] += 20;
+        rest[1] = 3;
+    }
+    println!("{:?}", v);
+    let mut a = [1, 2, 3, 4];
+    match &mut a[..] {
+        [x, mid @ .., y] => {
+            *x = 0;
+            *y = 9;
+            for m in mid.iter_mut() {
+                *m *= 5;
+            }
+            println!("{}", mid.len());
+        }
+        _ => {}
+    }
+    println!("{:?}", a);
+    let s = &mut v[..];
+    if let [rest @ .., last] = s {
+        *last = 7;
+        rest[0] = 1;
+    }
+    println!("{:?}", v);
+}
+"#,
+        r#"
+fn bump(rest: &mut [String]) {
+    for s in rest.iter_mut() {
+        s.push('!');
+    }
+}
+
+fn second() {
+    let mut a = [1, 2, 3, 4];
+    match &mut a {
+        [x, rest @ ..] => {
+            *x = 7;
+            rest[2] = 8;
+            println!("{:?}", rest);
+        }
+    }
+    println!("{:?}", a);
+    let mut v = vec![String::from("a"), String::from("b"), String::from("c")];
+    if let [head, tail @ ..] = v.as_mut_slice() {
+        head.push('?');
+        bump(tail);
+        tail.swap(0, 1);
+    }
+    println!("{:?}", v);
+    let mut w = vec![1, 2, 3, 4, 5];
+    if let [_, middle @ .., _] = &mut w[1..] {
+        middle.reverse();
+        println!("{}", middle.len());
+    }
+    println!("{:?}", w);
+}
+"#,
+        r#"
+fn third() {
+    let mut v = vec![1, 2, 3, 4];
+    match &mut v[1..] {
+        [] => println!("empty"),
+        [x] => *x = 0,
+        whole => {
+            whole[0] = 20;
+            whole.reverse();
+            println!("{}", whole.len());
+        }
+    }
+    println!("{:?}", v);
+    match &mut v[2..] {
+        [a, rest @ ..] => {
+            *a += 1;
+            rest[0] += 100;
+        }
+        all => all[0] = 9,
+    }
+    println!("{:?}", v);
+}
+"#,
+    ));
+    assert_eq!(
+        output,
+        concat!(
+            "[11, 22, 3]\n",
+            "2\n",
+            "[0, 10, 15, 9]\n",
+            "[1, 22, 7]\n",
+            "[2, 3, 8]\n",
+            "[7, 2, 3, 8]\n",
+            "[\"a?\", \"c!\", \"b!\"]\n",
+            "2\n",
+            "[1, 2, 4, 3, 5]\n",
+            "3\n",
+            "[1, 4, 3, 20]\n",
+            "[1, 4, 4, 120]\n",
+        )
+    );
+    // The rest's borrow of `v` holds while the binding is used.
+    let report = refused(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    if let [_, rest @ ..] = &mut v[..] {
+        v.push(4);
+        rest[0] = 1;
+    }
+    println!("{:?}", v);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0499]: cannot borrow `v` as mutable more than once at a time"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_cell_drops_its_value_with_it_and_when_its_value_is_replaced() {
+    // A `RefCell`, `Cell` or `Mutex` of a value with drop glue drops the
+    // value when the cell drops, and the value `set`, an assignment
+    // through a borrow or a lock, or `LocalKey::set` replaces, as rustc's
+    // build does (#2643). A `thread_local!` key's cell drops as its thread
+    // ends.
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+use std::sync::Mutex;
+
+struct D(&'static str);
+
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+struct Holder {
+    cell: RefCell<Vec<D>>,
+    last: D,
+}
+
+thread_local! {
+    static KEPT: RefCell<Vec<D>> = RefCell::new(vec![D("tls")]);
+}
+
+fn main() {
+    {
+        let c = RefCell::new(D("refcell"));
+        println!("made");
+        let old = c.replace(D("refcell2"));
+        println!("replaced");
+        drop(old);
+        *c.borrow_mut() = D("refcell3");
+        println!("assigned");
+        c.replace(D("refcell4"));
+        println!("statement");
+        let e = D("refcell5");
+        let back = c.replace(e);
+        println!("local");
+        drop(back);
+    }
+    println!("--");
+    {
+        let c = Cell::new(Some(D("cell")));
+        let d = Some(D("cell2"));
+        c.set(d);
+        println!("set");
+        let f = Some(D("cell3"));
+        let back = c.replace(f);
+        drop(back);
+        let t = c.take();
+        println!("took");
+        drop(t);
+    }
+    println!("--");
+    {
+        let m = Mutex::new(D("mutex"));
+        *m.lock().unwrap() = D("mutex2");
+        println!("locked");
+    }
+    println!("--");
+    {
+        let h = Holder {
+            cell: RefCell::new(vec![D("v1"), D("v2")]),
+            last: D("last"),
+        };
+        h.cell.borrow_mut().push(D("v3"));
+        let moved = h.cell;
+        println!("moved");
+        drop(moved);
+        println!("dropped");
+    }
+    println!("--");
+    KEPT.with_borrow_mut(|v| v.push(D("tls2")));
+    KEPT.set(vec![D("tls3")]);
+    println!("done");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "made\n",
+            "replaced\n",
+            "drop refcell\n",
+            "drop refcell2\n",
+            "assigned\n",
+            "drop refcell3\n",
+            "statement\n",
+            "local\n",
+            "drop refcell4\n",
+            "drop refcell5\n",
+            "--\n",
+            "drop cell\n",
+            "set\n",
+            "drop cell2\n",
+            "took\n",
+            "drop cell3\n",
+            "--\n",
+            "drop mutex\n",
+            "locked\n",
+            "drop mutex2\n",
+            "--\n",
+            "moved\n",
+            "drop v1\n",
+            "drop v2\n",
+            "drop v3\n",
+            "dropped\n",
+            "drop last\n",
+            "--\n",
+            "drop tls\n",
+            "drop tls2\n",
+            "done\n",
+            "drop tls3\n",
+        )
+    );
+}
+
+#[test]
+fn an_early_exit_drops_the_temporaries_of_each_statement_it_leaves() {
+    // A `?`, `continue`, `break` or `return` inside a block inside a
+    // statement drops the temporaries made so far in each statement it
+    // leaves, each before the locals of the scope the statement is in,
+    // as rustc's build does (#2625).
+    let main = "struct D(&'static str);
+
+impl Drop for D {
+    fn drop(&mut self) {
+        println!(\"drop {}\", self.0);
+    }
+}
+
+impl D {
+    fn get(&self) -> i32 {
+        1
+    }
+}
+
+fn early(fail: bool) -> Option<i32> {
+    let _a = D(\"a\");
+    let n = D(\"held\").get()
+        + if fail {
+            let _b = D(\"b\");
+            D(\"inner\").get() + None::<i32>?
+        } else {
+            1
+        };
+    Some(n)
+}
+
+fn looped() -> i32 {
+    let mut i = 0;
+    loop {
+        let _c = D(\"c\");
+        let k = D(\"loop\").get() + {
+            let _e = D(\"e\");
+            if i == 0 {
+                i += 1;
+                continue;
+            }
+            if i == 1 {
+                break D(\"break\").get() * 7;
+            }
+            0
+        };
+        println!(\"{k}\");
+    }
+}
+
+fn returned() -> i32 {
+    let v = D(\"return\").get() + {
+        if true {
+            return 5;
+        }
+        0
+    };
+    v
+}
+
+fn tail(_p: D) -> Option<i32> {
+    let _l = D(\"l\");
+    Some(D(\"t\").get() + None::<i32>?)
+}
+
+fn main() {
+    println!(\"{:?}\", early(true));
+    println!(\"{}\", looped());
+    println!(\"{}\", returned());
+    println!(\"{:?}\", tail(D(\"p\")));
+}
+";
+    let rest = "drop held\ndrop a\nNone\ndrop e\ndrop loop\ndrop c\ndrop break\ndrop e\n\
+                drop loop\ndrop c\n7\ndrop return\n5\n";
+    // Before edition 2024 a block's tail temporaries outlive its locals,
+    // and a body's drop between its locals and its parameters.
+    assert_eq!(
+        edition_printed("exit", "2021", main),
+        format!("drop b\ndrop inner\n{rest}drop l\ndrop t\ndrop p\nNone\n")
+    );
+    assert_eq!(
+        edition_printed("exit", "2024", main),
+        format!("drop inner\ndrop b\n{rest}drop t\ndrop l\ndrop p\nNone\n")
+    );
+}
+
+#[test]
 fn impls_for_two_instances_reached_by_a_trait_object_are_refused() {
     // A trait object's value reaches its impl by its runtime type, which
     // holds no type arguments: rawr refuses where two impls' Self types
