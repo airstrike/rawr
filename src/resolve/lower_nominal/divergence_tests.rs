@@ -8986,3 +8986,56 @@ main();
     );
     assert_eq!(output, "[1, 2, 103] [12, 50] [21]\n");
 }
+
+#[test]
+fn language_a_part_with_drop_glue_moves_out_below_a_field() {
+    // A move out of a field below a field, or of a member below a member,
+    // whose type implements `Drop` leaves the rest of the local to drop
+    // where rustc drops it, the moved part with its new owner (#196).
+    let output = printed(
+        r#"
+struct D(i32);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop D{}", self.0);
+    }
+}
+struct I {
+    d: D,
+    e: D,
+}
+struct O {
+    i: I,
+    f: D,
+}
+impl O {
+    fn take(self) -> D {
+        println!("taking");
+        self.i.e
+    }
+}
+fn main() {
+    let t = (D(1), (D(2), D(3)));
+    let a = t.1.0;
+    println!("moved {}", a.0);
+    let u = (D(4), D(5));
+    let b = u.1;
+    println!("moved {}", b.0);
+    let mut o = O { i: I { d: D(6), e: D(7) }, f: D(8) };
+    let c = o.i.d;
+    o.i.d = D(9);
+    println!("moved {}", c.0);
+    let p = O { i: I { d: D(10), e: D(11) }, f: D(12) };
+    let e = p.take();
+    println!("took {}", e.0);
+    println!("end");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "moved 2\nmoved 5\nmoved 6\ntaking\ndrop D10\ndrop D12\ntook 11\nend\ndrop D11\n\
+         drop D6\ndrop D9\ndrop D7\ndrop D8\ndrop D5\ndrop D4\ndrop D2\ndrop D1\ndrop D3\n"
+    );
+}
