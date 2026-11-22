@@ -378,6 +378,11 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {
+        if let Some(parameter) = self.assumed(ty)
+            && self.type_provides(&parameter, capability)
+        {
+            return true;
+        }
         match self.inference.resolve(ty) {
             Ty::Unit => true,
             // `!` implements what core implements it for: it is `Copy`,

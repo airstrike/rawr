@@ -2404,7 +2404,7 @@ fn parse_struct(
     expect(input, Token::Struct, "to start a struct")?;
     let name = parse_name(input, "after 'struct'")?;
     let (mut generics, mut lifetimes) = parse_generics(input)?;
-    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
+    parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
 
     if matches!(input.peek(), Some((Token::SemiColon, _))) {
         let semicolon = expect(input, Token::SemiColon, "to terminate a unit struct")?;
@@ -2455,7 +2455,7 @@ fn parse_struct(
             }
             expect(input, Token::RightParen, "to close a tuple struct")?;
         }
-        parse_where_with(input, &mut generics, None, &mut lifetimes)?;
+        parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
         let semicolon = expect(input, Token::SemiColon, "to terminate a tuple struct")?;
         let end = after(semicolon, 1);
         return Ok(crate::item::Struct {
@@ -2555,7 +2555,7 @@ fn parse_enum(
     expect(input, Token::Enum, "to start an enum")?;
     let name = parse_name(input, "after 'enum'")?;
     let (mut generics, mut lifetimes) = parse_generics(input)?;
-    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
+    parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
     let open = expect(input, Token::LeftBrace, "after an enum name")?;
     let header_end = after(open, 1);
     let mut variants = Vec::new();
@@ -2708,7 +2708,7 @@ fn parse_impl(
     } else {
         (None, first)
     };
-    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
+    parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
     let open = expect(input, Token::LeftBrace, "after an impl owner")?;
     let header_end = after(open, 1);
     let mut functions = Vec::new();
@@ -3288,7 +3288,15 @@ fn parse_function_rest(
     } else {
         None
     };
-    parse_where_with(input, &mut generics, None, &mut lifetimes)?;
+    let mut others = Vec::new();
+    parse_where_with(
+        input,
+        &mut generics,
+        None,
+        &mut lifetimes,
+        Some(&mut others),
+    )?;
+    lift_where_bounds(&mut generics, &mut lifetimes, others)?;
     lift_impl_parameters(&mut generics, &mut parameters);
     erase_fn_bounds(
         &mut generics,
@@ -3400,6 +3408,7 @@ fn parse_generics(
                 default,
                 lifted: false,
                 constant: Some(ty),
+                fixed: None,
             });
         } else {
             let name = parse_name(input, "as a generic parameter")?;
@@ -3428,6 +3437,7 @@ fn parse_generics(
                 default,
                 lifted: false,
                 constant: None,
+                fixed: None,
             });
         }
         if split.is_some() {
@@ -3574,16 +3584,19 @@ fn parse_where_clause(
         generics,
         self_bounds,
         &mut crate::item::Lifetimes::default(),
+        None,
     )
 }
 
 /// [`parse_where_clause`], adding its outlives bounds (`'b: 'a`, `T: 'a`)
-/// to `lifetimes`.
+/// to `lifetimes`. A function's clause adds each bound on a type other
+/// than its parameters (`I::Item: Display`, `Vec<T>: Debug`) to `others`.
 fn parse_where_with(
     input: &mut TokenStream,
     generics: &mut [crate::item::GenericParam],
     mut self_bounds: Option<&mut Vec<type_ref::Path>>,
     lifetimes: &mut crate::item::Lifetimes,
+    mut others: Option<&mut Vec<WhereBound>>,
 ) -> ParseResult<()> {
     if !matches!(input.peek(), Some((Token::Identifier(name), _)) if name.as_str() == "where") {
         return Ok(());
@@ -3640,6 +3653,38 @@ fn parse_where_with(
                 path.segments[0].name.clone()
             }
             _ => {
+                if let Some(others) = others.as_deref_mut() {
+                    let subject = match associated_of(&predicate, generics) {
+                        Some((base, trait_name, name)) => Some(Subject::Associated {
+                            base,
+                            trait_name,
+                            name,
+                        }),
+                        // `Vec<T>: Debug`: a bound on the type past what
+                        // every sized type has.
+                        None if !projections.is_empty()
+                            || bounds
+                                .iter()
+                                .any(|bound| !is_sized_trait(bound) && !is_auto_trait(bound)) =>
+                        {
+                            where_unsized(&predicate, unsized_start, &bounds)?;
+                            Some(Subject::Type(predicate.clone()))
+                        }
+                        None => None,
+                    };
+                    if let Some(subject) = subject {
+                        others.push(WhereBound {
+                            subject,
+                            bounds,
+                            projections,
+                            lifetimes: bounded,
+                        });
+                        if matches!(input.peek(), Some((Token::Comma, _))) {
+                            input.next();
+                        }
+                        continue;
+                    }
+                }
                 where_other_type(&predicate, unsized_start, &bounds, &projections, &bounded)?;
                 if matches!(input.peek(), Some((Token::Comma, _))) {
                     input.next();
@@ -3690,7 +3735,8 @@ fn parse_where_with(
 }
 
 /// A `where` predicate on a type other than a declared parameter (`for<'a>
-/// &'a T: Sized`). Rawr reads only `Sized` and the auto traits there, which
+/// &'a T: Sized`) outside a function's own clause, as an impl's or a
+/// struct's. Rawr reads only `Sized` and the auto traits there, which
 /// hold for every sized type, as rustc proves them; any other bound is an
 /// error. `unsized_start` names the unsized type the predicate's first
 /// token starts (`str`, `[_]`, `dyn _`), which is not `Sized` (E0277).
@@ -3701,10 +3747,6 @@ fn where_other_type(
     projections: &[crate::item::Equality],
     lifetimes: &[crate::item::Name],
 ) -> ParseResult<()> {
-    let unsized_path = matches!(predicate, type_ref::Type::Path(path)
-        if unsized_start == Some("[_]")
-            && path.segments[0].name.text == type_ref::SLICE_TYPE
-            || matches!(unsized_start, Some("str" | "dyn _")));
     let other = bounds
         .iter()
         .find(|bound| !is_sized_trait(bound) && !is_auto_trait(bound))
@@ -3718,6 +3760,20 @@ fn where_other_type(
         )
         .into_err(span.start()));
     }
+    where_unsized(predicate, unsized_start, bounds)
+}
+
+/// rustc's E0277 for a `where` predicate that bounds an unsized type by
+/// `Sized` (`str: Sized`). `unsized_start` is as [`where_other_type`]'s.
+fn where_unsized(
+    predicate: &type_ref::Type,
+    unsized_start: Option<&str>,
+    bounds: &[type_ref::Path],
+) -> ParseResult<()> {
+    let unsized_path = matches!(predicate, type_ref::Type::Path(path)
+        if unsized_start == Some("[_]")
+            && path.segments[0].name.text == type_ref::SLICE_TYPE
+            || matches!(unsized_start, Some("str" | "dyn _")));
     if unsized_path && bounds.iter().any(is_sized_trait) {
         return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
             "Sized".into(),
@@ -3729,6 +3785,242 @@ fn where_other_type(
         .into_err(predicate.span().start()));
     }
     Ok(())
+}
+
+/// A function's `where` predicate on a type other than its parameters:
+/// `I::Item: AsRef<dyn Item>`, or `Vec<T>: Debug`.
+struct WhereBound {
+    subject: Subject,
+    bounds: Vec<type_ref::Path>,
+    projections: Vec<crate::item::Equality>,
+    /// Outlives bounds: `'a` of `I::Item: 'a`.
+    lifetimes: Vec<crate::item::Name>,
+}
+
+/// The type a [`WhereBound`] bounds.
+enum Subject {
+    /// An associated type of a parameter: `I::Item`, or `<I as
+    /// IntoIterator>::Item`.
+    Associated {
+        /// The parameter: `I`.
+        base: crate::item::Name,
+        /// The trait, when the path names it: `IntoIterator` of `<I as
+        /// IntoIterator>::Item`.
+        trait_name: Option<crate::item::Name>,
+        /// The associated type: `Item`.
+        name: crate::item::Name,
+    },
+    /// Any other type: `Vec<T>`, `&'a T`, `i32`.
+    Type(type_ref::Type),
+}
+
+/// The parameter, the written trait and the associated type of `predicate`
+/// when it is an associated type of one of `generics`: `(I, None, Item)` of
+/// `I::Item`, `(I, IntoIterator, Item)` of `<I as IntoIterator>::Item`.
+fn associated_of(
+    predicate: &type_ref::Type,
+    generics: &[crate::item::GenericParam],
+) -> Option<(
+    crate::item::Name,
+    Option<crate::item::Name>,
+    crate::item::Name,
+)> {
+    let type_ref::Type::Path(path) = predicate else {
+        return None;
+    };
+    if path.global {
+        return None;
+    }
+    let (base, trait_name, name) = match &path.segments[..] {
+        [base, name] => (base, None, name),
+        [base, qualified, name] if qualified.name.text == type_ref::QUALIFIED_SEGMENT => {
+            let [type_ref::Argument::Type(type_ref::Type::Path(trait_path))] =
+                &qualified.arguments[..]
+            else {
+                return None;
+            };
+            (base, Some(trait_path.segments.last()?.name.clone()), name)
+        }
+        _ => return None,
+    };
+    let declared = generics
+        .iter()
+        .any(|generic| generic.name.text == base.name.text);
+    (declared && base.arguments.is_empty() && name.arguments.is_empty())
+        .then(|| (base.name.clone(), trait_name, name.name.clone()))
+}
+
+/// The associated types std's trait `name` declares, or None for a trait
+/// that isn't std's: `Item` of `Iterator`.
+fn std_associated_types(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator" => &["Item"],
+        "IntoIterator" => &["Item", "IntoIter"],
+        "Deref" => &["Target"],
+        "Add" | "Sub" | "Mul" | "Div" | "Rem" | "Neg" | "Not" | "BitAnd" | "BitOr" | "BitXor"
+        | "Shl" | "Shr" | "Index" | "Future" | "IntoFuture" => &["Output"],
+        "FromStr" => &["Err"],
+        "TryFrom" | "TryInto" => &["Error"],
+        "Clone" | "Copy" | "Debug" | "Display" | "PartialEq" | "Eq" | "PartialOrd" | "Ord"
+        | "Hash" | "Default" | "Sized" | "Send" | "Sync" | "Unpin" | "AsRef" | "AsMut" | "From"
+        | "Into" | "Borrow" | "BorrowMut" | "ToString" | "ToOwned" | "Error" => &[],
+        _ => return None,
+    })
+}
+
+/// The trait among `generic`'s bounds that declares its associated type
+/// `name`, as rustc finds `I::Item`: a std trait that declares it, else
+/// the one other trait, which may.
+fn associated_owner(
+    generic: &crate::item::GenericParam,
+    name: &crate::item::Name,
+) -> Option<crate::item::Name> {
+    let mut maybe = Vec::new();
+    for bound in &generic.bounds {
+        let last = &bound.segments.last()?.name;
+        match std_associated_types(&last.text) {
+            Some(declared) if declared.contains(&name.text.as_str()) => return Some(last.clone()),
+            Some(_) => {}
+            None => maybe.push(last),
+        }
+    }
+    match maybe[..] {
+        [owner] => Some(owner.clone()),
+        _ => None,
+    }
+}
+
+/// Each of a function's `where` bounds on a type other than its parameters,
+/// as a parameter of its own, lifted as an argument-position `impl Trait`
+/// is, which the bounds bound.
+///
+/// An associated type of a parameter (`I::Item: Display`) is the parameter
+/// that the equality `I: IntoIterator<Item = ..>` fixes
+/// (`type_ref::projection_parameter`), or the parameter an equality already
+/// names (`I: Iterator<Item = T>`). Any other type (`Vec<T>: Debug`) is a
+/// parameter fixed to it (`fixed`), which each call checks the bounds of and
+/// the body assumes, as rustc reads the clause.
+fn lift_where_bounds(
+    generics: &mut Vec<crate::item::GenericParam>,
+    lifetimes: &mut crate::item::Lifetimes,
+    bounded: Vec<WhereBound>,
+) -> ParseResult<()> {
+    let mut outlives = lifetimes.bounds.to_vec();
+    for bound in bounded {
+        let parameter = match bound.subject {
+            Subject::Associated {
+                base,
+                trait_name,
+                name,
+            } => associated_parameter(generics, &base, trait_name, &name)?,
+            Subject::Type(ty) => fixed_parameter(generics, ty),
+        };
+        let generic = &mut generics[parameter];
+        let mut bounds = generic.bounds.to_vec();
+        bounds.extend(bound.bounds);
+        generic.bounds = bounds.into_boxed_slice();
+        let mut equalities = generic.projections.to_vec();
+        equalities.extend(bound.projections);
+        generic.projections = equalities.into_boxed_slice();
+        outlives.extend(
+            bound
+                .lifetimes
+                .into_iter()
+                .map(|lifetime| (generic.name.clone(), lifetime)),
+        );
+    }
+    lifetimes.bounds = outlives.into_boxed_slice();
+    Ok(())
+}
+
+/// The index in `generics` of the parameter that stands for the associated
+/// type `name` of the parameter `base`, lifting one when no equality names
+/// it.
+fn associated_parameter(
+    generics: &mut Vec<crate::item::GenericParam>,
+    base: &crate::item::Name,
+    trait_name: Option<crate::item::Name>,
+    name: &crate::item::Name,
+) -> ParseResult<usize> {
+    let owner = generics
+        .iter()
+        .position(|generic| generic.name.text == base.text)
+        .expect("`associated_of` finds a declared parameter");
+    let Some(trait_name) = trait_name.or_else(|| associated_owner(&generics[owner], name)) else {
+        return Err(PERR::MissingToken(
+            "a declared generic parameter".into(),
+            "for a `where` clause bound other than `Sized` or an auto trait".into(),
+        )
+        .into_err(name.span.start()));
+    };
+    let named = generics[owner]
+        .projections
+        .iter()
+        .find(|(owner, associated, _)| {
+            owner.text == trait_name.text && associated.text == name.text
+        })
+        .map(|(_, _, ty)| ty.clone());
+    match named {
+        Some(type_ref::Type::Path(path))
+            if let [segment] = &path.segments[..]
+                && segment.arguments.is_empty()
+                && let Some(index) = generics
+                    .iter()
+                    .position(|generic| generic.name.text == segment.name.text) =>
+        {
+            Ok(index)
+        }
+        // `I: Iterator<Item = Vec<T>>, I::Item: Debug`: a bound on the type
+        // the equality names.
+        Some(ty) => Ok(fixed_parameter(generics, ty)),
+        None => {
+            let text = type_ref::projection_parameter(&base.text, &trait_name.text, &name.text);
+            let parameter = crate::item::Name {
+                text: text.as_str().into(),
+                span: name.span,
+            };
+            let lifted = type_ref::Type::Path(type_ref::Path {
+                segments: Box::new([type_ref::Segment {
+                    name: parameter.clone(),
+                    arguments: Box::default(),
+                    span: name.span,
+                }]),
+                span: name.span,
+                global: false,
+            });
+            let mut equalities = generics[owner].projections.to_vec();
+            equalities.push((trait_name, name.clone(), lifted));
+            generics[owner].projections = equalities.into_boxed_slice();
+            generics.push(crate::item::GenericParam {
+                name: parameter,
+                bounds: Box::default(),
+                projections: Box::default(),
+                default: None,
+                lifted: true,
+                constant: None,
+                fixed: None,
+            });
+            Ok(generics.len() - 1)
+        }
+    }
+}
+
+/// The index of a new lifted parameter of `generics` fixed to `ty`.
+fn fixed_parameter(generics: &mut Vec<crate::item::GenericParam>, ty: type_ref::Type) -> usize {
+    let span = ty.span();
+    generics.push(crate::item::GenericParam {
+        name: crate::item::Name {
+            text: type_ref::fixed_parameter(generics.len()).as_str().into(),
+            span,
+        },
+        bounds: Box::default(),
+        projections: Box::default(),
+        default: None,
+        lifted: true,
+        constant: None,
+        fixed: Some(ty),
+    });
+    generics.len() - 1
 }
 
 /// Replace each `Self` in `ty` with `owner`.
@@ -4778,6 +5070,7 @@ fn lift_impl_parameters(
                     default: None,
                     lifted: true,
                     constant: None,
+                    fixed: None,
                 });
                 *ty = type_ref::Type::Path(type_ref::Path {
                     span: path.span,

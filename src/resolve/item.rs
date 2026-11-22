@@ -252,6 +252,11 @@ pub(crate) struct Generic {
     /// argument is a value (`Ty::Const`), which the item takes as its
     /// hidden witness and its body reads as `N`.
     pub constant: Option<type_ref::Type>,
+    /// The type a function's `where` bound on a type other than its
+    /// parameters bounds (`Vec<T>` of `where Vec<T>: Debug`), which this
+    /// lifted parameter is: a call checks the bounds of the type, and the
+    /// body assumes them.
+    pub fixed: Option<type_ref::Type>,
 }
 
 /// A trait declaration. `Self` in its signatures is the generic parameter

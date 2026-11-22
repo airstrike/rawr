@@ -869,6 +869,11 @@ impl Ty {
             Self::Fn { .. } | Self::FnChoice { .. } => "fn pointer",
             Self::FnItem { .. } => "fn item",
             Self::Dyn(..) => "trait object",
+            Self::Param(name)
+                if crate::item::type_ref::projection_parameter_name(name).is_some() =>
+            {
+                "associated type"
+            }
             Self::Param(_) => "type parameter",
             _ => "type",
         }
@@ -1325,7 +1330,9 @@ impl Ty {
                     .join(", ")
             )
             .into(),
-            Self::Param(name) | Self::Const(name) => name.clone(),
+            Self::Param(name) => crate::item::type_ref::projection_parameter_name(name)
+                .map_or_else(|| name.clone(), ImmutableString::from),
+            Self::Const(name) => name.clone(),
             Self::Projection(base, _, name) => format!("{}::{name}", base.name(models)).into(),
             // rustc writes a type it has yet to infer as `_`. A value of any
             // type has no other name in Rust.

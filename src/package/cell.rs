@@ -556,7 +556,7 @@ record! {
     item::MacroCall { path, name, group, span, scope, expression }
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
-    item::GenericParam { name, bounds, projections, default, lifted, constant }
+    item::GenericParam { name, bounds, projections, default, lifted, constant, fixed }
     item::Struct { header, name, generics, lifetimes, fields, form, span }
     item::Field { name, ty, span, attributes, visibility }
     item::Enum { header, name, generics, lifetimes, variants, span }

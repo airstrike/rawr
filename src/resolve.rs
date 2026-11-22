@@ -4772,6 +4772,12 @@ fn resolve_projections(items: &mut [item::Shell]) -> Result<(), LocatedError> {
             .iter_mut()
             .map(|parameter| &mut parameter.ty)
             .chain(function.output.iter_mut())
+            .chain(
+                function
+                    .generics
+                    .iter_mut()
+                    .filter_map(|generic| generic.fixed.as_mut()),
+            )
     }
     for shell in items.iter_mut() {
         let resolved = match &mut shell.kind {
@@ -5234,9 +5240,11 @@ fn generic_scope(
     let mut projections = Vec::with_capacity(generics.len());
     let mut arguments = Vec::with_capacity(generics.len());
     let mut defaults = Vec::with_capacity(generics.len());
+    let mut fixed = Vec::with_capacity(generics.len());
     for parameter in generics.into_vec() {
         projections.push(parameter.projections);
         defaults.push(parameter.default);
+        fixed.push(parameter.fixed);
         if let Some(previous_declaration) =
             names.insert(parameter.name.text.clone(), parameter.name.span)
         {
@@ -5282,6 +5290,7 @@ fn generic_scope(
             host: false,
             crate_bounds: Box::default(),
             lifted: parameter.lifted,
+            fixed: None,
         });
     }
     // `trait Add<Rhs = Self>`: a default may name `Self` and the earlier
@@ -5323,6 +5332,20 @@ fn generic_scope(
             resolved_arguments.push((trait_name.text, types));
         }
         generic.trait_arguments = resolved_arguments.into_boxed_slice();
+    }
+    // `Vec<T>: Debug`: the type, with every parameter in scope.
+    for (generic, fixed) in resolved.iter_mut().zip(fixed) {
+        generic.fixed = fixed
+            .map(|ty| {
+                type_ref::resolve(
+                    ty,
+                    &scope,
+                    host,
+                    #[cfg(feature = "rust-import")]
+                    native,
+                )
+            })
+            .transpose()?;
     }
     // `T: Shape<Output = U>`: each equality's type, with every parameter in
     // scope.

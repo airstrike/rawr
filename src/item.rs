@@ -992,6 +992,10 @@ pub struct GenericParam {
     pub lifted: bool,
     /// The type of a const parameter's value: `usize` of `const N: usize`.
     pub constant: Option<type_ref::Type>,
+    /// The type a function's `where` bound on a type other than its
+    /// parameters bounds (`Vec<T>` of `where Vec<T>: Debug`), which this
+    /// lifted parameter is wherever the function is called.
+    pub fixed: Option<type_ref::Type>,
 }
 
 /// The lifetimes an item declares and the outlives bounds written on them,

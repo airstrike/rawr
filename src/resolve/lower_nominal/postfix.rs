@@ -1006,6 +1006,30 @@ impl<'a> Parser<'a> {
                 value = self.call_blanket_method(value, &definition, &member, member_span)?;
                 continue;
             }
+            // `v.summary()` under `where Vec<T>: Summary`: the clause's
+            // trait method, which rustc selects over an impl's, after the
+            // type's own method of that name.
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && let Some(parameter) = self.assumed(match &builtin {
+                    Ty::Reference { target, .. } => target,
+                    ty => ty,
+                })
+                && std_method::inherent(&builtin, &member).is_none()
+                && let Some((trait_name, function)) =
+                    self.bound_trait_function(&parameter, &member, member_span)?
+            {
+                let (arguments, end) = self.parse_borrowing_arguments("method arguments")?;
+                value = self.call_trait_method(
+                    value,
+                    parameter,
+                    &trait_name,
+                    &function,
+                    arguments,
+                    member_span,
+                    end,
+                )?;
+                continue;
+            }
             // A crate trait's function on a builtin value (`5.area()`);
             // the builtin's own method of that name comes first, as
             // Rust's inherent methods do.

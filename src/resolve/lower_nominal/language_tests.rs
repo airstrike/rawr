@@ -13036,7 +13036,7 @@ main();
 #[test]
 fn language_higher_ranked_bounds() {
     // What the program built by rustc prints.
-    let printed = printed(
+    let output = printed(
         r#"
 fn apply<T, F: for<'a> Fn(&'a T) -> usize>(value: T, f: F) -> usize {
     f(&value)
@@ -13059,10 +13059,13 @@ fn main() {
 main();
 "#,
     );
-    assert_eq!(printed, "24 24\n8 15 2\n");
-    let error =
-        rejected("fn f<T>(t: T) -> i64 where for<'a> &'a T: Clone { 1 } fn main() {} main(); 0");
-    assert!(error.contains("other than `Sized`"), "{error}");
+    assert_eq!(output, "24 24\n8 15 2\n");
+    // A bound on a reference holds for every `T`, as rustc reads it (#383).
+    let referenced = printed(
+        "fn f<T>(t: T) -> i64 where for<'a> &'a T: Clone { 1 } \
+         fn main() { println!(\"{}\", f(5)); } main();",
+    );
+    assert_eq!(referenced, "1\n");
     let error = rejected("fn f<T>(t: T) -> i64 where str: Sized { 1 } fn main() {} main(); 0");
     assert!(error.contains("E0277"), "{error}");
 }
