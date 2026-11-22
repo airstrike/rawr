@@ -468,7 +468,7 @@ impl<'a> Parser<'a> {
             self.collect_iterable(expected, argument);
             if !profile_mapper {
                 self.fill_fn_bound(expected, argument);
-                self.coerce_expr(expected, argument)?;
+                self.coerce_crate_argument(expected, argument)?;
             }
             self.lend_guarded_place(expected, argument);
             if item.imported_identity().is_some() && !argument.ty.is_imported_static_operand() {
@@ -1922,7 +1922,7 @@ impl<'a> Parser<'a> {
             }
             self.collect_iterable(expected, argument);
             self.fill_fn_bound(expected, argument);
-            self.coerce_expr(expected, argument)?;
+            self.coerce_crate_argument(expected, argument)?;
             self.lend_guarded_place(expected, argument);
             if item.imported_identity().is_some() {
                 self.consume_imported_value(argument, &item.path(), call)?;

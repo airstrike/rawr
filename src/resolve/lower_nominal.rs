@@ -952,6 +952,11 @@ struct Parser<'a> {
     /// rustc's E0283, as the bound's obligation stays ambiguous, where an
     /// unbounded one is its E0282.
     host_bounds: Vec<(Ty, ImmutableString, Span)>,
+    /// Whether the value being coerced is a crate call's argument, where
+    /// a slice of a crate's widgets stands for an `impl IntoIterator`
+    /// parameter that an array or an iterator of them fills
+    /// (`coerce_children`).
+    crate_argument: bool,
     no_struct: bool,
     /// The second `>` of a `>>` closing nested generic arguments.
     split_angle: Option<Position>,
@@ -1265,6 +1270,7 @@ impl<'a> Parser<'a> {
             pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             host_bounds: Vec::new(),
+            crate_argument: false,
             no_struct: false,
             split_angle: None,
             block_statement: None,

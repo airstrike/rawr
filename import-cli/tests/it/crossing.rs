@@ -778,6 +778,18 @@ fn a_crates_from_impl_converts_a_methods_output() {
     );
 }
 
+/// An array of Elements widens to iced's slice of them only at a crate
+/// call's `impl IntoIterator<Item = Element>`: a `let` that annotates a
+/// `Vec` of them is rustc's E0308 (#737).
+#[test]
+fn an_array_of_elements_is_no_vec_outside_a_crate_call() {
+    let stderr = rejected_as_cargo("children_vec.rs", "E0308");
+    assert!(
+        stderr.contains("mismatched types") && stderr.contains("main.rs:14:47"),
+        "{stderr}"
+    );
+}
+
 /// A program generic's `impl Into<f32>` and `T: Into<f64>` take a crate
 /// type whose `From<Turn>` for the float the crate implements, compiled at
 /// each caller's type, and a float literal and a `u8` through std's impls
