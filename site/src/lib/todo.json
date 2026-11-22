@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],
+      "entries": [
+        {"text":"`thread_local!` runs as std's: keys where an item goes and in bodies are `LocalKey<T>`, each thread makes its own value at its first access, `with`, `with_borrow`, `with_borrow_mut`, `get`, `set`, `take`, `replace` and `update` run as std defines them, a reload keeps each thread's value while its initializer is unchanged, and a thread's values drop as it ends, the last made first.","issues":[1765]}
+      ]
+    },
     "releases": [
       {
         "version": "0.5.20",
@@ -5613,7 +5618,7 @@
     {"issue":1762,"title":"Each owner session parses the program twice without its cells and runs rustc --version again","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.190"},
     {"issue":1763,"title":"The start's stage line is misleading: it says resolving dependencies while nothing is resolved","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.190"},
     {"issue":1764,"title":"A restart that needs no native build respawns the running runner with no check","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
-    {"issue":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"open","category":"Divergences from rustc"},
+    {"issue":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"closed","category":"Divergences from rustc"},
     {"issue":1766,"title":"A generator bump costs inboard a 6.5-minute API rebuild on the next start","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.190"},
     {"issue":1767,"title":"A shared resolution's remembered.json is parsed again for every check in a running owner","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1768,"title":"The owner replay still re-observes the bundle and rebuilds the extraction capture on every check","state":"open","category":"Shared dependency cache (D607)"},
@@ -6489,7 +6494,10 @@
     {"issue":2639,"title":"A trait object an item signature or a struct field writes isn't checked for `Send`","state":"open","category":"Divergences from rustc"},
     {"issue":2640,"title":"A program type that implements a crate trait, passed to a crate generic function bounded by it, panics the generator","state":"open","category":"Divergences from rustc"},
     {"issue":2641,"title":"`.first()` on a slice a crate trait method lends panics with \"a slice is not an array at runtime\"","state":"open","category":"Divergences from rustc"},
-    {"issue":2642,"title":"A crate trait's function as a path value (`.and_then(Sheet::close)`) is a false E0599","state":"open","category":"Divergences from rustc"}
+    {"issue":2642,"title":"A crate trait's function as a path value (`.and_then(Sheet::close)`) is a false E0599","state":"open","category":"Divergences from rustc"},
+    {"issue":2643,"title":"A value whose type implements Drop inside a RefCell, Cell, Mutex or Rc is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2644,"title":"E0599 and E0277 on a std method lack rustc's notes on the impl that has it","state":"open","category":"Divergences from rustc"},
+    {"issue":2645,"title":"LocalKey::try_with is not run","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -9857,7 +9865,7 @@
             {"number":604,"title":"Report a helper attribute no derive in scope declares","state":"closed"},
             {"number":1152,"title":"Expand join!, try_join! and select! without matching tokio's or the futures crate's name","state":"open"},
             {"number":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open"},
-            {"number":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"open"},
+            {"number":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"closed"},
             {"number":2068,"title":"macro_rules hygiene renames fields named like a body let; tail temporaries use pre-2024 drop order (E0597)","state":"closed"},
             {"number":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open"},
             {"number":2184,"title":"A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open"},
