@@ -76,6 +76,7 @@ mod places;
 mod poll;
 mod postfix;
 mod proof;
+pub(crate) mod range;
 mod relocate;
 mod scope;
 mod sequence;

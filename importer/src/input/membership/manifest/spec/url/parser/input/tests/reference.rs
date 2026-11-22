@@ -1,6 +1,5 @@
-//! The shim is separate from the unchanged parser.rs:195–336 extraction.
+//! The shim is separate from the unchanged url 2.5.9 parser.rs:194–199,224–331 extraction.
 #![allow(
-    clippy::question_mark,
     clippy::unnecessary_map_or,
     reason = "the included extraction is unchanged upstream code"
 )]

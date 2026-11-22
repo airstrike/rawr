@@ -266,13 +266,26 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 | "TryFromIntError" => value.is_string(),
                 "f64" => value.is_float(),
                 "RangeInclusive" => {
-                    value.is::<std::ops::RangeInclusive<crate::INT>>() || {
-                        {
-                            value.is::<std::ops::RangeInclusive<crate::FLOAT>>()
-                        }
-                    }
+                    value.is::<std::ops::RangeInclusive<crate::INT>>()
+                        || value.is::<std::ops::RangeInclusive<crate::FLOAT>>()
+                        || value.is::<std::ops::RangeInclusive<i128>>()
+                        || value.is::<std::ops::RangeInclusive<u128>>()
+                        || value.is::<std::ops::RangeInclusive<crate::Dynamic>>()
                 }
-                // A `Range<T>` is an iterator in Rawr.
+                // std's other ranges are std's at runtime, of their
+                // bounds' values.
+                "Range" => {
+                    value.is::<std::ops::Range<crate::INT>>()
+                        || value.is::<std::ops::Range<crate::FLOAT>>()
+                        || value.is::<std::ops::Range<char>>()
+                        || value.is::<std::ops::Range<i128>>()
+                        || value.is::<std::ops::Range<u128>>()
+                }
+                "RangeFrom" => value.is::<std::ops::RangeFrom<crate::Dynamic>>(),
+                "RangeTo" => value.is::<std::ops::RangeTo<crate::Dynamic>>(),
+                "RangeToInclusive" => value.is::<std::ops::RangeToInclusive<crate::Dynamic>>(),
+                "RangeFull" => value.is::<std::ops::RangeFull>(),
+                // An iterator is the array of its items at runtime.
                 name if name == crate::item::type_ref::ITER_TYPE => true,
                 _ => false,
             },

@@ -232,3 +232,30 @@ fn a_macro_defined_before_a_mod_is_in_scope_in_its_files() {
     assert_eq!(*printed.lock().unwrap(), "1 2 3 4\n");
     let _ = fs::remove_dir_all(&root);
 }
+
+/// A block's call of the program's macro whose expansion names paths is
+/// laid out after the file's text, and the source keeps the file's own
+/// text, which a reload check compares with the file on disk.
+#[test]
+fn a_laid_out_block_call_keeps_the_file_s_own_text() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/graph-tests")
+        .join(format!("laid-out-text-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join("main.rs");
+    let text = "mod staged { pub fn play(n: u32) -> u32 { n } }\n\
+                macro_rules! counted {\n    ($play:expr) => {{\n        let given = &$play;\n        \
+                let built = staged::play(2);\n        (*given, built)\n    }};\n}\n\
+                fn main() {\n    let play = 1;\n    println!(\"counted {:?}\", counted!(play));\n}\n";
+    fs::write(&file, text).unwrap();
+    let mut answers = crate::project::cargo::Answers::new();
+    let target = project::Target::discover(&file, &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
+    assert_eq!(graph.entry_source().text(), text);
+    let source = crate::reload::source::Graph::from_package(&graph);
+    crate::reload::source::Snapshot::from_graph(&source)
+        .revalidate()
+        .unwrap();
+    let _ = fs::remove_dir_all(&root);
+}

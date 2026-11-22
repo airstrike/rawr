@@ -1004,6 +1004,9 @@ impl<'a> Parser<'a> {
         match self.inference.resolve(ty) {
             Ty::Tuple(members) => members.iter().all(|member| self.plain_equality(member)),
             Ty::Array { .. } | Ty::String | Ty::Str | Ty::Reference { .. } => false,
+            // std's ranges compare their bounds (`range::read`), which the
+            // runtime's `==` reads only of an `i64` range.
+            range if range::parts(&range).is_some() => false,
             Ty::Script(..)
             | Ty::Host { .. }
             | Ty::Option(_)
@@ -1610,6 +1613,20 @@ pub(super) fn compare_value(
     if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
         return compare_value(&lhs, &rhs, models);
     }
+    // Two of std's ranges, which have no order of their own: by their
+    // structs, then their bounds, the order a set of them keeps.
+    if let (Some(lhs), Some(rhs)) = (range::read(lhs), range::read(rhs)) {
+        let bound = |lhs: &Option<Dynamic>, rhs: &Option<Dynamic>| match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) => compare_value(lhs, rhs, models),
+            (lhs, rhs) => Some(lhs.is_some().cmp(&rhs.is_some())),
+        };
+        return Some(
+            lhs.kind
+                .cmp(&rhs.kind)
+                .then(bound(&lhs.start, &rhs.start)?)
+                .then(bound(&lhs.end, &rhs.end)?),
+        );
+    }
     // An `i128` or a `u128` past `i64`, boxed.
     if (matches!(lhs.0, Union::Variant(..)) || matches!(rhs.0, Union::Variant(..)))
         && let Some(ordering) = wide_order(lhs, rhs)
@@ -1723,6 +1740,14 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
     // A `Cow` compares what it derefs to, `Borrowed` or `Owned`.
     if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
         return equal_value(&lhs, &rhs);
+    }
+    // Two of std's ranges: one struct's, of equal bounds.
+    if let (Some(lhs), Some(rhs)) = (range::read(lhs), range::read(rhs)) {
+        let bound = |lhs: &Option<Dynamic>, rhs: &Option<Dynamic>| match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) => equal_value(lhs, rhs),
+            (lhs, rhs) => lhs.is_none() && rhs.is_none(),
+        };
+        return lhs.kind == rhs.kind && bound(&lhs.start, &rhs.start) && bound(&lhs.end, &rhs.end);
     }
     if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
         return match (lhs, rhs) {

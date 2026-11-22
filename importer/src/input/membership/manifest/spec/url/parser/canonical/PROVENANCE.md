@@ -1,7 +1,7 @@
 # Cargo CanonicalUrl transformation
 
 Source: Cargo `59800466c5c41c444d264b1010b4d57e85a7117f`,
-`src/cargo/util/canonical_url.rs::CanonicalUrl::new`; URL 2.5.8
+`src/cargo/util/canonical_url.rs::CanonicalUrl::new`; URL 2.5.9
 `lib.rs::{cannot_be_a_base,take_after_path,set_path,restore_after_path}`,
 `path_segments.rs::{new,pop_if_empty,pop,extend}` and
 `parser.rs::{Context,parse_path_start,parse_path}`.

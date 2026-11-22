@@ -20,6 +20,7 @@ impl<'a> Parser<'a> {
         let iterator = |this: &Self, ty: &Ty| {
             let ty = this.inference.resolve(ty);
             matches!(ty, Ty::Script(..) | Ty::Host { .. }) && this.type_implements(&ty, "Iterator")
+                || this.stepped_item(&ty).is_some()
         };
         if parameter
             .iterator_item()
@@ -161,6 +162,27 @@ impl<'a> Parser<'a> {
         {
             self.option_host_callable(value)?;
             source = self.inference.resolve(&value.ty);
+        }
+        // std's range where an iterator is taken (`-> impl Iterator`,
+        // `Box<dyn Iterator>`): the iterator over its items, as the range
+        // is its own `Iterator`. A box is its value at runtime.
+        let boxed = |ty: &Ty| match ty {
+            Ty::Boxed(inner) => (true, self.inference.resolve(inner)),
+            ty => (false, ty.clone()),
+        };
+        if let ((to_box, Ty::Iter(..)), (from_box, range)) = (boxed(&target), boxed(&source))
+            && to_box == from_box
+            && self.stepped_item(&range).is_some()
+        {
+            let mut inner = value.clone();
+            inner.ty = range;
+            if let Some(mut iterator) = self.iterator_of(&inner) {
+                if from_box {
+                    iterator.ty = Ty::Boxed(Box::new(iterator.ty));
+                }
+                *value = iterator;
+                source = self.inference.resolve(&value.ty);
+            }
         }
         // A tuple expression coerces each field to its expected type, as
         // `pair((&name, &catalog))` passes a `&String` field as `&str`.

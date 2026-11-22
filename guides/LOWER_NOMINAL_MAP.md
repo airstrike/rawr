@@ -39,6 +39,7 @@ Modules are named by their symbols; line numbers drift.
 | `scope` | the parser's scopes | `Binding`, `BindingKind`, `Frame`, `LoopFrame`, `Branch`, `BoundIterator` |
 | `expr` | expressions | `ParsedExpr`, `parse_expr*`, `parse_operand`, `parse_primary`, `parse_name_primary`, `parse_name_value` |
 | `wide` | 128-bit and pending numeric literals | `Wide`, `PendingWide`, `PendingFloat`, `wide_literal`, `wide_binary` |
+| `range` | std's range types as values | `range::Open`, `range::Kind`, `range::Bounds`, `range::parts`, `range::read`, `range::new`, `range::next`, `range::steps`, `stepped_item`, `range_provides` |
 | `naming` | generated names and placeholders | `SENTINEL`, `DEBUG_DISPATCHER`, `method_name`, `function_display_name`, the `*_dispatcher_name` and `*_placeholder` functions |
 | `tokens` | the token stream | `next`, `peek*`, `expect*`, `lex_rust`, `split_arguments`, `span`, `text_end` |
 

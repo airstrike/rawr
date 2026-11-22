@@ -139,6 +139,9 @@ impl<'a> Parser<'a> {
             (Ty::InclusiveRange(expected_kind), Ty::InclusiveRange(actual_kind)) => {
                 self.unify_type(&Ty::Int(*expected_kind), &Ty::Int(*actual_kind))
             }
+            (Ty::OpenRange(expected, expected_element), Ty::OpenRange(actual, actual_element)) => {
+                expected == actual && self.unify_type(expected_element, actual_element)
+            }
             (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
                 expected_kind == actual_kind && self.unify_type(expected_element, actual_element)
             }

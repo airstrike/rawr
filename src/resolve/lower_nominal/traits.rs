@@ -1135,8 +1135,7 @@ impl<'a> Parser<'a> {
     pub(super) fn iterable_item(&self, ty: &Ty) -> Option<Ty> {
         Some(match self.inference.resolve(ty) {
             Ty::Iter(item, _) => *item,
-            Ty::InclusiveRange(kind) => Ty::Int(kind),
-            Ty::Range(element) => *element,
+            range if let Some(item) = self.stepped_item(&range) => item,
             Ty::Array { element, .. } => *element,
             Ty::Keyed(kind, arguments) => keyed::keyed_item(kind, &arguments, None),
             Ty::Reference { mutable, target } => match self.inference.resolve(&target) {
@@ -1173,14 +1172,9 @@ impl<'a> Parser<'a> {
             }
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
             Ty::Iter(..) if is_iterator_trait(trait_name) => true,
-            // An integer range a crate holds by value, as itertools'
-            // `Product<I, RangeInclusive<isize>>` does: std's `Iterator`.
-            Ty::InclusiveRange(_) if is_iterator_trait(trait_name) => true,
-            Ty::Range(element)
-                if is_iterator_trait(trait_name) && matches!(**element, Ty::Int(_)) =>
-            {
-                true
-            }
+            // std's range of integers or chars, as itertools'
+            // `Product<I, RangeInclusive<isize>>` holds: std's `Iterator`.
+            range if is_iterator_trait(trait_name) && self.stepped_item(range).is_some() => true,
             // An imported type the crate implements `Iterator`,
             // `PartialOrd`, `Ord` or `std::error::Error` for.
             Ty::Host { proof, .. }
@@ -1729,7 +1723,13 @@ impl<'a> Parser<'a> {
                 }
                 // Rawr's iterator type stands for the projection
                 // (`Inference::project`), so the impl's type must be one.
-                let Ty::Iter(item, _) = self.inference.resolve(ty) else {
+                let resolved = self.inference.resolve(ty);
+                let item = match &resolved {
+                    Ty::Iter(item, _) => Some((**item).clone()),
+                    // std's range of a `Step` type, its own `Iterator`.
+                    range => self.stepped_item(range),
+                };
+                let Some(item) = item else {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: format!(
                             "`{}` as an associated type bounded by `{bound}<Item = ..>` is not \
@@ -1741,7 +1741,7 @@ impl<'a> Parser<'a> {
                         source: name.span,
                     });
                 };
-                *item
+                item
             } else {
                 Ty::Projection(Box::new(ty.clone()), bound.clone(), item.clone())
             };

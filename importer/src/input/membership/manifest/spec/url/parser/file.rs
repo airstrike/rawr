@@ -9,7 +9,7 @@ use rawr_toml::document;
 use super::{host, input::Input, path, Failure, Parse, Parser, Scheme, Url};
 
 impl Url {
-    /// Pinned url 2.5.8 Unix from_file_path; serialization is not reparsed.
+    /// Pinned url 2.5.9 Unix from_file_path; serialization is not reparsed.
     #[cfg(unix)]
     pub(in crate::input::membership::manifest) fn from_file_path<A: document::Admission>(
         path: &std::path::Path,
@@ -74,6 +74,7 @@ impl<A: document::Admission> Parser<'_, '_, A> {
                     (!local, remaining)
                 };
                 let host_end = self.offset()?;
+                // A drive letter after a host keeps the host in the serialization.
                 let remaining = if has_host {
                     self.path_start(Scheme::File, &mut has_host, remaining)?
                 } else {
@@ -81,13 +82,7 @@ impl<A: document::Admission> Parser<'_, '_, A> {
                     self.output.push('/', self.session)?;
                     self.path(Scheme::File, &mut has_host, start, remaining)?
                 };
-                let path_start = if has_host {
-                    host_end
-                } else {
-                    self.output.remove(7..host_end as usize, self.session)?;
-                    7
-                };
-                return self.finish(Scheme::File, 4, path_start, remaining, false);
+                return self.finish(Scheme::File, 4, host_end, remaining, false);
             }
             let remaining = self.path(Scheme::File, &mut false, 7, input)?;
             return self.finish(Scheme::File, 4, 7, remaining, false);

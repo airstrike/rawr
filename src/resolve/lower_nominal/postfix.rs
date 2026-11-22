@@ -1195,6 +1195,14 @@ impl<'a> Parser<'a> {
                 Token::LeftParen | Token::Unit | Token::DoubleColon
             ) && self.iterator_receiver(&builtin, &member)
             {
+                // An adaptor or a consumer that takes `self` moves a range
+                // out of its place, as `r.collect()` does.
+                if self.stepped_item(&builtin).is_some()
+                    && std_method::iterator(&member, |_| true)
+                        .is_some_and(|found| found.mode == receiver::Mode::Owned)
+                {
+                    self.move_local(&mut value.clone())?;
+                }
                 value = self.parse_iterator_method(value, member, member_span)?;
                 continue;
             }
@@ -1502,7 +1510,7 @@ impl<'a> Parser<'a> {
                 value = self.parse_char_method(value, code, member_span)?;
                 continue;
             }
-            if matches!(number, Ty::InclusiveRange(_) | Ty::FloatRange) {
+            if range::parts(&number).is_some() {
                 value = self.parse_range_method(value, number, member, member_span)?;
                 continue;
             }
@@ -2410,14 +2418,55 @@ impl<'a> Parser<'a> {
             }
             None => {
                 self.last_range = None;
-                self.parse_expr().map(|index| match self.last_range.take() {
+                let index = self.parse_expr()?;
+                Ok(match self.last_range.take() {
                     Some((low, high, inclusive, range)) if range == index.span => {
                         Err((Some(low), high, inclusive))
                     }
-                    _ => Ok(index),
+                    _ => self.range_bounds(index),
                 })
             }
         }
+    }
+
+    /// A range value a place holds (`let r = 1..3; v.drain(r)`), as the
+    /// bounds `parse_range_or_expr` gives: each bound read from it, as
+    /// std's `RangeBounds` reads them. Any other value is itself.
+    #[allow(clippy::type_complexity)]
+    fn range_bounds(
+        &mut self,
+        value: ParsedExpr,
+    ) -> Result<ParsedExpr, (Option<ParsedExpr>, Option<ParsedExpr>, bool)> {
+        let Some((kind, element)) = range::parts(&self.inference.resolve(&value.ty)) else {
+            return Ok(value);
+        };
+        let indexes =
+            kind == range::Kind::Full || matches!(self.inference.resolve(&element), Ty::Int(_));
+        if value.lvalue.is_none() || !indexes {
+            return Ok(value);
+        }
+        let bound = |this: &mut Self, code: &str| {
+            let source = this.prelude_op(
+                PreludeOp::RangeMethod,
+                [value.rendered_source(), code.into(), "()".into()],
+            );
+            this.operator_expr(source, element.clone(), value.span)
+        };
+        let start = matches!(
+            kind,
+            range::Kind::Range | range::Kind::Inclusive | range::Kind::From
+        )
+        .then(|| bound(self, "0"));
+        let end = matches!(
+            kind,
+            range::Kind::Range
+                | range::Kind::Inclusive
+                | range::Kind::To
+                | range::Kind::ToInclusive
+        )
+        .then(|| bound(self, "1"));
+        let inclusive = matches!(kind, range::Kind::Inclusive | range::Kind::ToInclusive);
+        Err((start, end, inclusive))
     }
 
     pub(super) fn index_into(

@@ -30,4 +30,8 @@ fn main() {
     let back = events::paired::same(2usize..=4);
     let total: usize = back.clone().sum();
     println!("{total} {back:?} {}", back.end());
+
+    // An `a..b` fills a plain `T` as the `Range<T>` it is (#1105).
+    let half = events::paired::same(-3i8..0);
+    println!("{half:?} {} {}", half.start, half.len());
 }

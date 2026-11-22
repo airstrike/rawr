@@ -561,6 +561,8 @@ impl<'a> Parser<'a> {
                 | Ty::Keyed(..)
                 | Ty::Range(_)
                 | Ty::InclusiveRange(_)
+                | Ty::InclusiveOf(_)
+                | Ty::OpenRange(..)
                 | Ty::Thread(..)
                 | Ty::Boxed(_)
         );
@@ -688,7 +690,12 @@ impl<'a> Parser<'a> {
                 let iterated = self.inference.resolve(&lhs.ty);
                 // A `&mut` of a program's iterator walks it in place.
                 let walked = super::iterator::without_mutable_reference(&iterated);
-                let pipelined = if matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange(_))
+                // A `for` takes a range by value, out of its place.
+                if self.stepped_item(&iterated).is_some() {
+                    self.move_local(&mut lhs.clone())?;
+                }
+                let pipelined = if matches!(iterated, Ty::Iter(..))
+                    || self.stepped_item(&iterated).is_some()
                     || (walked.script().is_some() || matches!(iterated, Ty::Host { .. }))
                         && self.type_implements(walked, "Iterator")
                 {

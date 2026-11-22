@@ -3,7 +3,7 @@
 
 #[cfg(feature = "rust-import")]
 use super::callable_object;
-use super::compare::{Comparison, Shape};
+use super::compare::{compare_value, Comparison, Shape};
 use super::format::{
     debug_value, debug_value_spec, pretty_debug, DebugLeaf, DebugSpec, FormatPart,
 };
@@ -214,9 +214,17 @@ pub(super) enum PreludeOp {
     /// `{:e}`, `{:E}` of a number: `format_exp(x, precision, mode)`, `mode`
     /// `1` for upper case, `2` an `f32`, `4` an integer, `8` an unsigned one.
     FormatExp,
-    /// `RangeInclusive`'s methods: `range_method(range, code, value)`, `code`
-    /// `0` for `start`, `1` `end`, `2` `contains`, `3` `is_empty`.
+    /// A range's fields and methods (`range::read`):
+    /// `range_method(range, code, value)`, `code` `0` for `start`, `1`
+    /// `end`, `2` `contains`, `3` `is_empty`, `5` `into_inner`, `6` `len`.
     RangeMethod,
+    /// A range value std's `..` syntax makes that the runtime's `..` and
+    /// `..=` don't: `range_new(code, low, high)` (`range::new`).
+    RangeNew,
+    /// `Iterator::next` of a range a place holds: `range_next(range)`, the
+    /// pair of its next item's `Option` and the range after it
+    /// (`range::next`).
+    RangeNext,
     /// `{:#?}`: Rust's pretty `Debug` of a one-line `Debug` text.
     PrettyDebug,
     /// `collect()` into a `String`: the items' text, concatenated.
@@ -479,6 +487,8 @@ impl PreludeOp {
             Self::FormatBits => "format.bits",
             Self::FormatExp => "format.exp",
             Self::RangeMethod => "range.method",
+            Self::RangeNew => "range.new",
+            Self::RangeNext => "range.next",
             Self::PrettyDebug => "format.pretty-debug",
             Self::CollectString => "iter.collect-string",
             Self::CollectVec => "iter.collect-vec",
@@ -725,6 +735,12 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
+            Self::RangeNew => vec![
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+            ],
+            Self::RangeNext => vec![TypeId::of::<Dynamic>()],
             Self::PrettyDebug | Self::StrLines | Self::StrSplitWhitespace | Self::StaticText => {
                 vec![TypeId::of::<ImmutableString>()]
             }
@@ -1109,25 +1125,41 @@ impl PreludeOp {
             }
             Self::RangeMethod => {
                 let code = args[1].as_int().unwrap_or_default();
-                if let Some(range) = args[0].read_lock::<std::ops::RangeInclusive<INT>>() {
-                    let value = args[2].as_int().unwrap_or_default();
-                    return Ok(match code {
-                        0 => Dynamic::from(*range.start()),
-                        1 => Dynamic::from(*range.end()),
-                        2 => Dynamic::from(range.contains(&value)),
-                        _ => Dynamic::from(range.is_empty()),
-                    });
-                }
-                if let Some(range) = args[0].read_lock::<std::ops::RangeInclusive<crate::FLOAT>>() {
-                    let value = args[2].as_float().unwrap_or_default();
-                    return Ok(match code {
-                        0 => Dynamic::from_float(*range.start()),
-                        1 => Dynamic::from_float(*range.end()),
-                        2 => Dynamic::from(range.contains(&value)),
-                        _ => Dynamic::from(range.is_empty()),
-                    });
-                }
-                return Err(invariant("a range method read a value that is not a range"));
+                let Some(bounds) = super::range::read(args[0]) else {
+                    return Err(invariant("a range method read a value that is not a range"));
+                };
+                let order = |lhs: &Dynamic, rhs: &Dynamic| compare_value(lhs, rhs, models);
+                let bound = |bound: Option<Dynamic>| {
+                    bound.ok_or_else(|| invariant("a range method read a bound the range lacks"))
+                };
+                return match code {
+                    0 => bound(bounds.start),
+                    1 => bound(bounds.end),
+                    2 => Ok(bounds.contains(args[2], order).into()),
+                    3 => Ok(bounds.is_empty(order).into()),
+                    6 => bounds
+                        .len()
+                        .map(Dynamic::from_int)
+                        .ok_or_else(|| invariant("a range's length read bounds that don't count")),
+                    _ => {
+                        let pair = vec![bound(bounds.start)?, bound(bounds.end)?];
+                        Ok(Dynamic::from_array(pair))
+                    }
+                };
+            }
+            Self::RangeNext => {
+                let Some((item, after)) = super::range::next(args[0]) else {
+                    return Err(invariant(
+                        "a range's `next` read a range std doesn't iterate",
+                    ));
+                };
+                let item = item.map_or_else(crate::option::none, crate::option::some);
+                return Ok(Dynamic::from_array(vec![item, after]));
+            }
+            Self::RangeNew => {
+                let code = args[0].as_int().unwrap_or_default();
+                return super::range::new(code, args[1], args[2])
+                    .ok_or_else(|| invariant("a range's bounds are not its element's values"));
             }
             Self::PrettyDebug => {
                 let text = args[0].clone_cast::<ImmutableString>();

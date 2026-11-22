@@ -1,7 +1,7 @@
 # Registry native-file-base second parse
 
-Source: URL 2.5.8 `parser.rs::parse_with_scheme` (435–477),
-`parse_file` (512–713), `starts_with_windows_drive_letter_segment` (1799),
+Source: URL 2.5.9 `parser.rs::parse_with_scheme` (430–466),
+`parse_file` (501–693), `starts_with_windows_drive_letter_segment` (1789),
 `parse_path` and `shorten_path`; Unix `Url::from_file_path` uses the existing
 contained native path constructor. Caller: pinned Cargo
 `59800466c5c41c444d264b1010b4d57e85a7117f`

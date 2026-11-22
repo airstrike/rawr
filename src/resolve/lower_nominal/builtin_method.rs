@@ -185,10 +185,11 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source, output, span(value.span.start(), end)))
     }
 
-    /// `char`'s classification and case methods (`CHAR_METHODS`), through
-    /// one native op; `to_digit` and `is_digit` take a radix.
-    /// `RangeInclusive`'s `start()`, `end()`, `contains(&x)`, `is_empty()`
-    /// and `clone()`; any other method is an iterator's, on the range's items.
+    /// A member of one of std's ranges: the public fields `start` and
+    /// `end` of a `Range`, a `RangeFrom` or a `RangeTo`, and the methods
+    /// `start()`, `end()` and `into_inner()` of a `RangeInclusive`,
+    /// `contains(&x)`, `is_empty()` and `clone()`; any other method is an
+    /// iterator's, on the range's items, where std iterates it.
     pub(super) fn parse_range_method(
         &mut self,
         value: ParsedExpr,
@@ -196,26 +197,79 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        // An integer range keeps its kind. A float range's kind is not kept:
-        // `start()` of a `RangeInclusive<f32>` is an `f32` where one is
-        // expected.
+        let (kind, element) = range::parts(&range).expect("a range method's receiver is a range");
+        // A float range's kind is not kept: `start()` of a
+        // `RangeInclusive<f32>` is an `f32` where one is expected.
         let element = match range {
-            Ty::InclusiveRange(kind) => Ty::Int(kind),
-            _ => Ty::Float(Float::Var(self.inference.fresh_id())),
+            Ty::FloatRange => Ty::Float(Float::Var(self.inference.fresh_id())),
+            _ => element,
         };
+        let unknown = |this: &Self| Error::UnknownMember {
+            owner: range.name(&this.models),
+            member: member.clone(),
+            reference: member_span,
+        };
+        if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            let code = match (member.as_str(), kind) {
+                ("start", range::Kind::Range | range::Kind::From) => 0,
+                ("end", range::Kind::Range | range::Kind::To | range::Kind::ToInclusive) => 1,
+                ("start" | "end" | "exhausted", range::Kind::Inclusive) => {
+                    let reference =
+                        Span::new(member_span.start(), text_end(member_span.start(), &member));
+                    return Err(Error::private_field_read(
+                        "std::ops::RangeInclusive",
+                        &member,
+                        reference,
+                    ));
+                }
+                _ => return Err(unknown(self)),
+            };
+            let end = text_end(member_span.start(), &member);
+            let source = self.prelude_op(
+                PreludeOp::RangeMethod,
+                [
+                    value.rendered_source(),
+                    code.to_string().into(),
+                    "()".into(),
+                ],
+            );
+            return Ok(self.operator_expr(source, element, span(value.span.start(), end)));
+        }
+        let inclusive = kind == range::Kind::Inclusive;
         let code = match member.as_str() {
-            "start" => 0,
-            "end" => 1,
-            "contains" => 2,
-            "is_empty" => 3,
-            "clone" => 4,
+            "start" if inclusive => 0,
+            "end" if inclusive => 1,
+            "contains" if kind != range::Kind::Full => 2,
+            "is_empty" if matches!(kind, range::Kind::Range | range::Kind::Inclusive) => 3,
+            // A range is its own `IntoIterator::IntoIter`.
+            "clone" | "into_iter" => 4,
+            "into_inner" if inclusive => 5,
+            // `r.next()` of a range a place holds steps it there, as std's
+            // `Iterator` for the range does.
+            "next"
+                if matches!(self.peek(), Token::Unit)
+                    && value.lvalue.is_some()
+                    && let Some(item) = self.stepped_item(&range) =>
+            {
+                let end = self.next().1;
+                let place = self.keyed_place(&value)?;
+                let pair = self.temporary("next");
+                let mut source = origin::Fragment::plain(format!("{{ let {pair} = "));
+                source.push(self.prelude_op(PreludeOp::RangeNext, [place.clone()]));
+                source.push_text("; ");
+                source.push(place);
+                source.push_text(format!(" = {pair}[1]; {pair}[0] }}"));
+                let ty = Ty::Option(Box::new(item));
+                return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
+            }
             _ => {
-                if range == Ty::FloatRange {
-                    return Err(Error::UnknownMember {
-                        owner: "RangeInclusive<f64>".into(),
-                        member,
-                        reference: member_span,
-                    });
+                // An iterator's method of a trait std doesn't implement for
+                // the range, as `len` of a `RangeInclusive<i64>`: rustc's
+                // E0599.
+                if self.stepped_item(&range).is_none()
+                    || member != "next" && !self.iterator_receiver(&range, &member)
+                {
+                    return Err(unknown(self));
                 }
                 let Some(items) = self.iterator_of(&value) else {
                     return Err(self.unsupported("this method of a range"));
@@ -258,11 +312,14 @@ impl<'a> Parser<'a> {
                 mutable: false,
                 target: Box::new(element),
             },
+            5 => Ty::Tuple(Box::new([element.clone(), element])),
             _ => Ty::Bool,
         };
         Ok(self.operator_expr(source, ty, call))
     }
 
+    /// `char`'s classification and case methods (`CHAR_METHODS`), through
+    /// one native op; `to_digit` and `is_digit` take a radix.
     pub(super) fn parse_char_method(
         &mut self,
         value: ParsedExpr,
@@ -1668,6 +1725,31 @@ impl<'a> Parser<'a> {
                 origin::Fragment::join(vec![element; *length], ", ").surrounded("[", "]")
             }
             Ty::Option(_) => self.prelude_op(PreludeOp::None, []),
+            // `Range<T>`'s derived `Default`, `T`'s default at both ends,
+            // and `RangeFull`.
+            Ty::Range(element) => {
+                let bound = self.default_source(element, span)?;
+                match self.inference.resolve(element) {
+                    Ty::Char => self.prelude_op(
+                        PreludeOp::RangeNew,
+                        [range::CHAR_RANGE.to_string().into(), bound.clone(), bound],
+                    ),
+                    _ => {
+                        let mut value = bound.clone().surrounded("(", ")");
+                        value.push_text(" .. ");
+                        value.push(bound.surrounded("(", ")"));
+                        value.surrounded("(", ")")
+                    }
+                }
+            }
+            Ty::OpenRange(range::Open::Full, _) => self.prelude_op(
+                PreludeOp::RangeNew,
+                [
+                    range::Open::Full.code().to_string().into(),
+                    "()".into(),
+                    "()".into(),
+                ],
+            ),
             Ty::Time(Time::Duration) => self.prelude_op(
                 PreludeOp::Time,
                 [

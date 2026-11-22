@@ -1,6 +1,6 @@
 {
   "scope": "Pinned complete original-manifest reference only; not product parity or release qualification",
-  "date": "2026-09-05",
+  "date": "2026-11-22",
   "toolchain": "nightly-2026-07-11",
   "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
   "isolated_registry_and_local_packages_verified": 72,
@@ -9,9 +9,9 @@
   "rejected": 50,
   "locked_repeat_byte_identical": true,
   "files": {
-    "Cargo.toml": "3ae6ee4ce4e4771106e0e714533e56bb5f92dd543f4fca215f73dc5fc091010d",
-    "Cargo.lock": "722441d634e7c65b44ccded2d1399ab04a41212280b209d1b65a0f0de60f878b",
-    "prepare.py": "bb5cbdb65085cb57d1be66eb39e2819fba48ac87e585b019d7abbb9fb372bc67",
+    "Cargo.toml": "96b9a50a7ec43044fc68aefc3eebe7ffbd3382ea19ea4cc29ad203af1ddf8eea",
+    "Cargo.lock": "17607c96c816a137602db6272149395fbd1068600000f711d1e7470559c1b85e",
+    "prepare.py": "44aabadde132d12552c666838e054136a51e38fb7f5a904095b18f90daa2ae0d",
     "run.py": "483a986931cf5602b2fe7b18bfa950144a5c6ec26c96dfc84f71178b284cf65a",
     "src/fixtures.rs": "545329497b0eab2aed7b1ac4af03e6616fb4295aeea6e33e84aad5ec174211f0",
     "src/main.rs": "cc03ad141eaf295b87daa3f8d33b45dd63d8875fba276870304ac3f824fd8f13",
@@ -24,7 +24,7 @@
     "bytes": 271503,
     "sha256": "4bdb6ccb690b4d8eb75a45895d04a659994198666e7c09cfdf24e123cc171b7b"
   },
-  "features_sha256": "744a297f0a45a50063c11d527c6194618417cd616c8bb5dceb4535d6d6f0cc75",
+  "features_sha256": "3de347d2fc4bcfa8806e210fcff98c4f1058ba2a642566c54bae6bb2145ae878",
   "findings": [
     "Raw first-key datetime marker maps can return early. Content-staged dependency/lint extras reject unconsumed map entries; preserve adapter provenance.",
     "Empty profile positional sequences and extra profile/hints positions behave as emitted; no universal sequence exhaustion rule."

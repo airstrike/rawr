@@ -150,7 +150,17 @@ impl<'a> Parser<'a> {
         let ty = self.inference.resolve(&argument.ty);
         let steps = match &ty {
             Ty::Iter(..) => true,
-            Ty::InclusiveRange(_) | Ty::Script(..) => iterator && self.program_iterator(&ty),
+            // A `Range` or a `RangeFrom` steps where a crate takes an
+            // iterator, as the iterator `0..n` once was; a plain `T` takes
+            // the range itself, as rustc fills it.
+            Ty::Range(_) | Ty::OpenRange(range::Open::From, _)
+                if self.stepped_item(&ty).is_some() =>
+            {
+                iterator || into_iter
+            }
+            Ty::InclusiveRange(_) | Ty::InclusiveOf(_) | Ty::Script(..) => {
+                iterator && self.program_iterator(&ty)
+            }
             Ty::Array { .. } | Ty::Keyed(..) | Ty::Reference { .. } if iterator => {
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
@@ -1306,12 +1316,8 @@ impl<'a> Parser<'a> {
                                     | sequence::Kind::Deque,
                             },
                         ) => Some((**element).clone()),
-                        ("Item", Ty::InclusiveRange(kind)) => Some(Ty::Int(*kind)),
-                        ("Item", Ty::Range(element)) if matches!(**element, Ty::Int(_)) => {
-                            Some((**element).clone())
-                        }
-                        ("IntoIter", Ty::InclusiveRange(_)) => Some(actual.clone()),
-                        ("IntoIter", Ty::Range(element)) if matches!(**element, Ty::Int(_)) => {
+                        ("Item", range) if let Some(item) = self.stepped_item(range) => Some(item),
+                        ("IntoIter", range) if self.stepped_item(range).is_some() => {
                             Some(actual.clone())
                         }
                         ("Item", Ty::Host { .. }) => self.host_iterator_item(&actual, span),
