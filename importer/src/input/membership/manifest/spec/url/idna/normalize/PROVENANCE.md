@@ -49,7 +49,7 @@ The inspected normalizer fingerprints
 `target/debug/.fingerprint/icu_normalizer-{755a7ee8a6507be9,5f5bd268888ef3c7}/lib-icu_normalizer.json`
 both record only `compiled_data` and empty rustflags. The executed pinned typed
 reference feature record is `importer/reference/manifest/features.json`, SHA-256
-`744a297f0a45a50063c11d527c6194618417cd616c8bb5dceb4535d6d6f0cc75`:
+`3de347d2fc4bcfa8806e210fcff98c4f1058ba2a642566c54bae6bb2145ae878`:
 normalizer `compiled_data`, collections no features, provider `baked`, zerovec
 `derive/yoke`. Thus the reached normalizer uses its untyped CodePointTrie and
 local u8 CCC representation; utf8/utf16 convenience normalizers, serde/datagen,

@@ -1,6 +1,6 @@
 # Contained fixed-entry UTS46 domain conversion
 
-This transformation implements the complete entry reached by url 2.5.8
+This transformation implements the complete entry reached by url 2.5.9
 `Host::parse_cow`: idna 1.1.0 `domain_to_ascii_from_cow` with
 `AsciiDenyList::URL`, `Hyphens::Allow`, `DnsLength::Ignore`, fail-fast errors,
 ASCII output, and no secondary sink. It returns typed domain data through a

@@ -20,7 +20,7 @@ Sources are covered by the existing `provenance.json`:
   custom source-kind order, Git-reference order/query conversion/rendering.
 
 The source is invoked through the public API, not copied or modified. Relevant
-dependencies remain URL2.5.8 and SemVer1.0.28 under the verified reference lock.
+dependencies remain URL2.5.9 and SemVer1.0.28 under the verified reference lock.
 Existing source licenses remain in this directory. No new provenance or
 successful execution claim follows merely from adding this runner.
 
@@ -81,6 +81,16 @@ and source-kind member hashes were verified. The run produced 137 cases
 (80 accepted, 56 semantic errors, one source failure), 43 ordering pairs,
 and 50,831 bytes. SHA-256:
 `ff10b534a2bca238216874524842d121cc972397b9c7dc35d1d761ce7e4a91cb`.
+
+On 2026-11-22 root re-executed the spec binary with url 2.5.9 and
+form_urlencoded 1.2.3 (RUSTSEC-2026-0592) in a fresh prepared workspace. The
+locked offline build and `verify-lock` passed for all 72 entries. The run
+produced the same 137 cases, statuses and 43 ordering pairs in 50,840 bytes,
+SHA-256 `d556d4b2ad4d87d0c9907436b4c1fc83ae6f5011d1b69c0f7d9ea9a59963c43b`,
+and a second run was byte-identical. Only `file-host-drive` changed. url 2.5.9
+keeps the host before a drive letter, so `file://host/C:/path/foo` stays
+`file://host/C:/path/foo` where url 2.5.8 gave `file:///C:/path/foo`. Its
+order against `file-drive` flips from 1 to -1 to match.
 `spec-execution.json` records the binary and source identities. The complete
 contained caller test compares fields, acceptance/source status and all pairs
 against this artifact; its execution is recorded in the MAP tracker.

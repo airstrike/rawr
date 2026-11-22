@@ -3,9 +3,11 @@ use percent_encoding::{AsciiSet, CONTROLS};
 use super::{Account, Output, Set};
 use crate::input::membership::manifest::session;
 
-// Exact reached set expressions from url 2.5.8 parser.rs:19–35,44–45.
+// Exact reached set expressions from url 2.5.9 parser.rs:19–38.
 const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
-const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
+const QUERY: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>');
+const SPECIAL_QUERY: &AsciiSet = &QUERY.add(b'\'');
+const PATH: &AsciiSet = &QUERY.add(b'?').add(b'^').add(b'`').add(b'{').add(b'}');
 const SPECIAL_PATH_SEGMENT: &AsciiSet = &PATH.add(b'/').add(b'%').add(b'\\');
 const USERINFO: &AsciiSet = &PATH
     .add(b'/')
@@ -16,10 +18,7 @@ const USERINFO: &AsciiSet = &PATH
     .add(b'[')
     .add(b'\\')
     .add(b']')
-    .add(b'^')
     .add(b'|');
-const QUERY: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>');
-const SPECIAL_QUERY: &AsciiSet = &QUERY.add(b'\'');
 
 #[test]
 fn every_byte_has_the_exact_pinned_percent_encoding_membership() {

@@ -1,7 +1,7 @@
 // Copyright 2013-2016 The rust-url developers. MIT OR Apache-2.0.
 // See LICENSE-MIT and LICENSE-APACHE.
 //
-// Test-only shim around the unchanged url 2.5.8 host.rs:214–512 excerpt.
+// Test-only shim around the unchanged url 2.5.9 host.rs:214–512 excerpt.
 // The source region begins at fn write_ipv6 and extends to end of file.
 
 use std::cmp;

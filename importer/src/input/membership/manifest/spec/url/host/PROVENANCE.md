@@ -5,9 +5,9 @@ IDNA entry for a borrowed `&str`. It returns a Domain owner or a fixed typed IP
 address. It does not select a scheme, preprocess whole URLs, resolve addresses,
 or establish package/source/owner authority.
 
-The governing source is url 2.5.8 `src/host.rs:92–172`, with public reference
+The governing source is url 2.5.9 `src/host.rs:92–172`, with public reference
 entries at `host.rs:77–88`. Archive SHA-256:
-`ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed`.
+`f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a`.
 Host source SHA-256:
 `24bba45b14cb843ea0fe5c857284d458097a13a84847f5c6a15a14c9e1334335`.
 The parent `spec/URL_CLOSURE.md` records the verified archive/member provenance.
@@ -89,7 +89,7 @@ The output exposes only borrowed read access to domain bytes or parsed IP data.
 
 Thirteen tests are prepared for root execution. They compare complete Domain,
 IP payload, canonical spelling and semantic error category against exact
-dev-only url 2.5.8 `Host::parse` and `Host::parse_opaque`, including each raw ASCII
+dev-only url 2.5.9 `Host::parse` and `Host::parse_opaque`, including each raw ASCII
 byte and all 256 percent-decoded byte values. The corpus includes bracket
 precedence, empty/ignored input, numeric routing, alternate IPv4 radices,
 embedded IPv4, malformed escapes, invalid UTF-8, Unicode/ACE names, bidi/context

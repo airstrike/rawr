@@ -198,6 +198,12 @@ impl<A: document::Admission> Parser<'_, '_, A> {
     }
 
     fn port<'i>(&mut self, mut input: Input<'i>, scheme_end: u32) -> Parse<Input<'i>> {
+        let default = match &self.output.as_str(self.session)?[..scheme_end as usize] {
+            "http" | "ws" => Some(80),
+            "https" | "wss" => Some(443),
+            "ftp" => Some(21),
+            _ => None,
+        };
         let mut port = 0u32;
         let mut digit_seen = false;
         while let (Some(c), remaining) = input.split_first() {
@@ -208,19 +214,13 @@ impl<A: document::Admission> Parser<'_, '_, A> {
                     return self.invalid(Invalid::Port);
                 }
                 digit_seen = true;
-            } else if !matches!(c, '/' | '\\' | '?' | '#') {
+            } else if !matches!(c, '/' | '?' | '#') && !(c == '\\' && default.is_some()) {
                 return self.invalid(Invalid::Port);
             } else {
                 break;
             }
             input = remaining;
         }
-        let default = match &self.output.as_str(self.session)?[..scheme_end as usize] {
-            "http" | "ws" => Some(80),
-            "https" | "wss" => Some(443),
-            "ftp" => Some(21),
-            _ => None,
-        };
         if digit_seen && Some(port) != default {
             self.output.push(':', self.session)?;
             let mut buffer = [0u8; 5];

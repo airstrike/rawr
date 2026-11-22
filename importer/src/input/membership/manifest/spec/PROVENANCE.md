@@ -50,10 +50,10 @@ evidence below remain valid; complete spec interpretation is described above.
   `f3b4cc73dabe93722aa64d6397474102399b0f7d17cf8daa37ff70a888589837`. `GitReference::from_query`
   folds ordered decoded pairs with last-recognized-pair replacement. `ref`
   aliases Branch; unknown keys leave the current reference unchanged.
-- form_urlencoded `1.2.2`, crate archive SHA-256
-  `cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf`,
+- form_urlencoded `1.2.3`, crate archive SHA-256
+  `afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e`,
   `src/lib.rs:39–104`, member SHA-256
-  `766b5d679064e01f7e6cce6f127a23885f79806ce3bccc49e4fe41933b83fd8d`. The cached member was
+  `99f16d4890b77f5a809476ff957babda3c08b7f3455726915162fdeb50d87da3`. The cached member was
   compared byte-for-byte with its checksum-verified archive member. Empty `&`
   components are skipped; each component splits at its first `=`; plus maps to
   space before percent decoding; malformed escapes remain literal. UTF-8 errors
@@ -99,7 +99,7 @@ or candidate-comparison event.
 ## Focused checks
 
 The focused test module compares results directly with pinned form_urlencoded
-1.2.2 and Cargo's exact reference fold across named cases, all 256 byte escapes,
+1.2.3 and Cargo's exact reference fold across named cases, all 256 byte escapes,
 and 2,048 selected two-byte sequences. Additional tests exercise borrowed output,
 exact cumulative decoded/repaired layouts, every prospective refusal and a
 nonzero original-account byte floor with exhausted graph work counters.

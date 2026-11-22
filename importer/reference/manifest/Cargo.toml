@@ -15,7 +15,7 @@ cargo-util-schemas = { path = "cargo/crates/cargo-util-schemas" }
 serde_ignored = "=0.1.14"
 serde_json = "=1.0.150"
 semver = "=1.0.28"
-url = "=2.5.8"
+url = "=2.5.9"
 toml = { version = "=1.1.2", default-features = false, features = ["std", "serde", "parse", "display", "preserve_order"] }
 # Exact active interpreter pins; full +spec versions/checksums are checked by prepare.py.
 toml_parser = { version = "=1.1.2", default-features = false, features = ["std", "alloc"] }
