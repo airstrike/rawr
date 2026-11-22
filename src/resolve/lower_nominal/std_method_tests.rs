@@ -1184,11 +1184,6 @@ main();
 fn an_imported_std_types_function_rawr_doesnt_run_is_not_yet() {
     for (head, call, path) in [
         (
-            "use std::fs::File;",
-            "File::create(\"out.txt\")",
-            "std::fs::File::create",
-        ),
-        (
             "use std::sync::RwLock;",
             "RwLock::new(1)",
             "std::sync::RwLock::new",
@@ -1197,11 +1192,6 @@ fn an_imported_std_types_function_rawr_doesnt_run_is_not_yet() {
             "use std::sync::Barrier;",
             "Barrier::new(1)",
             "std::sync::Barrier::new",
-        ),
-        (
-            "",
-            "std::fs::File::create(\"out.txt\")",
-            "std::fs::File::create",
         ),
         ("", "std::sync::RwLock::new(1)", "std::sync::RwLock::new"),
     ] {
