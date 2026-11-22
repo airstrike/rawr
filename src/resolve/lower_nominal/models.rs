@@ -139,6 +139,9 @@ pub(super) struct Tables {
     pub(super) trait_methods: BTreeMap<(type_def::Id, ImmutableString), Vec<method::Definition>>,
     /// The crate's trait declarations by name, with their sources.
     pub(super) traits: BTreeMap<ImmutableString, (crate::program::source::Id, item::Trait)>,
+    /// The std type names the program reads through glob imports, which
+    /// rustc writes by their paths (`trimmed::glob_names`).
+    pub(super) glob_names: BTreeSet<ImmutableString>,
     /// `(trait, owner)` for each `impl Trait for Owner`.
     pub(super) impls: BTreeSet<(ImmutableString, type_def::Id)>,
     /// The crate types with an impl written for their `'static` instance
@@ -1050,6 +1053,7 @@ impl Models {
             conversions,
             trait_methods,
             traits,
+            glob_names: super::trimmed::glob_names(program),
             impls,
             static_impls: program
                 .items

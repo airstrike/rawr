@@ -2058,31 +2058,26 @@ fn primary_label(
             actual,
             opaque,
             ..
-        } => Some(opaque.label(expected, actual).into()),
-        resolve::Error::ArgumentMismatch(mismatch) => Some(
-            format!(
-                "expected {}, found {}",
-                resolve::Described(&mismatch.expected),
-                resolve::Described(&mismatch.actual)
-            )
-            .into(),
-        ),
+        } => {
+            let (expected, actual) = resolve::forced_trim::pair(expected, actual);
+            Some(opaque.label(&expected, &actual).into())
+        }
+        resolve::Error::ArgumentMismatch(mismatch) => {
+            Some(mismatch_label(&mismatch.expected, &mismatch.actual).into())
+        }
         resolve::Error::TypeMismatch {
             expected, actual, ..
         }
         | resolve::Error::Unboxed {
             expected, actual, ..
-        } => Some(
+        } => Some(mismatch_label(expected, actual).into()),
+        resolve::Error::IfWithoutElse { expected, .. } => Some(
             format!(
-                "expected {}, found {}",
-                resolve::Described(expected),
-                resolve::Described(actual)
+                "expected {}, found `()`",
+                resolve::Described(&resolve::forced_trim::trimmed(expected))
             )
             .into(),
         ),
-        resolve::Error::IfWithoutElse { expected, .. } => {
-            Some(format!("expected {}, found `()`", resolve::Described(expected)).into())
-        }
         resolve::Error::ReturnWithoutValue { .. } => Some("return type is not `()`".into()),
         resolve::Error::KnownPanic { label, .. } => Some(label.clone()),
         resolve::Error::SelfOutsideImpl { parameter, .. } => {
@@ -2190,6 +2185,17 @@ fn primary_label(
         }
         _ => None,
     }
+}
+
+/// rustc's E0308 label for `expected` and `actual`, which names each type
+/// forced trimmed (`forced_trim::pair`): "expected `()`, found `Range<i32>`".
+fn mismatch_label(expected: &str, actual: &str) -> String {
+    let (expected, actual) = resolve::forced_trim::pair(expected, actual);
+    format!(
+        "expected {}, found {}",
+        resolve::Described(&expected),
+        resolve::Described(&actual)
+    )
 }
 
 fn resolution_builder(error: &resolve::Error) -> Builder {

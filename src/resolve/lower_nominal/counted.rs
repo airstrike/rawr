@@ -600,7 +600,12 @@ impl Parser<'_> {
                 );
                 if !runs || !call {
                     let path = counter.std_paths().1;
-                    return Err(self.counted_unknown("Weak", path, member, member_span));
+                    let error = self.counted_unknown("Weak", path, member, member_span);
+                    let weak = Ty::Weak(counter, element);
+                    return Err(match self.inference.resolve(&value.ty) {
+                        Ty::Weak(..) if call => self.std_no_method(&weak, error),
+                        _ => error,
+                    });
                 }
                 let (arguments, end) = self.parse_call_arguments("`Weak` arguments")?;
                 let arity = usize::from(member.as_str() == "ptr_eq");

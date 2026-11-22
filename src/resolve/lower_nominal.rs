@@ -101,6 +101,7 @@ mod time;
 mod tokens;
 mod trait_call;
 mod traits;
+mod trimmed;
 mod ty;
 mod unify;
 mod wide;
@@ -791,6 +792,9 @@ struct Parser<'a> {
     /// what a method std declares and rawr doesn't run yet is looked up
     /// on (`inherent_not_yet`).
     std_probed: BTreeMap<Position, Ty>,
+    /// Each method call's receiver type, references and all, by its
+    /// member's position: what rustc's E0599 names (`native_no_item`).
+    std_receivers: BTreeMap<Position, Ty>,
     /// The turbofish of the host function call whose signature is being
     /// instantiated (`rand::random::<f64>()`).
     host_turbofish: Option<Vec<Ty>>,
@@ -1173,6 +1177,7 @@ impl<'a> Parser<'a> {
             spliced_traits: BTreeMap::new(),
             spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),
+            std_receivers: BTreeMap::new(),
             host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),

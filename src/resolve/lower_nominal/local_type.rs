@@ -1542,7 +1542,7 @@ impl<'a> Parser<'a> {
                 expression: span,
             });
         }
-        let (expected_name, found) = super::ty::mismatched_names(&expected, &actual, &self.models);
+        let (expected_name, found) = (expected.name(&self.models), actual.name(&self.models));
         // A function's opaque output, which rustc's label describes.
         let opaque = match (expected.is_opaque(), actual.is_opaque()) {
             (true, true) => Some(crate::resolve::Opaqueness::Both),

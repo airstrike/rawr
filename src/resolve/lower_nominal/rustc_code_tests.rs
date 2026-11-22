@@ -4770,6 +4770,96 @@ fn a_std_type_is_named_as_rustc_names_it() {
     );
 }
 
+/// A native std type is named by its path where another type the program
+/// sees has its name, as rustc's trimmed paths name it (#2524): core's
+/// `core::range::Range` makes `std::ops::Range`, a name the program reads
+/// through a glob import makes `std::ops::RangeTo`, and the program's own
+/// `Vec` makes `std::vec::Vec`. E0308's label names each by its name alone.
+/// Each is what `rustc --edition 2021` reports.
+#[test]
+fn a_native_std_type_is_named_by_its_path_where_another_type_has_its_name() {
+    let cases = [
+        (
+            "fn f<T: Copy>(_: T) {}\nfn main() {\n    f(0..1);\n}\n",
+            "error[E0277]: the trait bound `std::ops::Range<{integer}>: Copy` is not satisfied\n \
+             --> main.rs:3:7\n  |\n3 |     f(0..1);\n  |     - ^^^^ the trait `Copy` is not \
+             implemented for `std::ops::Range<{integer}>`\n",
+        ),
+        (
+            "fn main() {\n    let r = ..1;\n    r.foo();\n}\n",
+            "error[E0599]: no method named `foo` found for struct `RangeTo<Idx>` in the current \
+             scope\n --> main.rs:3:7\n  |\n3 |     r.foo();\n  |       ^^^ method not found in \
+             `RangeTo<{integer}>`\n",
+        ),
+        (
+            "use std::ops::*;\nfn main() {\n    let r: RangeTo<i32> = ..1;\n    r.foo();\n}\n",
+            "error[E0599]: no method named `foo` found for struct `std::ops::RangeTo<Idx>` in the \
+             current scope\n --> main.rs:4:7\n  |\n4 |     r.foo();\n  |       ^^^ method not \
+             found in `std::ops::RangeTo<i32>`\n",
+        ),
+        (
+            "struct Vec;\nfn main() {\n    let v = vec![1];\n    v.foo();\n}\n",
+            "error[E0599]: no method named `foo` found for struct `std::vec::Vec<{integer}>` in \
+             the current scope\n --> main.rs:4:7\n  |\n4 |     v.foo();\n  |       ^^^ method \
+             not found in `std::vec::Vec<{integer}>`\n",
+        ),
+        (
+            "fn main() {\n    let r = 0..1;\n    let _: () = r;\n}\n",
+            "error[E0308]: mismatched types\n --> main.rs:3:17\n  |\n3 |     let _: () = r;\n  \
+             |                 ^ expected `()`, found `Range<{integer}>`\n",
+        ),
+    ];
+    for (source, expected) in cases {
+        let report = rendered(source);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+/// rustc's E0599 for a method a native std type lacks names the type's
+/// kind, and its definition's parameters, defaults and all, where the type
+/// derefs to no other: `Option<T>`, `HashMap<K, V, S, A>`, but `Vec<{integer}>`,
+/// which derefs to a slice, and a reference as it is. Each is what `rustc
+/// --edition 2021` reports.
+#[test]
+fn a_method_a_native_std_type_lacks_names_its_kind_and_parameters() {
+    let cases = [
+        ("let o = Some(1);", "enum `Option<T>`", "Option<{integer}>"),
+        (
+            "let o: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();",
+            "struct `HashMap<K, V, S, A>`",
+            "HashMap<i32, i32>",
+        ),
+        (
+            "let o = vec![1];",
+            "struct `Vec<{integer}>`",
+            "Vec<{integer}>",
+        ),
+        (
+            "let o = std::cmp::Ordering::Less;",
+            "enum `std::cmp::Ordering`",
+            "std::cmp::Ordering",
+        ),
+        (
+            "let o = &(0..3);",
+            "reference `&std::ops::Range<{integer}>`",
+            "&std::ops::Range<{integer}>",
+        ),
+        (
+            "let o = std::rc::Weak::<i32>::new();",
+            "struct `std::rc::Weak<T, A>`",
+            "std::rc::Weak<i32>",
+        ),
+    ];
+    for (made, receiver, found) in cases {
+        let report = rendered(&format!("fn main() {{\n    {made}\n    o.foo();\n}}\n"));
+        let expected = format!(
+            "error[E0599]: no method named `foo` found for {receiver} in the current scope\n \
+             --> main.rs:3:7\n  |\n3 |     o.foo();\n  |       ^^^ method not found in `{found}`\n"
+        );
+        assert!(report.starts_with(&expected), "{made}\n{report}");
+    }
+}
+
 /// A std thread type's bare name resolves through a `use` alone, as in
 /// rustc: unbound, it is E0425 with the imports rustc suggests, and a path
 /// through a module's `use` names it (#2346).

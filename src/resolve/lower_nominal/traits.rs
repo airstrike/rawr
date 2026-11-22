@@ -1956,11 +1956,14 @@ impl<'a> Parser<'a> {
                 Ty::Projection(Box::new(ty.clone()), bound.clone(), item.clone())
             };
             if !self.unify_type(&expected, &actual) {
-                let (expected, actual, ty) = (
+                // rustc names each type forced trimmed here, `Range<u32>`.
+                let (expected, actual) = (
                     self.inference.resolve(&expected).name(&self.models),
                     self.inference.resolve(&actual).name(&self.models),
-                    ty.name(&self.models),
                 );
+                let (expected, actual) = crate::resolve::forced_trim::pair(&expected, &actual);
+                let ty = ty.name(&self.models);
+                let ty = crate::resolve::forced_trim::trimmed(&ty);
                 let message = if is_iterator_trait(bound) && item == "Item" {
                     format!(
                         "expected `{ty}` to be an iterator that yields `{expected}`, but it \
