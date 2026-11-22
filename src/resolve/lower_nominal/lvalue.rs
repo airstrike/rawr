@@ -263,9 +263,11 @@ impl<'a> Parser<'a> {
     /// The left operand of `place op= value` through a `RefCell` borrow
     /// or a borrow guard, and the statement's parts. The place's own read
     /// gives the value the operator changes, so `*cell.borrow_mut() += 1`
-    /// borrows once. Through a borrow guard (D554.7(f)) the right operand
-    /// is evaluated first, as rustc evaluates a primitive `op=`'s, and the
-    /// guard's method is called once to read, change and store the value.
+    /// borrows once. A builtin `op=` of two primitives evaluates its right
+    /// operand first, as rustc does, and a trait's `op=` its place first.
+    /// Through a borrow guard (D554.7(f)) the right operand is evaluated
+    /// first, and the guard's method is called once to read, change and
+    /// store the value.
     pub(super) fn open_compound(
         &mut self,
         nested: &Nested,
@@ -276,8 +278,11 @@ impl<'a> Parser<'a> {
             .steps
             .iter()
             .any(|step| matches!(step, PlaceStep::Cell { native: true, .. }));
+        let primitive = |ty: &Ty| matches!(ty, Ty::Int(_) | Ty::Float(_) | Ty::Bool);
+        let builtin = primitive(&self.inference.resolve(&nested.ty))
+            && primitive(&self.inference.resolve(&replacement.ty));
         let mut evaluated = origin::Fragment::default();
-        let rhs = native.then(|| {
+        let rhs = (native || builtin).then(|| {
             let rhs = self.temporary("rhs");
             evaluated.push_text(format!("let {rhs} = "));
             evaluated.push(replacement.rendered_source());
@@ -292,7 +297,8 @@ impl<'a> Parser<'a> {
             *replacement = operand;
             rhs
         });
-        let (read, place, store) = self.nested_parts_with(nested, false, rhs.as_deref());
+        let updates = rhs.as_deref().filter(|_| native);
+        let (read, place, store) = self.nested_parts_with(nested, false, updates);
         let target = self.operator_expr(place.clone(), nested.ty.clone(), at);
         let mut opening = evaluated;
         opening.push(read);
@@ -553,7 +559,7 @@ pub(super) fn in_place(value: &ParsedExpr) -> Option<origin::Fragment> {
         }
         Lvalue::Place { place, .. } => Some(place.clone()),
         Lvalue::Field(field) => Some(field.place()),
-        Lvalue::Nested(nested) => nested_place(nested),
+        Lvalue::Nested(nested) => chain_of(nested),
         Lvalue::Slice(_) => None,
     }
 }
@@ -561,7 +567,7 @@ pub(super) fn in_place(value: &ParsedExpr) -> Option<origin::Fragment> {
 /// The place `nested` is, as the runtime reaches it where it is: its base
 /// and each field, member and element below it (`s[0][i]`). `None` for a
 /// place reached through anything else.
-pub(super) fn nested_place(nested: &Nested) -> Option<origin::Fragment> {
+pub(super) fn chain_of(nested: &Nested) -> Option<origin::Fragment> {
     let mut place = nested.base.clone();
     for step in &nested.steps {
         match step {

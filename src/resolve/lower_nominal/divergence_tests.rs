@@ -8907,3 +8907,82 @@ fn language_an_element_borrow_checks_its_index_where_it_is_made() {
         "thread 'main' panicked at main.rs:10:18:\nindex out of bounds: the len is 2 but the index is 3"
     );
 }
+
+#[test]
+fn language_a_primitive_op_assign_through_a_ref_cell_reads_its_right_side_first() {
+    // A builtin `op=` of two primitives evaluates its right side before
+    // its place, as rustc does, so the right side's `borrow()` ends before
+    // the place's `borrow_mut()` (#3). A trait's `op=`, of a `String`,
+    // borrows its place first, and the right side's `borrow()` panics.
+    let output = printed(
+        r#"
+use std::cell::RefCell;
+fn main() {
+    let n = RefCell::new(1);
+    *n.borrow_mut() += {
+        let v = *n.borrow();
+        v
+    };
+    let f = RefCell::new(1.5);
+    *f.borrow_mut() *= {
+        let v = *f.borrow();
+        v
+    };
+    println!("primitive {} {}", n.borrow(), f.borrow());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "primitive 2 2.25\n");
+    assert_eq!(
+        panicked(
+            "use std::cell::RefCell;\nfn main() {\n    let s = RefCell::new(String::from(\"a\"));\n    \
+             *s.borrow_mut() += {\n        let v = s.borrow().clone();\n        &v.clone()\n    };\n}\n"
+        )
+        .lines()
+        .next()
+        .map(str::to_owned),
+        Some("thread 'main' panicked at main.rs:5:19:".to_owned())
+    );
+}
+
+#[test]
+fn language_a_whole_optional_borrow_binds_beside_bindings_of_its_value() {
+    // A catch-all binding of a whole `Option<&mut T>`, a local's or a
+    // call's, beside an arm binding its value by `&mut`, holds the
+    // reference to the element's place, as rustc's (#166).
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    match v.last_mut() {
+        Some(x) if *x > 10 => *x += 1,
+        whole => {
+            if let Some(y) = whole {
+                *y += 100
+            }
+        }
+    }
+    let mut w = vec![5, 50];
+    let o = w.first_mut();
+    match o {
+        Some(x) if *x > 10 => *x += 1,
+        None => {}
+        whole => {
+            if let Some(y) = whole {
+                *y += 7;
+            }
+        }
+    }
+    let mut u = vec![20];
+    match u.first_mut() {
+        Some(x) if *x > 10 => *x += 1,
+        whole => println!("{:?}", whole),
+    }
+    println!("{:?} {:?} {:?}", v, w, u);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2, 103] [12, 50] [21]\n");
+}

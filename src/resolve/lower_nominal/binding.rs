@@ -558,7 +558,7 @@ impl<'a> Parser<'a> {
                 let mut indexes = origin::Fragment::default();
                 let lvalue = self.hoist_indexes(lvalue, &mut indexes);
                 if let Lvalue::Nested(nested) = &lvalue
-                    && let Some(chain) = lvalue::nested_place(nested)
+                    && let Some(chain) = lvalue::chain_of(nested)
                     && borrowing
                     && let Some(borrowed) = borrowed
                 {

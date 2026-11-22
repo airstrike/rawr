@@ -235,7 +235,18 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_match(&mut self, match_span: Span) -> Result<ParsedExpr, Error> {
         let dereferenced = matches!(self.peek(), Token::Multiply);
         let framed = self.frames.last().map_or(0, Vec::len);
-        let (subject, matched) = self.parse_subject()?;
+        let (mut subject, matched) = self.parse_subject()?;
+        // `match v.last_mut() { Some(x) => .., whole => .. }`: an arm binding
+        // the whole `Option<&mut T>` holds it as `let o = v.last_mut();`
+        // does, `Some` of the reference to the element's place (D1113).
+        if subject.lvalue.is_some()
+            && !self.holds_stored(&subject)
+            && matches!(self.inference.resolve(&subject.ty), Ty::Option(element)
+                if matches!(self.inference.resolve(&element), Ty::Reference { mutable: true, .. }))
+            && self.whole_binding_ahead()
+        {
+            self.store_borrow(&mut subject)?;
+        }
         // Matching through `&T` matches the referenced value.
         let subject_ty = self.referenced(&subject.ty);
         if matches!(
@@ -406,6 +417,18 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let syntax = self.parse_pattern_syntax()?;
+                if let pattern::Syntax::Ref {
+                    span,
+                    mutable: true,
+                    ..
+                } = syntax
+                    && (self.holds_stored(&place) || self.stored_temporary(&place))
+                {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a `ref mut` binding of a whole value that holds `&mut`s".into(),
+                        source: span,
+                    });
+                }
                 let mut resolved =
                     self.resolve_root_pattern(&syntax, &binding_ty)
                         .map_err(|error| {
@@ -898,6 +921,67 @@ impl<'a> Parser<'a> {
         // A match reads only what its patterns test and bind.
         let matched = self.matched(&subject, start);
         Ok((subject, matched))
+    }
+
+    /// Whether an arm of the match whose `{` is ahead binds the whole value:
+    /// `name =>`, `name if ..`, `mut name` or `ref mut name`, of a name no
+    /// constant, unit struct or prelude variant takes.
+    fn whole_binding_ahead(&self) -> bool {
+        let tokens: Vec<Token> = self.input.clone().map(|(token, _)| token).collect();
+        if !matches!(tokens.first(), Some(Token::LeftBrace)) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut arm_start = false;
+        for (at, token) in tokens.iter().enumerate() {
+            let starts = std::mem::take(&mut arm_start);
+            match token {
+                Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+                    depth += 1;
+                    arm_start = depth == 1;
+                    continue;
+                }
+                Token::RightBrace | Token::RightParen | Token::RightBracket => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return false;
+                    }
+                    arm_start = depth == 1 && matches!(token, Token::RightBrace);
+                    continue;
+                }
+                Token::Comma if depth == 1 => {
+                    arm_start = true;
+                    continue;
+                }
+                _ => {}
+            }
+            if !starts {
+                continue;
+            }
+            let rest = &tokens[at..];
+            let name = match rest {
+                [Token::Identifier(word), Token::Mut, Token::Identifier(name), ..]
+                    if word.as_str() == "ref" =>
+                {
+                    Some((name, &rest[3..]))
+                }
+                [Token::Mut, Token::Identifier(name), ..] => Some((name, &rest[2..])),
+                [Token::Identifier(name), ..] => Some((name, &rest[1..])),
+                _ => None,
+            };
+            if let Some((name, [Token::DoubleArrow | Token::If, ..])) = name
+                && name.as_str() != "ref"
+                && Prelude::from_name(name).is_none()
+                && self.unit_struct(name).is_none()
+                && !self
+                    .models
+                    .function(name)
+                    .is_some_and(|function| function.definition.body.constant)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     pub(super) fn next_after_else(&mut self) -> Token {
