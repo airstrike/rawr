@@ -1032,6 +1032,7 @@ impl<'a> Parser<'a> {
                 let _ = self.fix_opaque_in(bound, &substitution[&generic.name.text], substitution);
             }
         }
+        self.settle_float_into(&function.definition.generics, substitution);
         self.fix_by_impls();
         let types = function
             .definition
@@ -1189,6 +1190,25 @@ impl<'a> Parser<'a> {
         self.models.instances.calls.get(&(caller, call)).cloned()
     }
 
+    /// A float literal each of `generics` bounded by `Into` of a float takes
+    /// is that float (`imported::float_into`), so the call's instance is
+    /// the float's.
+    #[cfg(feature = "rust-import")]
+    fn settle_float_into(
+        &mut self,
+        generics: &[crate::resolve::item::Generic],
+        substitution: &BTreeMap<ImmutableString, Ty>,
+    ) {
+        for generic in generics {
+            if let Some(target) = imported::float_into(generic)
+                && let Some(ty) = substitution.get(&generic.name.text)
+                && let Ty::Float(Float::Var(_)) = self.inference.resolve(ty)
+            {
+                self.unify_type(&target, ty);
+            }
+        }
+    }
+
     /// The call's types, `types` in its template's parameter order, are
     /// those of the instance `key` it binds to.
     #[cfg(feature = "rust-import")]
@@ -1224,6 +1244,7 @@ impl<'a> Parser<'a> {
                 let _ = self.fix_opaque_in(bound, &substitution[&generic.name.text], substitution);
             }
         }
+        self.settle_float_into(definition.generics(), substitution);
         self.fix_by_impls();
         let types = definition
             .generics()

@@ -789,7 +789,7 @@ pub(super) fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_re
 /// Whether rawr compiles `function` once per instantiation its callers use:
 /// a generic parameter of its touches a crate's types, by its signature
 /// naming it inside a crate type, by a bound naming a crate's trait, or by
-/// an `Into` bound into a std type Rawr's std holds (D629).
+/// an `Into` bound into a std type Rawr's std holds or a number (D629).
 #[cfg(feature = "rust-import")]
 pub(super) fn instanced(function: &item::Function) -> bool {
     function
@@ -798,9 +798,10 @@ pub(super) fn instanced(function: &item::Function) -> bool {
         .any(|generic| generic.host || held_into(generic).is_some())
 }
 
-/// The std type Rawr's std holds that `generic`'s `Into` bound converts
-/// into: `PathBuf` of `impl Into<PathBuf>`. A crate's `impl From<Its> for
-/// PathBuf` is a member of `Its` (the `into` of core's blanket `Into`), so
+/// The std type that `generic`'s `Into` bound converts into, one Rawr's
+/// std holds or a number: `PathBuf` of `impl Into<PathBuf>`, `f32` of
+/// `impl Into<f32>`. A crate's `impl From<Its> for PathBuf` or `From<Its>
+/// for f32` is a member of `Its` (the `into` of core's blanket `Into`), so
 /// only a body that reads the parameter at the caller's type reaches it,
 /// as rustc's monomorphised body does.
 #[cfg(feature = "rust-import")]
@@ -809,16 +810,29 @@ fn held_into(generic: &item::Generic) -> Option<&type_ref::Type> {
         .trait_arguments
         .iter()
         .find_map(|(trait_name, arguments)| match &arguments[..] {
-            [target @ type_ref::Type::Path(type_ref::Path {
-                target: type_ref::Target::Host { definition, .. },
-                ..
-            })] if trait_name.as_str() == "Into"
-                && !crate::std_facade::held_forms(&definition.path()).is_empty() =>
-            {
-                Some(target)
+            [target @ type_ref::Type::Path(path)] if trait_name.as_str() == "Into" => {
+                let held = match &path.target {
+                    type_ref::Target::Host { definition, .. } => {
+                        !crate::std_facade::held_forms(&definition.path()).is_empty()
+                    }
+                    type_ref::Target::Builtin => {
+                        matches!(Ty::from_resolved(target), Ty::Int(_) | Ty::Float(_))
+                    }
+                    _ => false,
+                };
+                held.then_some(target)
             }
             _ => None,
         })
+}
+
+/// The float type `generic`'s `Into` bound converts into, which a float
+/// literal it takes is: rustc selects `f32`'s own `From` for
+/// `degrees(45.0)` of `impl Into<f32>`, the one impl a float has.
+#[cfg(feature = "rust-import")]
+pub(super) fn float_into(generic: &item::Generic) -> Option<Ty> {
+    let target = Ty::from_resolved(held_into(generic)?);
+    matches!(target, Ty::Float(_)).then_some(target)
 }
 
 /// Each of `parameters` its signature writes as one of `generics` bounded

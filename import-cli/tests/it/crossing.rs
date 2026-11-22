@@ -778,6 +778,17 @@ fn a_crates_from_impl_converts_a_methods_output() {
     );
 }
 
+/// A program generic's `impl Into<f32>` and `T: Into<f64>` take a crate
+/// type whose `From<Turn>` for the float the crate implements, compiled at
+/// each caller's type, and a float literal and a `u8` through std's impls
+/// (#1719). The output is `cargo run`'s.
+#[test]
+fn a_program_generics_into_a_number_takes_a_crates_from_impl() {
+    let (rawr, cargo) = both_printed("turned_generic.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "90 45\n90 1.5");
+}
+
 /// A crate trait's own `into` out of scope leaves `gauge.into()` the
 /// `Into::into` of the crate's `From<Gauge>` impls, which the target picks
 /// (D741). The output is `cargo run`'s.
