@@ -6542,3 +6542,70 @@ fn an_if_let_subject_temporary_ends_before_the_else() {
         "{report}"
     );
 }
+
+#[test]
+fn a_static_is_one_value_its_first_read_makes_and_every_read_shares() {
+    // A program's static and a body's, of a `Mutex` or of a struct holding
+    // one, keep what each call and each thread puts in them, and a copy of
+    // a static changes apart from it (#2519). The output is rustc's.
+    let output = printed(
+        r#"
+use std::sync::Mutex;
+static HITS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+struct Log { lines: Mutex<Vec<&'static str>> }
+static LOG: Log = Log { lines: Mutex::new(Vec::new()) };
+static FIRST: Option<i32> = Some(1);
+fn hit(n: i32) { HITS.lock().unwrap().push(n); }
+fn tick() -> i32 {
+    static TICKS: Mutex<i32> = Mutex::new(0);
+    let mut ticks = TICKS.lock().unwrap();
+    *ticks += 1;
+    *ticks
+}
+fn main() {
+    hit(1);
+    hit(2);
+    std::thread::spawn(|| hit(3)).join().unwrap();
+    LOG.lines.lock().unwrap().push("a");
+    LOG.lines.lock().unwrap().push("b");
+    let mut first = FIRST;
+    if let Some(n) = first.as_mut() { *n += 1; }
+    println!("hits {:?}", HITS.lock().unwrap());
+    println!("{:?} {} {} {}", LOG.lines.lock().unwrap(), tick(), tick(), tick());
+    println!("{:?} {:?}", first, FIRST);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "hits [1, 2, 3]\n[\"a\", \"b\"] 1 2 3\nSome(2) Some(1)\n"
+    );
+}
+
+#[test]
+fn a_static_keeps_its_value_across_generations_until_its_initializer_changes() {
+    // Each run is a generation of one program: a static's value is kept by
+    // its path, type and initializer, a body static's by its site too, so
+    // an edit of a function keeps both, and an edit of the initializer
+    // starts a new value (#2519, D862).
+    let generation = |push: i32, initializer: &str| {
+        printed(&format!(
+            r#"
+use std::sync::Mutex;
+static GENERATIONS: Mutex<Vec<i32>> = {initializer};
+fn record() -> i32 {{
+    static CALLS: Mutex<i32> = Mutex::new(0);
+    *CALLS.lock().unwrap() += 1;
+    GENERATIONS.lock().unwrap().push({push});
+    *CALLS.lock().unwrap()
+}}
+fn main() {{ let calls = record(); println!("{{:?}} {{}}", GENERATIONS.lock().unwrap(), calls); }}
+main();
+"#
+        ))
+    };
+    assert_eq!(generation(1, "Mutex::new(Vec::new())"), "[1] 1\n");
+    assert_eq!(generation(2, "Mutex::new(Vec::new())"), "[1, 2] 2\n");
+    assert_eq!(generation(3, "Mutex::new(vec![0])"), "[0, 3] 3\n");
+}

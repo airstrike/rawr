@@ -1492,8 +1492,9 @@ fn parse_type_alias(
     })
 }
 
-/// `static NAME: T = value;`: an immutable static, read as a `const` is,
-/// whose value it always has. A `static mut` is not supported yet.
+/// `static NAME: T = value;`: an immutable static, parsed as a `const` is,
+/// whose one value its first read makes and every read shares (#2519). A
+/// `static mut` is not supported yet.
 fn parse_static(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,

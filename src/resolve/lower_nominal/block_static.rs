@@ -2,8 +2,9 @@
 //! only in its block. One of a native type is a place for the program's
 //! life (`place::statics`), keyed by its site and its block's declarations,
 //! and initialized the first time its block runs. One of another type keeps
-//! its value in the interpreter: each read is its initializer, as a
-//! constant's is.
+//! its value in the interpreter, by the same key: its initializer runs at
+//! its first read, and every read shares the value it made (#2519). One of
+//! literals alone is its initializer at each read, as a constant is.
 //!
 //! A block's statics are all declared before any is initialized, and they
 //! are initialized in order. An initializer may name a static not written
@@ -30,8 +31,12 @@ enum Kind {
         key: ImmutableString,
         progress: Progress,
     },
-    /// A value in the interpreter: its initializer's tokens.
-    Interpreted { value: Vec<(Token, Position)> },
+    /// A value in the interpreter: its initializer's tokens, and the key it
+    /// is kept by, `None` for literals alone.
+    Interpreted {
+        value: Vec<(Token, Position)>,
+        key: Option<ImmutableString>,
+    },
 }
 
 /// How far a block has come with one of its native statics.
@@ -127,12 +132,12 @@ impl Parser<'_> {
                 return Err(error);
             }
             let value = self.static_value()?;
+            let file = self.source_identity();
+            let line = keyword.line().unwrap_or_default();
+            let column = keyword.position().unwrap_or_default();
+            let key: ImmutableString =
+                format!("{file}:{line}:{column}#{ordinal}@{group:016x}").into();
             let kind = if matches!(ty, Ty::Host { .. }) {
-                let file = self.source_identity();
-                let line = keyword.line().unwrap_or_default();
-                let column = keyword.position().unwrap_or_default();
-                let key: ImmutableString =
-                    format!("{file}:{line}:{column}#{ordinal}@{group:016x}").into();
                 initializers.push(Initializer {
                     name: name.clone(),
                     key: key.clone(),
@@ -145,7 +150,9 @@ impl Parser<'_> {
                     progress: Progress::Declared,
                 }
             } else {
-                Kind::Interpreted { value }
+                let plain = constant::plain_initializer(value.iter().map(|(token, _)| token));
+                let key = (!plain).then_some(key);
+                Kind::Interpreted { value, key }
             };
             self.block_statics.push(Declared { name, ty, kind });
         }
@@ -309,7 +316,8 @@ impl Parser<'_> {
                 let source = self.prelude_op(PreludeOp::StaticValue, [key]);
                 Ok(self.operator_expr(source, ty.clone(), name_span))
             }
-            Kind::Interpreted { value } => {
+            Kind::Interpreted { value, key } => {
+                let key = key.clone();
                 let at = name_span.start();
                 let mut tokens = Vec::with_capacity(value.len() + 2);
                 tokens.push((Token::LeftParen, at));
@@ -318,7 +326,11 @@ impl Parser<'_> {
                 self.splice_tokens(tokens);
                 self.parse_primary().and_then(|mut value| {
                     self.coerce_expr(&ty, &mut value)?;
-                    Ok(value)
+                    let Some(key) = key else {
+                        return Ok(value);
+                    };
+                    let read = self.kept_static(&key, value.rendered_source());
+                    Ok(self.operator_expr(read, ty.clone(), value.span))
                 })
             }
         };

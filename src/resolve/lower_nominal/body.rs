@@ -581,6 +581,7 @@ impl<'a> Parser<'a> {
         {
             return Err(error);
         }
+        let kept = self.kept_static_key(definition);
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose
             // temporaries are promoted to `'static`.
@@ -600,6 +601,14 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         if let Some(output) = &definition.output {
             self.settle_opaque(output);
+        }
+        // A static the interpreter holds is one value, which its first read
+        // makes and every read shares (#2519).
+        if let Some(key) = kept {
+            let initializer = self.output.split_off(0).surrounded("{\n", "\n}");
+            let read = self.kept_static(&key, initializer);
+            self.output.push(read);
+            self.output.push_text("\n");
         }
         if !definition.body.constant && !definition.body.asynchronous {
             self.close_body_drops()?;
