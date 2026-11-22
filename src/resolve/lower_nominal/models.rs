@@ -124,7 +124,14 @@ pub(super) struct Tables {
     /// The file each source is written in, as its diagnostics name it: an
     /// inline module's is its file's.
     pub(super) files: BTreeMap<crate::program::source::Id, ImmutableString>,
+    /// Each type's inherent functions by name: of two impls for its
+    /// instances (`impl Foo<i32>` and `impl Foo<i64>`), the first's.
     pub(super) methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
+    /// The inherent functions of a name two impls for a type's instances
+    /// each give, which a call selects by its Self type
+    /// (`Parser::self_typed_method`).
+    pub(super) self_typed_methods:
+        BTreeMap<(type_def::Id, ImmutableString), Box<[method::Definition]>>,
     /// Each type's `impl From<T>` functions, by the type converted to.
     pub(super) conversions: BTreeMap<type_def::Id, Vec<method::Definition>>,
     /// Functions of `impl Trait for Owner` blocks (and the trait defaults
@@ -284,12 +291,26 @@ impl Models {
         let mut declared_in = BTreeMap::new();
         let mut by_definition = BTreeMap::new();
         let mut by_identity = BTreeMap::new();
-        let methods = program
+        let mut inherent =
+            BTreeMap::<(type_def::Id, ImmutableString), Vec<method::Definition>>::new();
+        for method in program
             .methods
             .iter()
             .filter(|method| method.conversion().is_none() && method.trait_name().is_none())
-            .cloned()
-            .map(|method| ((method.owner(), method.name().into()), method))
+        {
+            inherent
+                .entry((method.owner(), method.name().into()))
+                .or_default()
+                .push(method.clone());
+        }
+        let methods = inherent
+            .iter()
+            .map(|(key, definitions)| (key.clone(), definitions[0].clone()))
+            .collect();
+        let self_typed_methods = inherent
+            .into_iter()
+            .filter(|(_, definitions)| definitions.len() > 1)
+            .map(|(key, definitions)| (key, definitions.into_boxed_slice()))
             .collect();
         let mut trait_methods =
             BTreeMap::<(type_def::Id, ImmutableString), Vec<method::Definition>>::new();
@@ -762,11 +783,23 @@ impl Models {
             }
             // Keyed by trait: two traits may each give one type an
             // `Output`.
+            let written: Box<[type_ref::Type]> = owner
+                .arguments
+                .iter()
+                .filter_map(|argument| match argument {
+                    type_ref::Argument::Type(ty) => Some(ty.clone()),
+                    type_ref::Argument::Lifetime(_) => None,
+                })
+                .collect();
             for (assoc, ty) in &implementation.associated {
                 let key = (*definition, name.text.clone(), assoc.text.clone());
-                associated
+                let mut impls = associated
                     .impls
-                    .insert(key, (ty.clone(), parameters.clone()));
+                    .remove(&key)
+                    .map(Vec::from)
+                    .unwrap_or_default();
+                impls.push((ty.clone(), parameters.clone(), written.clone()));
+                associated.impls.insert(key, impls.into_boxed_slice());
             }
         }
         // A lending std trait's instance a bound names, as `T: AsRef<[u8]>`:
@@ -999,6 +1032,7 @@ impl Models {
                 })
                 .collect(),
             methods,
+            self_typed_methods,
             conversions,
             trait_methods,
             traits,
@@ -1511,6 +1545,55 @@ impl Models {
                     .trait_name()
                     .is_some_and(|implemented| implemented == trait_name)
             })
+    }
+
+    /// Whether two impls of the std trait `trait_name` for instances of
+    /// `owner` each give `name` (`impl Ord for Foo<i32>` beside `impl Ord
+    /// for Foo<i64>`): a value reached by its runtime type, which holds no
+    /// type arguments, can't tell which is its impl.
+    pub(super) fn self_typed_impls(
+        &self,
+        owner: type_def::Id,
+        trait_name: &str,
+        name: &str,
+    ) -> bool {
+        self.std_traits.contains(trait_name)
+            && self
+                .trait_methods
+                .get(&(owner, name.into()))
+                .is_some_and(|definitions| {
+                    definitions
+                        .iter()
+                        .filter(|definition| {
+                            definition.trait_name().is_some_and(|own| own == trait_name)
+                        })
+                        .count()
+                        > 1
+                })
+    }
+
+    /// `std_impl` of the impl for `owner`'s instance at `arguments`, of
+    /// impls for its instances (`impl Display for Foo<i32>` beside `impl
+    /// Display for Foo<i64>`): the one whose header's arguments `arguments`
+    /// fit (`instance_fits`), else the first.
+    pub(super) fn std_impl_at(
+        &self,
+        owner: type_def::Id,
+        arguments: &[Ty],
+        trait_name: &str,
+        name: &str,
+    ) -> Option<&method::Definition> {
+        let first = self.std_impl(owner, trait_name, name)?;
+        Some(
+            self.trait_methods
+                .get(&(owner, name.into()))?
+                .iter()
+                .filter(|definition| definition.trait_name().is_some_and(|own| own == trait_name))
+                .find(|definition| {
+                    super::generics::instance_fits(definition.owner_arguments(), arguments)
+                })
+                .unwrap_or(first),
+        )
     }
 
     /// Whether the model builds `ty`'s `Default` once, when the program is

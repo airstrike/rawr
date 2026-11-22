@@ -3653,15 +3653,16 @@ fn resolve_methods(
         .iter()
         .map(|definition| (definition.id(), definition))
         .collect();
-    // Keyed by the owner's name too: a builtin impl owner is every Self
-    // type of one runtime type (`f32` and `f64`, `&str` and `String`), and
-    // each is its own Self type of a trait.
-    let mut declarations = BTreeMap::<
-        (type_def::Id, ImmutableString, ImmutableString),
-        (program::source::Id, Span),
-    >::new();
+    // Keyed by the impl's full Self type: a builtin impl owner is every
+    // Self type of one runtime type (`f32` and `f64`, `&str` and
+    // `String`), a generic type's each of its instances (`Foo<i32>` and
+    // `Foo<i64>`), and each is its own Self type of a trait.
+    let mut declarations = Declarations::default();
     let mut methods = Vec::new();
     let mut builtin_methods = Vec::new();
+    // Each of `methods`' and `builtin_methods`' impl's Self type.
+    let mut self_types = Vec::new();
+    let mut builtin_self_types = Vec::new();
     // A supertrait's associated types are the owner's impl of it:
     // `IndexMut`'s `Output` is its `Index` impl's, `DerefMut`'s `Target` its
     // `Deref` impl's. Each impl's, by its trait and its owner's spelling.
@@ -3850,9 +3851,12 @@ fn resolve_methods(
                     shell.source
                 };
                 let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
-                if let Some((previous_source, previous_declaration)) = declarations.insert(
-                    (owner_id, owner_name.clone(), member.clone()),
-                    (shell.source, name.span),
+                if let Err((previous_source, previous_declaration)) = declarations.declare(
+                    owner_id,
+                    member.clone(),
+                    &item.owner,
+                    shell.source,
+                    name.span,
                 ) {
                     return Err(LocatedError::related(
                         shell.source,
@@ -3915,8 +3919,10 @@ fn resolve_methods(
                 }
                 if builtin.is_some() {
                     builtin_methods.push(definition);
+                    builtin_self_types.push(item.owner.clone());
                 } else {
                     methods.push(definition);
+                    self_types.push(item.owner.clone());
                 }
             }
             continue;
@@ -3955,9 +3961,12 @@ fn resolve_methods(
                 validate_method_signature(Some(owner.name()), function, true)
                     .map_err(|error| LocatedError::primary(shell.source, error))?;
                 let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
-                if let Some((previous_source, previous_declaration)) = declarations.insert(
-                    (owner_id, owner_name.clone(), member.clone()),
-                    (shell.source, function.name.span),
+                if let Err((previous_source, previous_declaration)) = declarations.declare(
+                    owner_id,
+                    member.clone(),
+                    &item.owner,
+                    shell.source,
+                    function.name.span,
                 ) {
                     return Err(LocatedError::related(
                         shell.source,
@@ -3987,6 +3996,7 @@ fn resolve_methods(
                     .with_trait_arguments(arguments.clone());
                 function.body.lowering = item::Lowering::NominalMethod(id);
                 methods.push(definition);
+                self_types.push(item.owner.clone());
             }
             continue;
         }
@@ -3995,10 +4005,13 @@ fn resolve_methods(
             validate_method_signature(Some(owner.name()), function, true)
                 .map_err(|error| LocatedError::primary(shell.source, error))?;
             let name = function.name.text.clone();
-            let duplicate_key = (owner_id, owner_name.clone(), name.clone());
-            if let Some((previous_source, previous_declaration)) =
-                declarations.insert(duplicate_key, (shell.source, function.name.span))
-            {
+            if let Err((previous_source, previous_declaration)) = declarations.declare(
+                owner_id,
+                name.clone(),
+                &item.owner,
+                shell.source,
+                function.name.span,
+            ) {
                 return Err(LocatedError::related(
                     shell.source,
                     previous_source,
@@ -4036,8 +4049,11 @@ fn resolve_methods(
                 .in_generic_impl(&generics, owner_arguments(&item.owner), item.owner.span());
             function.body.lowering = item::Lowering::NominalMethod(id);
             methods.push(definition);
+            self_types.push(item.owner.clone());
         }
     }
+    key_by_self_type(&mut methods, &self_types);
+    key_by_self_type(&mut builtin_methods, &builtin_self_types);
     // A default body no impl receives is not lowered: what it borrows and
     // moves is left to `cargo check`.
     #[cfg(test)]
@@ -6301,6 +6317,146 @@ fn owner_arguments(ty: &type_ref::Type) -> Box<[type_ref::Type]> {
             type_ref::Argument::Lifetime(_) => None,
         })
         .collect()
+}
+
+/// The impls of one owner that declare one member, by their Self types
+/// (`resolve_methods`): `Foo<i32>` and `Foo<i64>` may each declare
+/// `Describe::describe`, as rustc's impls are keyed by their full Self type.
+#[derive(Default)]
+struct Declarations(BTreeMap<(type_def::Id, ImmutableString), Vec<Declared>>);
+
+/// One impl's declaration of a member.
+struct Declared {
+    /// The impl's Self type.
+    self_ty: type_ref::Type,
+    /// Where it is written.
+    source: program::source::Id,
+    span: Span,
+}
+
+impl Declarations {
+    /// `member` of `owner` in the impl for `self_ty`, written at `span` of
+    /// `source`; where an earlier impl's Self type overlaps `self_ty`,
+    /// that impl's declaration instead.
+    fn declare(
+        &mut self,
+        owner: type_def::Id,
+        member: ImmutableString,
+        self_ty: &type_ref::Type,
+        source: program::source::Id,
+        span: Span,
+    ) -> Result<(), (program::source::Id, Span)> {
+        let declared = self.0.entry((owner, member)).or_default();
+        if let Some(previous) = declared
+            .iter()
+            .find(|declared| overlaps(&declared.self_ty, self_ty))
+        {
+            return Err((previous.source, previous.span));
+        }
+        declared.push(Declared {
+            self_ty: self_ty.clone(),
+            source,
+            span,
+        });
+        Ok(())
+    }
+}
+
+/// Whether some type is both `left` and `right`, each impl's parameters
+/// any type: `Foo<T>` and `Foo<i32>` overlap, `Foo<i32>` and `Foo<i64>`
+/// don't. A type this can't tell apart (a projection, an alias) overlaps
+/// everything.
+fn overlaps(left: &type_ref::Type, right: &type_ref::Type) -> bool {
+    use type_ref::{Argument, Target, Type};
+    let open = |ty: &Type| {
+        matches!(ty, Type::Path(path) if !matches!(
+            path.target,
+            Target::Builtin | Target::Host { .. } | Target::Script { .. }
+        ))
+    };
+    if open(left) || open(right) {
+        return true;
+    }
+    match (left, right) {
+        (Type::Unit(_), Type::Unit(_)) => true,
+        (Type::Tuple { members: left, .. }, Type::Tuple { members: right, .. }) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(left, right)| overlaps(left, right))
+        }
+        (
+            Type::Reference {
+                mutable: left_mutable,
+                target: left,
+                ..
+            },
+            Type::Reference {
+                mutable: right_mutable,
+                target: right,
+                ..
+            },
+        ) => left_mutable == right_mutable && overlaps(left, right),
+        // `&str` is `String` marked borrowed, and a type apart from it.
+        (Type::Path(_), Type::Path(_)) if left.is_str() != right.is_str() => false,
+        (Type::Path(left), Type::Path(right)) => {
+            let head = match (&left.target, &right.target) {
+                (
+                    Target::Script {
+                        definition: left, ..
+                    },
+                    Target::Script {
+                        definition: right, ..
+                    },
+                ) => left == right,
+                (Target::Builtin, Target::Builtin) | (Target::Host { .. }, Target::Host { .. }) => {
+                    left.name == right.name
+                }
+                _ => false,
+            };
+            let types = |path: &type_ref::Path| {
+                path.arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        Argument::Type(ty) => Some(ty.clone()),
+                        Argument::Lifetime(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let (left, right) = (types(left), types(right));
+            head && left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(&right)
+                    .all(|(left, right)| overlaps(left, right))
+        }
+        _ => false,
+    }
+}
+
+/// Each of `definitions` that shares its key with another, keyed again by
+/// its impl's Self type: `<Foo<i32> as Describe>::describe` beside
+/// `<Foo<i64> as Describe>::describe`. A key no other definition has stays
+/// as it is.
+fn key_by_self_type(definitions: &mut [method::Definition], self_types: &[type_ref::Type]) {
+    let mut keys = BTreeMap::<crate::item::Key, usize>::new();
+    for definition in definitions.iter() {
+        *keys.entry(definition.key().clone()).or_default() += 1;
+    }
+    for (definition, self_ty) in definitions.iter_mut().zip(self_types) {
+        if keys.get(definition.key()).is_none_or(|count| *count < 2) {
+            continue;
+        }
+        let name = definition.key().name();
+        let self_name = full_type_name(self_ty);
+        let qualified = match name.rsplit_once("::") {
+            Some((trait_name, function)) => format!("<{self_name} as {trait_name}>::{function}"),
+            None => format!("<{self_name}>::{name}"),
+        };
+        let key = definition.key().renamed(qualified.into());
+        definition.rekey(key);
+    }
 }
 
 fn impl_owner(ty: &type_ref::Type) -> Result<(type_def::Id, ImmutableString), Error> {

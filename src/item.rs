@@ -181,8 +181,8 @@ impl Key {
     }
 
     /// This key with the declared name `name`, at the same owner and kind,
-    /// as an instance of a generic method is keyed (D629).
-    #[cfg(feature = "rust-import")]
+    /// as an instance of a generic method is keyed (D629), or a method of
+    /// an impl by its Self type.
     pub(crate) fn renamed(&self, name: ImmutableString) -> Self {
         Self {
             path: program::Path::new(

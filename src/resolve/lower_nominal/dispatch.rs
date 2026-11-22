@@ -16,8 +16,9 @@ use super::{
     CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL, UNKNOWN_WITNESS,
 };
 use crate::resolve::{item, type_ref, Error, Program};
+use crate::type_def;
 use crate::{capability, method, ImmutableString, Span};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 /// The names one part gives its lifted closures' generated functions: its
@@ -173,10 +174,17 @@ pub(super) fn write_trait_dispatchers(
                 .iter()
                 .filter(|((_, name), _)| *name == function.name.text)
             {
-                for definition in definitions
+                let implemented = definitions
                     .iter()
                     .filter(|definition| definition.trait_name() == Some(trait_name))
+                    .collect::<Vec<_>>();
+                if self_types(models, implemented.iter().copied()) > 1
+                    && owner.builtin_code() != Some(crate::resolve::BLANKET_OWNER)
                 {
+                    write_untold(&mut text, *owner, trait_name, &function.name.text);
+                    continue;
+                }
+                for definition in implemented {
                     if owner.builtin_code() == Some(crate::resolve::BLANKET_OWNER) {
                         blanket = Some(definition);
                         continue;
@@ -250,6 +258,32 @@ pub(super) fn write_trait_dispatchers(
             output.declaration(*source, declared.name.span, &text);
         }
     }
+}
+
+/// The arm of a dispatcher by runtime type for `owner`, whose impls of
+/// `trait_name` for two of its Self types each give `function`
+/// (`Foo<i32>`'s and `Foo<i64>`'s, or `f32`'s and `f64`'s): a value holds
+/// no type arguments, so the runtime type can't tell which is its impl,
+/// and rawr refuses rather than run the wrong one.
+fn write_untold(text: &mut String, owner: type_def::Id, trait_name: &str, function: &str) {
+    let _ = writeln!(
+        text,
+        "if __rawr_type == {} {{ __rawr_throw \"`{trait_name}::{function}` of a value whose \
+         type has impls of `{trait_name}` for two of its Self types, reached by its runtime \
+         type, is not supported yet\"; }}",
+        owner_key(owner)
+    );
+}
+
+/// How many Self types `definitions`' impls are for.
+fn self_types<'a>(
+    models: &Models,
+    definitions: impl Iterator<Item = &'a method::Definition>,
+) -> usize {
+    definitions
+        .map(|definition| super::op::impl_self_ty(definition, &BTreeMap::new()).name(models))
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 /// The arguments a dispatcher by runtime type passes the impl method
@@ -461,7 +495,35 @@ pub(super) fn write_instance_dispatchers(
             instance_dispatcher_name(trait_name, &function.name.text, index)
         );
         let mut blanket = None;
+        let mut told = BTreeMap::<type_def::Id, Vec<&method::Definition>>::new();
         for (owner, definition) in &definitions {
+            let arguments = definition.trait_arguments();
+            let matches = match &instance {
+                Some(instance) => {
+                    arguments.iter().any(mentions_parameter)
+                        || instance_text(arguments) == *instance
+                }
+                None => true,
+            };
+            if matches {
+                told.entry(*owner).or_default().push(definition);
+            }
+        }
+        let untold = told
+            .into_iter()
+            .filter(|(owner, implemented)| {
+                owner.builtin_code() != Some(crate::resolve::BLANKET_OWNER)
+                    && self_types(models, implemented.iter().copied()) > 1
+            })
+            .map(|(owner, _)| owner)
+            .collect::<BTreeSet<_>>();
+        for owner in &untold {
+            write_untold(&mut text, *owner, trait_name, &function.name.text);
+        }
+        for (owner, definition) in &definitions {
+            if untold.contains(owner) {
+                continue;
+            }
             let arguments = definition.trait_arguments();
             let matches = match &instance {
                 Some(instance) => {

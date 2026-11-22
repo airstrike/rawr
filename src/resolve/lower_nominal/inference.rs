@@ -42,10 +42,12 @@ pub(super) struct Inference {
 /// The associated types of `impl Trait for Owner` blocks.
 #[derive(Debug, Default)]
 pub(super) struct AssociatedTypes {
-    /// `type Name = T;` by owner, trait and name, with the impl parameter
-    /// each of the owner's type arguments names (`impl<T> Shape for
-    /// Wrapper<T>`).
-    pub(super) impls: BTreeMap<(type_def::Id, ImmutableString, ImmutableString), AssociatedType>,
+    /// `type Name = T;` by owner, trait and name, one per impl for the
+    /// owner's instances (`impl Shape for Foo<i32>` beside `impl Shape for
+    /// Foo<String>`), each with the impl parameter each of the owner's type
+    /// arguments names (`impl<T> Shape for Wrapper<T>`).
+    pub(super) impls:
+        BTreeMap<(type_def::Id, ImmutableString, ImmutableString), Box<[AssociatedType]>>,
     /// The equalities of each trait's associated types' bounds, by trait
     /// and name, in the trait's `Self`: `(Iterator, Item, Self::For)` of
     /// `type Fore: Iterator<Item = Self::For>;`.
@@ -63,8 +65,13 @@ pub(super) struct AssociatedTypes {
 pub(super) type AssociatedEquality = (ImmutableString, ImmutableString, type_ref::Type);
 
 /// An associated type's `T`, with the impl parameter each of the owner's
-/// type arguments names.
-pub(super) type AssociatedType = (type_ref::Type, Box<[Option<ImmutableString>]>);
+/// type arguments names, and the owner's type arguments as its impl writes
+/// them: `i32` of `impl Shape for Foo<i32>`.
+pub(super) type AssociatedType = (
+    type_ref::Type,
+    Box<[Option<ImmutableString>]>,
+    Box<[type_ref::Type]>,
+);
 
 #[derive(Clone, Copy)]
 pub(super) struct Checkpoint {
@@ -398,6 +405,41 @@ impl Inference {
         }
     }
 
+    /// Of `impls`, each an impl's associated type, the one of the impl for
+    /// the owner's instance at `arguments`: the only one, or the one whose
+    /// written arguments are `arguments` where it writes a type and not an
+    /// impl parameter. Of impls for one Self type, which differ by the
+    /// trait's arguments (`TryFrom<[i16; 3]>` beside `TryFrom<&[i16]>`), the
+    /// last. `None` where `arguments` leave two Self types.
+    fn instance_impl<'a>(
+        &self,
+        impls: &'a [AssociatedType],
+        arguments: &[Ty],
+    ) -> Option<&'a AssociatedType> {
+        if let [only] = impls {
+            return Some(only);
+        }
+        let arguments = arguments
+            .iter()
+            .map(|argument| self.resolve(argument))
+            .collect::<Vec<_>>();
+        let fitting = impls
+            .iter()
+            .filter(|(_, _, written)| super::generics::instance_fits(written, &arguments))
+            .collect::<Vec<_>>();
+        let last = fitting.last()?;
+        let named = |written: &[type_ref::Type]| {
+            written
+                .iter()
+                .map(crate::resolve::full_type_name)
+                .collect::<Vec<_>>()
+        };
+        fitting
+            .iter()
+            .all(|(_, _, written)| named(written) == named(&last.2))
+            .then_some(*last)
+    }
+
     /// `base::name`: the impl's associated type once `base` is a known
     /// type, the bound's for a parameter with `T: Trait<name = U>`, else
     /// the opaque projection, as Rust normalises it.
@@ -409,10 +451,11 @@ impl Inference {
     ) -> Ty {
         match &base {
             Ty::Script(id, arguments) => {
-                if let Some((ty, parameters)) =
-                    self.associated
-                        .impls
-                        .get(&(*id, trait_name.clone(), name.clone()))
+                if let Some((ty, parameters, _)) = self
+                    .associated
+                    .impls
+                    .get(&(*id, trait_name.clone(), name.clone()))
+                    .and_then(|impls| self.instance_impl(impls, arguments))
                 {
                     let substitution = parameters
                         .iter()

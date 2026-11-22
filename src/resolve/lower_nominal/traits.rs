@@ -723,19 +723,19 @@ impl<'a> Parser<'a> {
             .or(found)
     }
 
-    /// The trait function `member` of the builtin owner's impl whose Self
-    /// type is `self_ty`'s (through its references): `f32`'s `half` beside
-    /// `f64`'s, which share one impl owner and one runtime type, so the
-    /// call selects it here as rustc selects the impl. An unsuffixed
-    /// literal both fit is its fallback kind. `None` where the impls have
-    /// one Self type, or the type fits other than one.
+    /// The trait function `member` of `owner`'s impl whose Self type is
+    /// `self_ty`'s (through its references), as rustc selects the impl by
+    /// the full Self type: `f32`'s `half` beside `f64`'s, which share one
+    /// impl owner and one runtime type, or `Foo<i32>`'s `describe` beside
+    /// `Foo<i64>`'s. Where an unsuffixed literal fits both, its fallback
+    /// kind selects one. `None` where the impls have one Self type, or the
+    /// type fits other than one.
     pub(super) fn self_typed_function(
         &mut self,
         owner: type_def::Id,
         member: &str,
         self_ty: &Ty,
     ) -> Option<method::Definition> {
-        owner.builtin_code()?;
         let definitions = self
             .models
             .trait_methods
@@ -743,17 +743,84 @@ impl<'a> Parser<'a> {
             .clone();
         let selves = definitions
             .iter()
-            .filter_map(method::Definition::builtin_owner)
-            .map(crate::resolve::full_type_name)
+            .map(|definition| impl_self_ty(definition, &BTreeMap::new()).name(&self.models))
             .collect::<BTreeSet<_>>();
         if selves.len() < 2 {
             return None;
         }
-        let mut self_ty = self.inference.resolve(self_ty);
-        while let Ty::Reference { target, .. } = self_ty {
-            self_ty = self.inference.resolve(&target);
+        let self_ty = self.unreferenced(self_ty);
+        let fitting = self.fitting_impls(definitions, &self_ty);
+        if let [definition] = &fitting[..] {
+            return Some(definition.clone());
         }
-        let fitting = definitions
+        // `Foo { value: 1 }` of `Foo<i32>` and `Foo<i64>`: the literal is
+        // an `i32`, as rustc's fallback makes it before it selects.
+        let fallback = super::generics::substitute(&self_ty, &literal_fallback);
+        if fallback == self_ty {
+            return None;
+        }
+        match &self.fitting_impls(fitting, &fallback)[..] {
+            [definition] => Some(definition.clone()),
+            _ => None,
+        }
+    }
+
+    /// The inherent function `member` of `owner` whose impl's Self type is
+    /// `self_ty`'s (through its references), of two impls for its instances
+    /// that each give it (`Models::self_typed_methods`): `Foo<i32>`'s
+    /// `name` beside `Foo<i64>`'s. `self_ty` is `None` for a path that
+    /// writes no arguments (`Foo::make()`). rustc's E0034 where both fit,
+    /// as an unsuffixed literal's type does, and the first where none does,
+    /// which the call's types then refuse. `None` where one impl gives it.
+    pub(super) fn self_typed_method(
+        &mut self,
+        owner: type_def::Id,
+        member: &str,
+        self_ty: Option<&Ty>,
+        member_span: Span,
+    ) -> Result<Option<method::Definition>, Error> {
+        let Some(definitions) = self.models.self_typed_methods.get(&(owner, member.into())) else {
+            return Ok(None);
+        };
+        let definitions = definitions.to_vec();
+        let first = definitions[0].clone();
+        let fitting = match self_ty {
+            Some(self_ty) => {
+                let self_ty = self.unreferenced(self_ty);
+                self.fitting_impls(definitions, &self_ty)
+            }
+            None => definitions,
+        };
+        match &fitting[..] {
+            [] => Ok(Some(first)),
+            [definition] => Ok(Some(definition.clone())),
+            _ => Err(Error::StdPath {
+                code: "E0034",
+                message: "multiple applicable items in scope".into(),
+                label: Some(format!("multiple `{member}` found").into()),
+                note: None,
+                reference: Span::new(member_span.start(), text_end(member_span.start(), member)),
+            }),
+        }
+    }
+
+    /// `ty` through its references.
+    pub(super) fn unreferenced(&self, ty: &Ty) -> Ty {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        ty
+    }
+
+    /// Each of `definitions` whose impl's Self type, its parameters any
+    /// type, unifies with `self_ty`.
+    fn fitting_impls(
+        &mut self,
+        definitions: Vec<method::Definition>,
+        self_ty: &Ty,
+    ) -> Vec<method::Definition> {
+        definitions
             .into_iter()
             .filter(|definition| {
                 let probe = definition
@@ -762,21 +829,91 @@ impl<'a> Parser<'a> {
                     .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
                     .collect();
                 let owner = impl_self_ty(definition, &probe);
-                self.unifies(&owner, &self_ty)
+                self.unifies(&owner, self_ty)
             })
-            .collect::<Vec<_>>();
-        match &fitting[..] {
-            [definition] => Some(definition.clone()),
-            _ => literal_fallback(&self_ty).and_then(|fallback| {
-                let mut preferred = fitting.into_iter().filter(|definition| {
-                    definition
-                        .builtin_owner()
-                        .is_some_and(|owner| Ty::from_resolved(owner) == fallback)
-                });
-                let definition = preferred.next()?;
-                preferred.next().is_none().then_some(definition)
-            }),
+            .collect()
+    }
+
+    /// rawr's refusal where a value of `ty` reaches the impls of
+    /// `trait_name<arguments>` by its runtime type, as a generic
+    /// parameter's or a trait object's does, and two of them are for Self
+    /// types the runtime type doesn't tell apart: `Foo<i32>`'s and
+    /// `Foo<i64>`'s, or `f32`'s and `f64`'s of a generic trait. A call
+    /// where the type is known selects its impl (`self_typed_function`),
+    /// and a kind trait's call through a parameter selects it by the
+    /// parameter's witness (`Models::kind_traits`), which a trait object
+    /// doesn't hold.
+    pub(super) fn untold_impls(
+        &mut self,
+        ty: &Ty,
+        trait_name: &str,
+        arguments: &[Ty],
+        span: Span,
+        through: Through,
+    ) -> Option<Error> {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
         }
+        let owner = owner_id(&ty)?;
+        if owner.builtin_code() == Some(crate::resolve::BLANKET_OWNER) {
+            return None;
+        }
+        let definitions = self
+            .models
+            .trait_methods
+            .iter()
+            .filter(|((id, _), _)| *id == owner)
+            .flat_map(|(_, definitions)| definitions)
+            .filter(|definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|name| name == trait_name)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut selves = BTreeMap::new();
+        for definition in &definitions {
+            let written = definition.trait_arguments();
+            let instance = written.len() == arguments.len()
+                && written.iter().zip(arguments).all(|(written, argument)| {
+                    mentions_parameter(written)
+                        || self.unifies(&Ty::from_resolved(written), argument)
+                });
+            if instance {
+                let witness = definition
+                    .builtin_owner()
+                    .and_then(|owner| witness_code(&Ty::from_resolved(owner)));
+                selves.insert(
+                    impl_self_ty(definition, &BTreeMap::new()).name(&self.models),
+                    witness,
+                );
+            }
+        }
+        // A kind trait's impls each have their own witness.
+        let witnessed = through == Through::Parameter
+            && arguments.is_empty()
+            && self.models.kind_traits.contains(trait_name)
+            && selves
+                .values()
+                .copied()
+                .collect::<Option<BTreeSet<_>>>()
+                .is_some_and(|codes| codes.len() == selves.len());
+        let mut selves = selves.into_keys();
+        let (Some(first), Some(second)) = (selves.next(), selves.next()) else {
+            return None;
+        };
+        if witnessed {
+            return None;
+        }
+        Some(Error::UnsupportedNominalSyntax {
+            construct: format!(
+                "telling `{first}`'s impl of `{trait_name}` from `{second}`'s through a generic \
+                 parameter or a trait object"
+            )
+            .into(),
+            source: span,
+        })
     }
 
     /// Whether the trait of `definition`, a trait impl's function, is in
@@ -2047,4 +2184,14 @@ fn implementor_tag(ty: &crate::host::type_ref::Type) -> Option<String> {
         _ => return None,
     };
     rawr_import::classify::representability::object::tag(&converted)
+}
+
+/// What a value reaches its trait's impls through by its runtime type
+/// (`Parser::untold_impls`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Through {
+    /// A generic parameter, which may hold a type witness.
+    Parameter,
+    /// A trait object, which holds none.
+    Object,
 }

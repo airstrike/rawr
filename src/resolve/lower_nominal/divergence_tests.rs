@@ -8741,3 +8741,196 @@ main();
     );
     assert_eq!(output, "Some(PermissionDenied) Err(PermissionDenied)\n");
 }
+
+#[test]
+fn impls_for_two_instances_of_a_type_each_run_where_rustc_selects_them() {
+    // `impl Describe for Foo<i32>` beside `Foo<String>`, and for `Vec<i64>`
+    // beside `Vec<String>`, are two impls keyed by their full Self type:
+    // a method call, a qualified path, a literal's fallback and an
+    // associated type each select the impl rustc selects (#1178).
+    let output = printed(
+        r#"
+trait Describe {
+    type Out;
+    fn describe(&self) -> String;
+    fn get(&self) -> Self::Out;
+}
+struct Foo<T> { value: T }
+impl Describe for Foo<i32> {
+    type Out = i32;
+    fn describe(&self) -> String { format!("i32 {}", self.value) }
+    fn get(&self) -> i32 { self.value + 1 }
+}
+impl Describe for Foo<String> {
+    type Out = String;
+    fn describe(&self) -> String { format!("String {}", self.value) }
+    fn get(&self) -> String { format!("{}!", self.value) }
+}
+trait Count { fn count(&self) -> String; }
+impl Count for Vec<i64> { fn count(&self) -> String { format!("ints {}", self.len()) } }
+impl Count for Vec<String> { fn count(&self) -> String { format!("texts {}", self.join("+")) } }
+fn main() {
+    let a = Foo { value: 1i32 };
+    let b = Foo { value: "x".to_string() };
+    println!("{} | {}", a.describe(), b.describe());
+    println!("{} | {}", Describe::describe(&a), <Foo<String> as Describe>::describe(&b));
+    println!("{}", Foo { value: 7 }.describe());
+    let n: <Foo<i32> as Describe>::Out = a.get();
+    let s: <Foo<String> as Describe>::Out = b.get();
+    println!("{} {}", n.pow(2), s.to_uppercase());
+    let v = vec![1, 2];
+    println!("{} | {}", v.count(), vec!["p".to_string(), "q".to_string()].count());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "i32 1 | String x\ni32 1 | String x\ni32 7\n4 X!\nints 2 | texts p+q\n"
+    );
+}
+
+#[test]
+fn inherent_impls_for_two_instances_of_a_type_are_two_impls() {
+    // `impl Foo<i32>` and `impl Foo<i64>` may each have `make` and `name`;
+    // the receiver's or the written type selects one, and a literal's type
+    // that fits both is rustc's E0034 (#1178).
+    let output = printed(
+        r#"
+struct Foo<T> { value: T }
+impl Foo<i32> {
+    const N: i32 = 1;
+    fn make() -> Self { Foo { value: 3 } }
+    fn name(&self) -> String { format!("i32 {}", self.value) }
+}
+impl Foo<i64> {
+    const N: i32 = 2;
+    fn make() -> Self { Foo { value: 4 } }
+    fn name(&self) -> String { format!("i64 {}", self.value) }
+}
+fn main() {
+    let a = Foo { value: 1i32 };
+    let b: Foo<i64> = Foo::<i64>::make();
+    println!("{} | {} | {}", a.name(), b.name(), Foo::<i32>::make().name());
+    println!("{} {}", Foo::<i32>::N + Foo::<i64>::N, Foo::<i64>::name(&b));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "i32 1 | i64 4 | i32 3\n3 i64 4\n");
+    let report = refused(
+        r#"
+struct Foo<T> { value: T }
+impl Foo<i32> { fn name(&self) -> i32 { self.value } }
+impl Foo<i64> { fn name(&self) -> i64 { self.value } }
+fn main() {
+    let y = Foo { value: 7 };
+    println!("{}", y.name());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0034]: multiple applicable items in scope"),
+        "{report}"
+    );
+}
+
+#[test]
+fn std_impls_for_two_instances_of_a_type_each_run_for_their_own() {
+    // `Display`, `Debug`, `Clone`, `PartialEq`, `Ord` and `Default`
+    // written for `Foo<i32>` and for `Foo<i64>` run the impl of the
+    // value's own instance (#1178).
+    let output = printed(
+        r#"
+use std::cmp::Ordering;
+use std::fmt;
+#[derive(PartialEq, Eq)]
+struct Foo<T> { value: T }
+impl fmt::Display for Foo<i32> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "i32 {}", self.value) }
+}
+impl fmt::Display for Foo<i64> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "i64 {}", self.value) }
+}
+impl fmt::Debug for Foo<i32> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "I32({})", self.value) }
+}
+impl fmt::Debug for Foo<i64> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "I64({})", self.value) }
+}
+impl Clone for Foo<i32> { fn clone(&self) -> Self { Foo { value: self.value + 10 } } }
+impl Clone for Foo<i64> { fn clone(&self) -> Self { Foo { value: self.value + 20 } } }
+impl Default for Foo<i32> { fn default() -> Self { Foo { value: 5 } } }
+impl Default for Foo<i64> { fn default() -> Self { Foo { value: 6 } } }
+impl PartialOrd for Foo<i32> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+impl Ord for Foo<i32> { fn cmp(&self, other: &Self) -> Ordering { self.value.cmp(&other.value) } }
+impl PartialOrd for Foo<i64> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+impl Ord for Foo<i64> { fn cmp(&self, other: &Self) -> Ordering { other.value.cmp(&self.value) } }
+fn main() {
+    let a = Foo { value: 1i32 };
+    let b = Foo { value: 2i64 };
+    println!("{} | {} | {} | {}", a, b, a.to_string(), b.to_string());
+    println!("{} | {} | {:?} {:?}", a.clone(), b.clone(), a, b);
+    let c: Foo<i32> = Default::default();
+    println!("{:?} {:?}", c, Foo::<i64>::default());
+    println!("{} {}", a < Foo { value: 7 }, b < Foo { value: 9 });
+    println!("{:?} {:?}", a.cmp(&Foo { value: 0 }), b.cmp(&Foo { value: 9 }));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "i32 1 | i64 2 | i32 1 | i64 2\ni32 11 | i64 22 | I32(1) I64(2)\nI32(5) I64(6)\n\
+         true false\nGreater Greater\n"
+    );
+}
+
+#[test]
+fn impls_for_two_instances_reached_by_runtime_type_are_refused() {
+    // A generic parameter's or a trait object's value reaches its impl by
+    // its runtime type, which holds no type arguments: rawr refuses where
+    // two impls' Self types are one runtime type, rather than run the
+    // wrong one (#1178, #2569).
+    let refusal = "telling `Foo<i32>`'s impl of `Describe` from `Foo<i64>`'s through a generic \
+                   parameter or a trait object is not supported";
+    let source = |body: &str| {
+        format!(
+            r#"
+trait Describe {{ fn describe(&self) -> String; }}
+struct Foo<T> {{ value: T }}
+impl Describe for Foo<i32> {{ fn describe(&self) -> String {{ format!("i32 {{}}", self.value) }} }}
+impl Describe for Foo<i64> {{ fn describe(&self) -> String {{ format!("i64 {{}}", self.value) }} }}
+fn show<T: Describe>(x: &T) -> String {{ x.describe() }}
+fn main() {{ let a = Foo {{ value: 1i32 }}; {body} }}
+main();
+"#
+        )
+    };
+    for body in [
+        r#"println!("{}", show(&a));"#,
+        r#"let d: &dyn Describe = &a; println!("{}", d.describe());"#,
+    ] {
+        let report = refused(&source(body));
+        assert!(report.contains(refusal), "{report}");
+    }
+    let report = refused(
+        r#"
+trait Scale<T> { fn scale(&self, by: T) -> String; }
+impl Scale<i64> for f32 { fn scale(&self, by: i64) -> String { format!("f32 {}", *self * by as f32) } }
+impl Scale<i64> for f64 { fn scale(&self, by: i64) -> String { format!("f64 {}", *self * by as f64) } }
+fn go<T: Scale<i64>>(x: T) -> String { x.scale(2) }
+fn main() { println!("{}", go(1.5f64)); }
+main();
+"#,
+    );
+    assert!(
+        report.contains("telling `f32`'s impl of `Scale` from `f64`'s"),
+        "{report}"
+    );
+}

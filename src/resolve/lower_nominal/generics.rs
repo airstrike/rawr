@@ -169,6 +169,12 @@ impl<'a> Parser<'a> {
                     lists.push(Box::default());
                 }
                 for arguments in lists {
+                    self.pending_dispatches.push((
+                        substitution[&generic.name.text].clone(),
+                        trait_name.text.clone(),
+                        arguments.clone(),
+                        span,
+                    ));
                     self.pending_traits.push((
                         substitution[&generic.name.text].clone(),
                         trait_name.text.clone(),
@@ -546,6 +552,17 @@ impl<'a> Parser<'a> {
                     formatted: None,
                     chain: crate::resolve::Chain::default(),
                 });
+            }
+        }
+        for (ty, trait_name, arguments, span) in std::mem::take(&mut self.pending_dispatches) {
+            if let Some(error) = self.untold_impls(
+                &ty,
+                &trait_name,
+                &arguments,
+                span,
+                super::traits::Through::Parameter,
+            ) {
+                return Err(error);
             }
         }
         for (projection, expected, span) in std::mem::take(&mut self.pending_projections) {
@@ -1342,7 +1359,8 @@ pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>)
     })
 }
 
-/// `ty` with each type parameter `replaced` gives a type replaced.
+/// `ty` with each type parameter and open literal `replaced` gives a type
+/// replaced.
 pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
     let each =
         |types: &[Ty]| -> Box<[Ty]> { types.iter().map(|ty| substitute(ty, replaced)).collect() };
@@ -1354,7 +1372,9 @@ pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
                 Parameter::opaque(captured.opaque, each(&captured.arguments)),
             )
         }),
-        Ty::Param(..) => replaced(ty).unwrap_or_else(|| ty.clone()),
+        Ty::Param(..) | Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)) => {
+            replaced(ty).unwrap_or_else(|| ty.clone())
+        }
         Ty::Option(element) => Ty::Option(Box::new(substitute(element, replaced))),
         Ty::Boxed(target) => Ty::Boxed(Box::new(substitute(target, replaced))),
         Ty::Counted(counter, target) => {
@@ -1540,6 +1560,19 @@ impl Need {
 /// The witness of a type no witness code names, which a kind trait's
 /// dispatcher (`write_kind_dispatchers`) reads as the value's runtime type.
 pub(super) const UNKNOWN_WITNESS: crate::INT = -1;
+
+/// Whether an impl whose header writes its owner's arguments `written`
+/// (`i32` of `impl Shape for Foo<i32>`) is for the owner's instance at the
+/// resolved `arguments`: each written type is its argument, or its
+/// argument's literal fallback, where it is not an impl parameter.
+pub(super) fn instance_fits(written: &[type_ref::Type], arguments: &[Ty]) -> bool {
+    written.iter().zip(arguments).all(|(written, argument)| {
+        let ty = || Ty::from_resolved(written);
+        mentions_parameter(written)
+            || ty() == *argument
+            || literal_fallback(argument).is_some_and(|fallback| fallback == ty())
+    })
+}
 
 /// Whether a resolved type names a generic parameter.
 pub(super) fn mentions_parameter(ty: &type_ref::Type) -> bool {

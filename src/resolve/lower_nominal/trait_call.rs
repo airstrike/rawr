@@ -1364,8 +1364,22 @@ impl<'a> Parser<'a> {
             self.capture_witnesses();
         }
         let (kind_witness, kind_dispatcher) = kind.unzip();
+        // `Describe::describe(&b)` of a `Foo<i64>`, whose impl is one of
+        // `Foo<i32>`'s and `Foo<i64>`'s: the one rustc selects by the full
+        // Self type, which the runtime type can't tell.
+        let resolved = self.inference.resolve(&self_ty);
+        let selected = owner_id(&resolved)
+            .and_then(|owner| self.self_typed_function(owner, &function.name.text, &resolved))
+            .filter(|definition| {
+                definition.trait_name() == Some(trait_name)
+                    && witness_generics(definition.generics(), &self.models)
+                        .next()
+                        .is_none()
+            });
         let dispatcher = if let Some(dispatcher) = kind_dispatcher {
             dispatcher
+        } else if let Some(definition) = selected {
+            method_name(&definition)
         } else if trait_arguments.is_empty() {
             trait_dispatcher_name(trait_name, &function.name.text)
         } else {

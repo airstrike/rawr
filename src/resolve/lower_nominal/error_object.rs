@@ -213,9 +213,9 @@ impl Parser<'_> {
         // Its `source`, by the program's own `Error::source`, else std's
         // default: none.
         let cause = match &from {
-            Ty::Script(id, _) => self
+            Ty::Script(id, arguments) => self
                 .models
-                .std_impl(*id, "Error", "source")
+                .std_impl_at(*id, arguments, "Error", "source")
                 .map(|definition| Self::std_call(definition, local.clone(), &[])),
             _ => None,
         };
