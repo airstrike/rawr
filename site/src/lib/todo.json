@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.8",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"A function body that breaks its own signature's lifetimes is reported with rustc's labels: where each lifetime is declared (or `'1` for an elided one), \"returning this value requires that `'a` must outlive `'static`\" or \"function was supposed to return data with lifetime `'b`…\", the bound to add, the variance notes for a `&mut`, a cell or an invariant struct, and E0621's explicit-lifetime suggestion.","issues":[2486]}
+        ]
+      },
       {
         "version": "0.5.7",
         "date": "2026-11-21",
@@ -6123,7 +6130,11 @@
     {"issue":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"open","category":"Divergences from rustc"},
     {"issue":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"open","category":"Divergences from rustc"},
     {"issue":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"open","category":"Divergences from rustc"},
-    {"issue":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open","category":"Divergences from rustc"}
+    {"issue":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open","category":"Divergences from rustc"},
+    {"issue":2486,"title":"A function body that breaks its own signature's lifetimes is reported with rustc's labels: where…","state":"closed","category":"Divergences from rustc","release":"0.5.8"},
+    {"issue":2487,"title":"Report every region error rustc reports for one returned value","state":"open","category":"Divergences from rustc"},
+    {"issue":2488,"title":"Mark the branch a returned if or match takes its borrow from","state":"open","category":"Divergences from rustc"},
+    {"issue":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -9003,7 +9014,11 @@
             {"number":1540,"title":"A native build failure in a mirror's generated impls still names only the copied file","state":"open"},
             {"number":1818,"title":"'failed to get ahash as a dependency' is printed without the cause Cargo gave","state":"open"},
             {"number":1905,"title":"A failed native build's error names rawr's generated adapter instead of the marked call that needed it","state":"open"},
-            {"number":1906,"title":"rawr's E0277 for a crate type names its full path where rustc trims it","state":"open"}
+            {"number":1906,"title":"rawr's E0277 for a crate type names its full path where rustc trims it","state":"open"},
+            {"number":2486,"title":"A function body that breaks its own signature's lifetimes is reported with rustc's labels: where…","state":"closed"},
+            {"number":2487,"title":"Report every region error rustc reports for one returned value","state":"open"},
+            {"number":2488,"title":"Mark the branch a returned if or match takes its borrow from","state":"open"},
+            {"number":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open"}
           ]
         }
       ]

@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-21",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "examples": {
     "running": 56,
     "total": 56,
@@ -217,7 +217,7 @@
         {"id":"paths-and-modules","name":"Paths, imports and modules as rustc resolves them","start":97,"size":3,"state":"next","note":"Left: traits keyed by their last segment (#758), std prefixes accepted without a use (#808), body-level uses hoisted to the module (#1052), pub use globs (#1349).","issues":[344,429,572,605,753,758,807,808,810,874,1036,1052,1141,1348,1349,1427,1428,1962,997,1708,2203,2215,1168,2250,2452,2468,2469]},
         {"id":"patterns","name":"Patterns and exhaustiveness as rustc's","start":98,"size":2,"state":"next","note":"Left: integer ranges inside variants and tuples (#1287, #1306), struct parameter patterns (#1307), an empty match on an uninhabited type (#620).","issues":[342,620,812,1287,1288,1306,1307,1308,1972]},
         {"id":"macro-rules","name":"Macros and attributes as rustc expands them","start":99,"size":3,"state":"next","note":"Left: fragment matching (#237), cfg_attr (#603), helper attributes (#604), join!-style macros through the general path (#1152).","issues":[237,603,604,1152,992,1765,2068,2107,2184,2188,2190,2201,2202,2217,2236,2237,2284,2290,2291,2306,2318]},
-        {"id":"rustc-wording","name":"Errors as rustc prints them","start":100,"size":2,"state":"next","note":"rustc's codes, labels, notes and colours. Left: panics rendered as ICEs (#1929), errors outside render_with (#1930), notes at a dependency's span (#695).","issues":[333,162,552,635,671,690,695,734,809,1112,1198,1200,1397,1398,1399,1400,1411,1431,1929,1930,36,581,994,1952,2129,1540,1818,1905,1906]}
+        {"id":"rustc-wording","name":"Errors as rustc prints them","start":100,"size":2,"state":"next","note":"rustc's codes, labels, notes and colours. Left: panics rendered as ICEs (#1929), errors outside render_with (#1930), notes at a dependency's span (#695).","issues":[333,162,552,635,671,690,695,734,809,1112,1198,1200,1397,1398,1399,1400,1411,1431,1929,1930,36,581,994,1952,2129,1540,1818,1905,1906,2486,2487,2488,2489]}
       ]
     },
     {

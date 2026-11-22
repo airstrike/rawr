@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.5.8",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A function body that breaks its own signature's lifetimes is reported with rustc's labels: where each lifetime is declared (or `'1` for an elided one), \"returning this value requires that `'a` must outlive `'static`\" or \"function was supposed to return data with lifetime `'b`…\", the bound to add, the variance notes for a `&mut`, a cell or an invariant struct, and E0621's explicit-lifetime suggestion.","issues":[2486]}
+      ]
+    },
+    {
       "version": "0.5.7",
       "date": "2026-11-21",
       "entries": [

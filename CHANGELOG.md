@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.8 (2026-11-21)
+
+- A function body that breaks its own signature's lifetimes is reported with rustc's labels: where each lifetime is declared (or `'1` for an elided one), "returning this value requires that `'a` must outlive `'static`" or "function was supposed to return data with lifetime `'b`…", the bound to add, the variance notes for a `&mut`, a cell or an invariant struct, and E0621's explicit-lifetime suggestion. (#2486)
+
 ## 0.5.7 (2026-11-21)
 
 - A program type that implements `io::Write`, `io::Read` or `fmt::Write` gets the trait's provided methods (`write_all`, `read_to_string`, `read_exact`, `write_char`), and `write!`/`writeln!` write into an `io::Write`. `lt`, `le`, `gt` and `ge` work on any `PartialOrd` type. (#2461)
