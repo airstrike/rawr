@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.13 (2026-11-22)
+
+- A function body that reborrows through `&mut` references, returns a `&str` or slice range, or stores a borrow through a `&mut` parameter is checked against its signature's lifetimes as rustc checks it, with rustc's report; `*r = x` and `h.x = x` through a `&mut` parameter run, and a `&mut` moved by an untyped `let` or into a generic is moved (E0382). (#2476, #2477, #2478)
+- A `fn(T)` field makes its struct contravariant in `T`, and a struct's fields imply their outlives bounds, as in rustc. (#2479)
+- A `where` bound on another type (`where Vec<T>: Debug`) works on an impl, a struct, an enum and a trait; a bound met through the program's impl, a hand-written std impl or a derive proves that impl's own bounds; and E0277 names the innermost type that lacks the trait, with rustc's "required for … to implement …" notes. (#2470, #2471, #2472)
+
 ## 0.5.12 (2026-11-22)
 
 - A generic bounded by `fmt::Write` or `io::Write` runs std's impls for `String` and `Vec<u8>`, and `write!` into any writer is its `write_fmt`, as rustc expands it; `fmt::Arguments` is a type a program can write. (#2483, #2484)

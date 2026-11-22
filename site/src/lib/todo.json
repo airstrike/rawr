@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-22",
-  "version": "0.5.12",
+  "version": "0.5.13",
   "examples": {
     "running": 55,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.13",
+        "date": "2026-11-22",
+        "entries": [
+          {"text":"A function body that reborrows through `&mut` references, returns a `&str` or slice range, or stores a borrow through a `&mut` parameter is checked against its signature's lifetimes as rustc checks it, with rustc's report; `*r = x` and `h.x = x` through a `&mut` parameter run, and a `&mut` moved by an untyped `let` or into a generic is moved (E0382).","issues":[2476,2477,2478]},
+          {"text":"A `fn(T)` field makes its struct contravariant in `T`, and a struct's fields imply their outlives bounds, as in rustc.","issues":[2479]},
+          {"text":"A `where` bound on another type (`where Vec<T>: Debug`) works on an impl, a struct, an enum and a trait; a bound met through the program's impl, a hand-written std impl or a derive proves that impl's own bounds; and E0277 names the innermost type that lacks the trait, with rustc's \"required for … to implement …\" notes.","issues":[2470,2471,2472]}
+        ]
+      },
       {
         "version": "0.5.12",
         "date": "2026-11-22",
@@ -6147,16 +6156,16 @@
     {"issue":2467,"title":"The playground has a New button beside Examples that starts from an empty `fn main`","state":"closed","category":"Health","release":"0.5.5"},
     {"issue":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"closed","category":"Divergences from rustc","release":"0.5.11"},
     {"issue":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"closed","category":"Divergences from rustc","release":"0.5.11"},
-    {"issue":2470,"title":"An impl's, struct's or trait's `where` bound on a type other than its parameters is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":2471,"title":"A bound met through a program's conditional impl doesn't check the impl's own bounds","state":"open","category":"Divergences from rustc"},
-    {"issue":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"open","category":"Divergences from rustc"},
+    {"issue":2470,"title":"An impl's, struct's or trait's `where` bound on a type other than its parameters is refused","state":"closed","category":"Divergences from rustc","release":"0.5.13"},
+    {"issue":2471,"title":"A bound met through a program's conditional impl doesn't check the impl's own bounds","state":"closed","category":"Divergences from rustc","release":"0.5.13"},
+    {"issue":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"closed","category":"Divergences from rustc","release":"0.5.13"},
     {"issue":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
     {"issue":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
     {"issue":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
-    {"issue":2476,"title":"The own-signature check misses `&mut` reborrow chains and `&mut self` bodies","state":"open","category":"Divergences from rustc"},
-    {"issue":2477,"title":"The own-signature check misses a `&str` range slice returned as a longer lifetime","state":"open","category":"Divergences from rustc"},
-    {"issue":2478,"title":"A borrow stored into a `&mut` parameter isn't checked against the signature's lifetimes","state":"open","category":"Divergences from rustc"},
-    {"issue":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"open","category":"Divergences from rustc"},
+    {"issue":2476,"title":"The own-signature check misses `&mut` reborrow chains and `&mut self` bodies","state":"closed","category":"Divergences from rustc","release":"0.5.13"},
+    {"issue":2477,"title":"The own-signature check misses a `&str` range slice returned as a longer lifetime","state":"closed","category":"Divergences from rustc","release":"0.5.13"},
+    {"issue":2478,"title":"A borrow stored into a `&mut` parameter isn't checked against the signature's lifetimes","state":"closed","category":"Divergences from rustc","release":"0.5.13"},
+    {"issue":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"closed","category":"Divergences from rustc","release":"0.5.13"},
     {"issue":2480,"title":"`impl Trait` is a per-function opaque type, not a trait object","state":"open","category":"Divergences from rustc"},
     {"issue":2481,"title":"A program's impl Hasher lacks the provided write_u8..write_usize methods","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
     {"issue":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
@@ -6178,7 +6187,13 @@
     {"issue":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"open","category":"Divergences from rustc"},
     {"issue":2499,"title":"Hash::hash into a program's Hasher is refused: derive(Hash) and impl Hash bodies don't run","state":"open","category":"Divergences from rustc"},
     {"issue":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"open","category":"Divergences from rustc"},
-    {"issue":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open","category":"Divergences from rustc"}
+    {"issue":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open","category":"Divergences from rustc"},
+    {"issue":2502,"title":"A `&mut` moved outside an untyped `let` or a generic parameter is not followed","state":"open","category":"Divergences from rustc"},
+    {"issue":2503,"title":"`&mut *self.a` of a `&mut` field is refused as not a place","state":"open","category":"Divergences from rustc"},
+    {"issue":2504,"title":"A method call whose impl's bounds fail is E0277 where rustc gives E0599","state":"open","category":"Divergences from rustc"},
+    {"issue":2505,"title":"A trait's `where` clauses aren't checked at its impls","state":"open","category":"Divergences from rustc"},
+    {"issue":2506,"title":"rustc's E0277 help at a std impl (\"conditionally implemented for `Vec<T, A>`\") is missing","state":"open","category":"Divergences from rustc"},
+    {"issue":2507,"title":"A method of an `I: Iterator` parameter (`i.count()`, `self.0.collect()`) is E0599","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8796,9 +8811,9 @@
             {"number":2463,"title":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)`…","state":"closed"},
             {"number":2464,"title":"`s.parse()` in a generic fn bounded `T: FromStr` is E0277 \"`T: FromStr` is not satisfied\"","state":"closed"},
             {"number":2465,"title":"A program generic bounded `T: FromStr` called at `u8` is E0277 \"`u8: FromStr` is not satisfied\"","state":"closed"},
-            {"number":2470,"title":"An impl's, struct's or trait's `where` bound on a type other than its parameters is refused","state":"open"},
-            {"number":2471,"title":"A bound met through a program's conditional impl doesn't check the impl's own bounds","state":"open"},
-            {"number":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"open"},
+            {"number":2470,"title":"An impl's, struct's or trait's `where` bound on a type other than its parameters is refused","state":"closed"},
+            {"number":2471,"title":"A bound met through a program's conditional impl doesn't check the impl's own bounds","state":"closed"},
+            {"number":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"closed"},
             {"number":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"closed"},
             {"number":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"closed"},
             {"number":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"closed"},
@@ -8814,7 +8829,11 @@
             {"number":2494,"title":"An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an…","state":"closed"},
             {"number":2495,"title":"E0277 for a non-Send capture names the capture's type, not the type that isn't Send","state":"open"},
             {"number":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open"},
-            {"number":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"open"}
+            {"number":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"open"},
+            {"number":2504,"title":"A method call whose impl's bounds fail is E0277 where rustc gives E0599","state":"open"},
+            {"number":2505,"title":"A trait's `where` clauses aren't checked at its impls","state":"open"},
+            {"number":2506,"title":"rustc's E0277 help at a std impl (\"conditionally implemented for `Vec<T, A>`\") is missing","state":"open"},
+            {"number":2507,"title":"A method of an `I: Iterator` parameter (`i.count()`, `self.0.collect()`) is E0599","state":"open"}
           ]
         },
         {
@@ -8884,10 +8903,12 @@
             {"number":2097,"title":"A slice member receiver borrow ends at the call in the borrow checker","state":"open"},
             {"number":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open"},
             {"number":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open"},
-            {"number":2476,"title":"The own-signature check misses `&mut` reborrow chains and `&mut self` bodies","state":"open"},
-            {"number":2477,"title":"The own-signature check misses a `&str` range slice returned as a longer lifetime","state":"open"},
-            {"number":2478,"title":"A borrow stored into a `&mut` parameter isn't checked against the signature's lifetimes","state":"open"},
-            {"number":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"open"}
+            {"number":2476,"title":"The own-signature check misses `&mut` reborrow chains and `&mut self` bodies","state":"closed"},
+            {"number":2477,"title":"The own-signature check misses a `&str` range slice returned as a longer lifetime","state":"closed"},
+            {"number":2478,"title":"A borrow stored into a `&mut` parameter isn't checked against the signature's lifetimes","state":"closed"},
+            {"number":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"closed"},
+            {"number":2502,"title":"A `&mut` moved outside an untyped `let` or a generic parameter is not followed","state":"open"},
+            {"number":2503,"title":"`&mut *self.a` of a `&mut` field is refused as not a place","state":"open"}
           ]
         },
         {
