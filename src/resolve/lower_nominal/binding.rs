@@ -313,9 +313,19 @@ impl<'a> Parser<'a> {
                 self.flow().everywhere(&name, name_span);
             }
             let written = self.position();
-            let annotation = self.parse_local_type()?;
+            let ty = self.parse_local_type()?;
+            // `let mut f: Box<dyn FnMut(i32)>`: a call of `f` borrows it as
+            // the type's outermost `dyn` function trait says (T188).
             let end = self.position();
-            Some((annotation, self.written_span(written, end)))
+            let outermost = self
+                .written_fn_traits
+                .range(written..end)
+                .next()
+                .map(|(_, borrow)| *borrow);
+            if outermost == Some(call::Borrow::Mutable) {
+                self.mutable_call_fns.insert(name_span);
+            }
+            Some((ty, self.written_span(written, end)))
         } else {
             None
         };
@@ -475,6 +485,11 @@ impl<'a> Parser<'a> {
         // borrows it shared, as `Fn::call` does (T179).
         if self.shared_call_fns.contains(&value.span) {
             self.shared_call_fns.insert(name_span);
+        }
+        // `let mut f = make();` of `fn make() -> Box<dyn FnMut(i32)>`: a
+        // call of `f` borrows it `&mut` (T188).
+        if self.mutable_call_fns.contains(&value.span) {
+            self.mutable_call_fns.insert(name_span);
         }
         // `let v = cell.borrow_mut();`: the borrow lasts for `v`'s block.
         if let Some(borrow) = self.last_cell_borrow.take()

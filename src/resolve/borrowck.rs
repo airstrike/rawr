@@ -269,6 +269,10 @@ pub(crate) struct Body {
     /// The temporaries of blocks' tails that drop after the blocks'
     /// locals, as they do before edition 2024.
     pub(crate) outliving: Vec<super::tail::Outliving>,
+    /// Where each two-phase `&mut` borrow is activated: a use of the borrow
+    /// its reservation made, not of its place, so the move check reads no
+    /// use there, as rustc's reads none of the borrowed temporary.
+    pub(crate) activations: std::collections::BTreeSet<Point>,
 }
 
 /// A value the body stores below a reference (`v.push(x)`, `*r = x`):

@@ -436,6 +436,40 @@ fn a_formats_borrow_lasts_as_long_as_its_output() {
     assert!(stderr.contains("E0502"), "{stderr}");
 }
 
+/// A name that borrows its tag, as quick-xml's `BytesStart::name(&self) ->
+/// QName<'_>` gives, keeps the tag borrowed while it lives: rawr's own
+/// check refuses a change to the tag with rustc's E0502 before anything
+/// runs, and never builds the runner (#131).
+#[test]
+fn a_value_whose_frame_holds_its_receiver_keeps_the_receiver_borrowed() {
+    let program = "// rawr\nuse natives::lifetimes::Tag;\n\nfn main() {\n    let mut tag = Tag::new(\"a\");\n    println!(\"start\");\n    let name = tag.name();\n    tag.rename(\"b\");\n    println!(\"{name}\");\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let run = crate::support::rawr_import()
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = text(&run.stdout);
+    let stderr = text(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(!stdout.contains("start"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "error[E0502]: cannot borrow `tag` as mutable because it is also borrowed as \
+             immutable"
+        ) && stderr.contains("main.rs:8:5")
+            && !stderr.contains("building runner"),
+        "{stderr}"
+    );
+}
+
 /// A `&self` method whose receiver's lifetime is the one its `&mut`
 /// input's type carries, as integration's `Scene::draw<'a>(&'a self, &mut
 /// RenderPass<'a>)`, lends its receiver to the value in the scope frame's
@@ -897,6 +931,42 @@ fn a_provided_map_takes_the_impls_item_and_collects_into_a_result() {
 #[test]
 fn a_blanket_impl_bounded_on_a_borrow_gives_a_slice_its_method() {
     runs_as_cargo_does("spread_ref", "[\"light\", \"dark\"]\nOk(())\n");
+}
+
+/// The spread a `Vec` lends keeps it borrowed while it lives, as rayon's
+/// `par_iter` gives an `Iter<'data, T>`: rawr's own check refuses a push
+/// to the `Vec` meanwhile with rustc's E0502 before anything runs (#2097).
+#[test]
+fn a_slice_members_value_keeps_the_slice_borrowed() {
+    let program = "// rawr\nuse natives::spread::prelude::*;\nuse natives::spread::Shade;\n\n\
+                   fn main() {\n    let mut shades = vec![Shade::Light];\n    println!(\"start\");\n    \
+                   let spread = shades.spread_iter();\n    shades.push(Shade::Dark);\n    \
+                   println!(\"{}\", spread.drive().len());\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let run = crate::support::rawr_import()
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = text(&run.stdout);
+    let stderr = text(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(!stdout.contains("start"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "error[E0502]: cannot borrow `shades` as mutable because it is also borrowed as \
+             immutable"
+        ) && stderr.contains("main.rs:9:5")
+            && !stderr.contains("building runner"),
+        "{stderr}"
+    );
 }
 
 /// A crate trait's generic impl for another crate's generic type, as

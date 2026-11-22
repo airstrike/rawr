@@ -116,6 +116,31 @@ impl Authority {
         self.invoke_inner(retained, args, Some(runtime), None)
     }
 
+    /// The next item of `value`, a runtime iterator of the program's
+    /// (`lower_nominal::lazy`) native code pulls from: its step runs in this
+    /// program against `runtime`, as the program's own calls do.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn next_item(
+        &self,
+        value: &mut Dynamic,
+        runtime: Shared<crate::host::runtime::Registry>,
+    ) -> Result<Option<Dynamic>, Box<crate::EvalAltResult>> {
+        let ast = self.executable.ast();
+        let mut global = self.engine.new_global_runtime_state();
+        global.host_runtime = Some(runtime);
+        global.source = ast.source_raw().cloned();
+        global.lib.push(ast.shared_lib().clone());
+        global.lib.push(ast.shared_support().clone());
+        let context = crate::NativeCallContext::from((
+            &*self.engine,
+            "next",
+            None,
+            &global,
+            crate::Position::NONE,
+        ));
+        crate::resolve::lower_nominal::lazy::next(&context, value)
+    }
+
     /// Validate `value` against the exact type `witness` proves.
     #[cfg(feature = "rust-import")]
     pub(crate) fn validate_witness(

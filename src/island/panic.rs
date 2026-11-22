@@ -20,12 +20,23 @@ impl Caught {
     /// `error`'s text, which the call's failure says. A run-time failure
     /// is kept as its panic, at its place in the program's files.
     pub(super) fn text(&self, error: &program::Error) -> String {
-        if let program::Error::Evaluation { error: failure, .. } = error
-            && let Some(report) = diagnostic::located(failure)
-        {
-            self.0.borrow_mut().get_or_insert(report);
+        if let program::Error::Evaluation { error: failure, .. } = error {
+            self.located(failure);
         }
         error.to_string()
+    }
+
+    /// [`Caught::text`] of a failure the program's code gave outside a
+    /// call of an item, as a runtime iterator's step does.
+    pub(super) fn failure(&self, error: &crate::EvalAltResult) -> String {
+        self.located(error);
+        error.to_string()
+    }
+
+    fn located(&self, failure: &crate::EvalAltResult) {
+        if let Some(report) = diagnostic::located(failure) {
+            self.0.borrow_mut().get_or_insert(report);
+        }
     }
 
     /// `reply`, or, for a failed reply of a call that caught a panic, that

@@ -151,7 +151,7 @@ mod trait_instance_tests;
 
 use super::borrowck::{
     self,
-    record::{Matched, ScopeEnd},
+    record::{self, Matched, ScopeEnd},
 };
 use super::{
     imports::Wanted, intrinsic, item, type_ref, BindingSite, Callee, Candidate, Cloning, Error,
@@ -486,6 +486,13 @@ struct Parser<'a> {
     /// `fn`), by their span, and the locals declared with one, by their
     /// declaration (T179).
     shared_call_fns: BTreeSet<Span>,
+    /// Calls and field reads whose value is a boxed `FnMut` or `FnOnce`,
+    /// which a call borrows `&mut` through the box, by their span, and the
+    /// locals declared with one, by their declaration (T188).
+    mutable_call_fns: BTreeSet<Span>,
+    /// The `dyn Fn`, `dyn FnMut` and `dyn FnOnce` written in a body's types,
+    /// by where their trait is, with how a call borrows each (T188).
+    written_fn_traits: BTreeMap<Position, call::Borrow>,
     closure_count: usize,
     lifted: Vec<closure::Lifted>,
     /// Parameter types of the host callable each call argument fills.
@@ -1103,6 +1110,8 @@ impl<'a> Parser<'a> {
             once_closures: BTreeMap::new(),
             copied_state: BTreeMap::new(),
             shared_call_fns: BTreeSet::new(),
+            mutable_call_fns: BTreeSet::new(),
+            written_fn_traits: BTreeMap::new(),
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),

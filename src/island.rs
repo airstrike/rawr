@@ -795,9 +795,19 @@ pub fn __rawr_island_next_v1(handle: u64, natives: &mut Natives) -> Vec<u8> {
                     .invoke_item(function, arguments)
                     .map_err(|error| caught.text(&error))
             };
+            let (authority, runtime) = catalog.shared();
+            let step = |value: &mut Dynamic| {
+                authority
+                    .next_item(value, runtime.clone())
+                    .map_err(|error| caught.failure(&error))
+            };
+            let pull = Pull {
+                invoke: &invoke,
+                step: &step,
+            };
             let reply = current
                 .calls
-                .next(handle, catalog.authority().model(), &invoke, natives)
+                .next(handle, catalog.authority().model(), &pull, natives)
                 .unwrap_or_else(|message| failure(&message));
             return caught.reply(reply);
         }
@@ -812,8 +822,18 @@ pub fn __rawr_island_next_v1(handle: u64, natives: &mut Natives) -> Vec<u8> {
                 .invoke_bound(function, arguments, shared.runtime.clone())
                 .map_err(|error| caught.text(&error))
         };
+        let step = |value: &mut Dynamic| {
+            shared
+                .authority
+                .next_item(value, shared.runtime.clone())
+                .map_err(|error| caught.failure(&error))
+        };
+        let pull = Pull {
+            invoke: &invoke,
+            step: &step,
+        };
         let reply = calls
-            .next(handle, shared.authority.model(), &invoke, natives)
+            .next(handle, shared.authority.model(), &pull, natives)
             .unwrap_or_else(|message| failure(&message));
         return caught.reply(reply);
     }
@@ -1501,6 +1521,13 @@ struct Call<'a> {
 
 /// How a generation invokes one of its functions with its arguments.
 type Invoke<'a> = dyn Fn(&item::Value, &mut [Dynamic]) -> Result<Dynamic, String> + 'a;
+
+/// How native code's pull of a program iterator runs the program: a marked
+/// type's `next` by `invoke`, and a runtime iterator's step by `step`.
+struct Pull<'a> {
+    invoke: &'a Invoke<'a>,
+    step: &'a (dyn Fn(&mut Dynamic) -> Result<Option<Dynamic>, String> + 'a),
+}
 
 impl crate::future::Host for Current {
     fn invoke(
@@ -2790,11 +2817,11 @@ impl Calls {
         &self,
         handle: u64,
         model: &program::model::Model,
-        invoke: &Invoke<'_>,
+        pull: &Pull<'_>,
         natives: &mut Natives,
     ) -> Result<Vec<u8>, String> {
         let mut value = take_kept(handle, Borrow::Mutable)?;
-        let item = self.pull(&mut value, invoke);
+        let item = self.pull(&mut value, pull);
         put_kept(handle, Borrow::Mutable, value);
         let mut reply = vec![0];
         match item? {
@@ -2811,13 +2838,18 @@ impl Calls {
         Ok(reply)
     }
 
-    /// The next item of `value`, the program's iterator: a kept iterator
-    /// of the program's is the array of the items it has left (`Ty::Iter`),
-    /// and a marked type that implements `Iterator` runs its own `next`.
-    fn pull(&self, value: &mut Dynamic, invoke: &Invoke<'_>) -> Result<Option<Dynamic>, String> {
+    /// The next item of `value`, the program's iterator: a runtime iterator
+    /// (`lower_nominal::lazy`) runs its chain on to its next item, an array
+    /// a native operation made gives its first, and a marked type that
+    /// implements `Iterator` runs its own `next`.
+    fn pull(&self, value: &mut Dynamic, pull: &Pull<'_>) -> Result<Option<Dynamic>, String> {
+        if crate::resolve::lower_nominal::lazy::is(value) {
+            return (pull.step)(value);
+        }
         if let Ok(mut items) = value.as_array_mut() {
             return Ok((!items.is_empty()).then(|| items.remove(0)));
         }
+        let invoke = pull.invoke;
         let next = program::model::island::owner_path(value)
             .and_then(|owner| self.items.get(&(true, format!("{owner}::Iterator::next"))))
             .ok_or_else(|| {

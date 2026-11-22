@@ -2133,6 +2133,20 @@ impl Type {
             ))
     }
 
+    /// Whether this is a boxed function type whose call borrows it `&mut`
+    /// through the box: `Box<dyn FnMut(..)>` or `Box<dyn FnOnce(..)>`.
+    pub(crate) fn is_boxed_mutable_call_fn(&self) -> bool {
+        self.pointer_element().is_some_and(|(pointer, element)| {
+            pointer == "Box"
+                && matches!(element, Type::Path(path)
+                if path.target == Target::Builtin
+                    && matches!(
+                        path.name.as_str(),
+                        item::type_ref::FN_MUT_TYPE | item::type_ref::FN_ONCE_TYPE
+                    ))
+        })
+    }
+
     /// The inputs and output of a function type `fn(A, ..) -> B`.
     pub(crate) fn fn_signature(&self) -> Option<(Vec<&Type>, &Type)> {
         let Type::Path(path) = self else {

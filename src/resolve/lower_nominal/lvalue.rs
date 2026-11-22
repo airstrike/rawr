@@ -3,7 +3,7 @@
 
 use super::op::{Op, PreludeOp};
 use super::ty::Ty;
-use super::{origin, BindingKind, ParsedExpr, Parser};
+use super::{origin, record, BindingKind, ParsedExpr, Parser};
 use crate::resolve::Error;
 use crate::tokenizer::Token;
 use crate::{type_def, ImmutableString, Position, Span};
@@ -453,6 +453,27 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
         self.apply_binary(operator, None, target, replacement)
+    }
+
+    /// How `place op= operand` changes a place of type `place`: through
+    /// the operator impl `operator_impl` calls, for a program type and for
+    /// a number whose operand is a program or crate type, which borrows the
+    /// place `&mut` as `AddAssign::add_assign(&mut place, operand)` does;
+    /// else as the builtin operator reads and writes it.
+    pub(super) fn compound_kind(&self, place: &Ty, operand: &Ty) -> record::Assignment {
+        let overloaded = match self.inference.resolve(place) {
+            Ty::Script(..) => true,
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char => matches!(
+                self.inference.resolve(operand),
+                Ty::Script(..) | Ty::Host { .. }
+            ),
+            _ => false,
+        };
+        if overloaded {
+            record::Assignment::Overloaded
+        } else {
+            record::Assignment::Compound
+        }
     }
 
     /// `place = replacement;` for a mutable local, element or field.

@@ -493,10 +493,13 @@ impl<'a> Parser<'a> {
             return;
         }
         let (source, item) = match self.inference.resolve(&argument.ty) {
-            Ty::Iter(item, _, _) => (
-                self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]),
-                item,
-            ),
+            // A runtime iterator's items are made as it is stepped.
+            Ty::Iter(..) => {
+                let Some((source, item)) = self.collected_items(argument) else {
+                    return;
+                };
+                (source, Box::new(item))
+            }
             ty @ Ty::Host { .. } if self.type_implements(&ty, "Iterator") => {
                 let Some((source, item)) = self.collected_items(argument) else {
                     return;

@@ -44,7 +44,8 @@ pub(crate) struct Machine {
 }
 
 /// What becomes of a body's suspended frames.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Frames {
     /// Each resumes once, as an async body's does: a `for` loop's cursor
     /// holds only what it has left to walk.
@@ -910,6 +911,22 @@ impl Frame {
 
     fn take(&self) -> Option<Saved> {
         crate::func::waited_write(&self.0).take()
+    }
+
+    /// Visit each value the suspended body holds: its locals, and what each
+    /// `for` loop it is part way through walks, when the loop keeps it.
+    pub(crate) fn for_each_local(&self, visit: &mut dyn FnMut(&mut Dynamic)) {
+        let mut saved = crate::func::waited_write(&self.0);
+        for (_, _, value) in saved.iter_mut().flat_map(|saved| &mut saved.locals) {
+            match value.read_lock::<Cursor>().map(|cursor| cursor.clone()) {
+                Some(cursor) => {
+                    if let Some(walked) = &mut crate::func::waited_write(&cursor.0).walked {
+                        visit(walked);
+                    }
+                }
+                None => visit(value),
+            }
+        }
     }
 
     /// A frame of its own at the same point, with copies of its locals: a
