@@ -19,9 +19,14 @@ use crate::{ImmutableString, Position, Span};
 use std::collections::BTreeMap;
 
 /// The traits a bound names that tell a body nothing of its parameter's
-/// type: markers, and the callable and iterator traits whose values rawr
-/// runs by what they are at run time (D399, D1114).
+/// type: markers, the callable and iterator traits whose values rawr runs
+/// by what they are at run time (D399, D1114), and the borrowing
+/// conversions, whose view the bound's target types.
 const UNDIRECTED: &[&str] = &[
+    "AsRef",
+    "AsMut",
+    "Borrow",
+    "BorrowMut",
     "Sized",
     "Send",
     "Sync",
@@ -63,10 +68,10 @@ pub(super) fn directs(generic: &item::Generic) -> bool {
                 | Kind::Ord
                 | Kind::Hash
         )
-    }) || generic
-        .traits
-        .iter()
-        .any(|name| !UNDIRECTED.contains(&name.text.as_str()))
+    }) || generic.traits.iter().any(|name| {
+        let last = name.text.rsplit("::").next().unwrap_or_default();
+        !UNDIRECTED.contains(&last)
+    })
 }
 
 /// The template `function` at `types`, the types of its `parameters`: its
@@ -707,12 +712,44 @@ impl Parser<'_> {
                 continue;
             };
             written.push((Token::LessThan, *at));
-            written.push((token.clone(), *at));
+            written.push((self.forwarded_self(token, &bound), *at));
             written.push((Token::As, *at));
             written.extend(lexed(engine, &bound, *at));
             written.push((Token::GreaterThan, *at));
         }
         self.input = written.into_iter().peekable();
+    }
+
+    /// The Self type `<T as bound>::item` names for the parameter `token`:
+    /// `T` itself, or where `T` is a reference whose impl of the bound's
+    /// trait forwards each item to its referent's (`item::ReferenceForward`),
+    /// the referent, under a name only the instance reads.
+    fn forwarded_self(&mut self, token: &Token, bound: &str) -> Token {
+        let Token::Identifier(name) = token else {
+            return token.clone();
+        };
+        let trait_name = bound.split('<').next().unwrap_or(bound);
+        let Some(Ty::Reference { mutable, target }) = self.trait_parameters.get(name.as_str())
+        else {
+            return token.clone();
+        };
+        let (mutable, target) = (*mutable, (**target).clone());
+        let forwards = self
+            .models
+            .traits
+            .get(trait_name)
+            .is_some_and(|(_, declared)| {
+                declared
+                    .reference_forwards
+                    .iter()
+                    .any(|forward| forward.mutable == mutable)
+            });
+        if !forwards {
+            return token.clone();
+        }
+        let referent: ImmutableString = format!("__rawr_referent_{name}").into();
+        self.trait_parameters.insert(referent.clone(), target);
+        Token::Identifier(Box::new(referent.as_str().into()))
     }
 
     /// Whether `T::member`, `T` the instance's type for `parameter`, would
