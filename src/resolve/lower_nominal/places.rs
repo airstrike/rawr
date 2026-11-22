@@ -916,6 +916,96 @@ impl Parser<'_> {
         self.optional_element(&held.place, &held.element, &slot, locate, expression)
     }
 
+    /// `v.iter_mut()` kept past its statement or given to an adaptor (D1113
+    /// stage 3): an iterator over the reference to each element of `value`
+    /// (`view.rs`), so a write through any item, wherever it goes, reaches
+    /// the element. `end` is where the call ends.
+    pub(super) fn kept_iter_mut(
+        &mut self,
+        value: &ParsedExpr,
+        element: Ty,
+        end: Position,
+    ) -> Result<ParsedExpr, Error> {
+        let expression = span(value.span.start(), end);
+        let elements = self.view_call(value, crate::eval::view::ELEMENTS, "()".into())?;
+        let item = Ty::Reference {
+            mutable: true,
+            target: Box::new(element),
+        };
+        let elements = self.operator_expr(
+            elements,
+            Ty::Array {
+                element: Box::new(item.clone()),
+                kind: sequence::Kind::Vec,
+            },
+            expression,
+        );
+        Ok(self.array_iterator(&elements, item, end))
+    }
+
+    /// `let it = v.iter_mut();` bound to `name`, which `held` holds: the
+    /// index its `next()` steps (`step_iter_mut`) while each use of `name`
+    /// before its block ends is `name.next()`, else the iterator over each
+    /// element's reference (`kept_iter_mut`), which `value` becomes.
+    pub(super) fn bind_iter_mut(
+        &mut self,
+        name: &ImmutableString,
+        mut held: HeldIterMut,
+        declaration: Span,
+        value: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        if self.stepped_only(name) {
+            held.declaration = declaration;
+            self.held_iter_mut.insert(name.clone(), held);
+            return Ok(());
+        }
+        self.held_iter_mut.remove(name);
+        *value = self.kept_iter_mut(&held.place, held.element, value.span.end())?;
+        Ok(())
+    }
+
+    /// Whether each use of the local `name` ahead, before its block ends,
+    /// is `name.next()`, none of them a `let` statement's value: two items
+    /// `let`s keep are two places of one collection, which only references
+    /// hold apart.
+    fn stepped_only(&self, name: &str) -> bool {
+        let mut ahead = self.input.clone();
+        let mut depth = 0usize;
+        let mut previous = Token::EOF;
+        // Whether a `let` statement (not `if let` or `while let`) is read.
+        let mut statement = false;
+        while let Some((token, _)) = ahead.next() {
+            match &token {
+                Token::EOF => return true,
+                Token::LeftBrace | Token::MapStart => depth += 1,
+                Token::RightBrace => match depth.checked_sub(1) {
+                    Some(outer) => depth = outer,
+                    None => return true,
+                },
+                Token::Let => {
+                    statement = !matches!(previous, Token::If | Token::While | Token::And);
+                }
+                Token::SemiColon => statement = false,
+                Token::Identifier(identifier)
+                    if identifier.as_str() == name
+                        && !matches!(previous, Token::Period | Token::DoubleColon) =>
+                {
+                    let mut step = ahead.clone();
+                    let stepped = matches!(step.next(), Some((Token::Period, _)))
+                        && matches!(step.next(), Some((Token::Identifier(member), _))
+                            if member.as_str() == "next")
+                        && matches!(step.next(), Some((Token::Unit, _)));
+                    if !stepped || statement && previous == Token::Equals {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+            previous = token;
+        }
+        true
+    }
+
     /// `v.iter_mut().find(f)`: `Some` of the first element's place `f`
     /// holds for, or `None` (`optional_element`).
     fn parse_iter_mut_find(
@@ -1091,18 +1181,19 @@ impl Parser<'_> {
             });
             return Ok(self.operator_expr("0".into(), ty, expression));
         }
-        if !(tokens[0] == Token::Unit
-            && tokens[1] == Token::Period
+        if tokens[0] != Token::Unit {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "`iter_mut` with arguments".into(),
+                source: member_span,
+            });
+        }
+        if !(tokens[1] == Token::Period
             && matches!(&tokens[2], Token::Identifier(name) if name.as_str() == "for_each")
             && tokens[3] == Token::LeftParen
             && tokens[4] == Token::Pipe)
         {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "`iter_mut()` other than `for x in v.iter_mut()` or \
-                            `v.iter_mut().for_each(|x| ..)`"
-                    .into(),
-                source: member_span,
-            });
+            let (_, end) = self.next();
+            return self.kept_iter_mut(value, element, end);
         }
         self.require_mutable_binding(&owner, value.span)?;
         for _ in 0..5 {
@@ -1400,6 +1491,10 @@ impl Parser<'_> {
         proof: &mut NominalPattern,
         bindings: &[PatternBinding],
     ) -> Result<Option<PlacePattern>, Error> {
+        // A value holding stored `&mut`s gives its references by value.
+        if self.holds_stored(subject) {
+            return Ok(None);
+        }
         // `o.as_mut()` lends its place as `&mut o` does (`lend_place`).
         let lent = match &subject.lvalue {
             None => self.lent_places.get(&subject.span).cloned(),
@@ -1871,10 +1966,24 @@ fn mark_parts(
 /// option's `Some` value: what a script function's `&mut` output names
 /// below the place it was called on.
 pub(super) fn path_invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
-    let path = args[1]
+    let mut path = args[1]
         .as_array_ref()
         .map_err(|_| invariant("a place's path is not an array at runtime"))?
         .clone();
+    // A path that starts at a handle (a stored `&mut` the function gave,
+    // D1113) reaches its place below the handle, not the receiver.
+    if path.first().is_some_and(Dynamic::is_shared) {
+        let mut handle = path.remove(0);
+        let mut guard = handle
+            .write_lock::<Dynamic>()
+            .ok_or_else(|| invariant("a stored `&mut`'s place is held"))?;
+        let mut path = Dynamic::from_array(path);
+        let mut forwarded: Vec<&mut Dynamic> = vec![&mut *guard, &mut path];
+        if let Some(value) = args.get_mut(2) {
+            forwarded.push(value);
+        }
+        return path_invoke(op, &mut forwarded);
+    }
     if matches!(op, PreludeOp::PathSet) {
         let value = args[2].take();
         // A native place is stored into where it is (D651): its own
@@ -1986,7 +2095,10 @@ impl Parser<'_> {
         mut value: ParsedExpr,
         block_like: bool,
     ) -> Result<ParsedExpr, Error> {
-        if !self.place_output || !self.closures.is_empty() {
+        if !self.place_output {
+            return Ok(self.chosen_place(value, block_like));
+        }
+        if !self.closures.is_empty() {
             return Ok(value);
         }
         let Some(output) = self.place_output(&value.ty) else {
@@ -2131,6 +2243,13 @@ impl Parser<'_> {
             construct: construct.to_string().into(),
             source: at,
         };
+        // `&mut *self.a` of a `&mut` field: the reference's own path, from
+        // its handle, which the caller reaches as it is (`stored.rs`).
+        if Self::stored_place(place)
+            && let Some(located) = self.place_located(place)
+        {
+            return Ok(located.surrounded("(", ")"));
+        }
         if place.binding().as_str() != "self" {
             return Err(unsupported(
                 "returning a `&mut` borrowed from a value other than `self` (or a free \
@@ -2271,6 +2390,9 @@ impl Parser<'_> {
             None => None,
         };
         let Some(lvalue) = lvalue else {
+            if let Some(held) = self.held_receiver(value) {
+                return Ok(held);
+            }
             return Err(Error::UnsupportedNominalSyntax {
                 construct: "a call returning `&mut` on a value that is not a local, a field \
                             or an element"
@@ -2280,6 +2402,47 @@ impl Parser<'_> {
         };
         self.require_mutable_binding(lvalue.binding(), value.span)?;
         Ok(lvalue)
+    }
+
+    /// The place of `value`, a temporary of its own (`Config::new()` in
+    /// `Config::new().time().build()`) that a call returning `&mut` is
+    /// made on: a hidden local of the statement holds it, given the value
+    /// where the place is first reached, as rustc keeps the temporary to
+    /// the statement's end (T2074). `None` for a reference, whose referent
+    /// is elsewhere, or a value in an async body.
+    fn held_receiver(&mut self, value: &ParsedExpr) -> Option<Lvalue> {
+        if self.in_async_body()
+            || matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { .. } | Ty::Unknown
+            )
+        {
+            return None;
+        }
+        let held: ImmutableString = self.temporary("receiver").into();
+        self.field_entries.push((
+            origin::Fragment::plain(format!("let {held} = (); ")),
+            origin::Fragment::default(),
+        ));
+        self.bindings.insert(
+            held.clone(),
+            Binding {
+                ty: value.ty.clone(),
+                mutable: true,
+                available: true,
+                declaration: value.span,
+                kind: BindingKind::Local,
+            },
+        );
+        let mut setup = origin::Fragment::plain(format!("{held} = "));
+        setup.push(value.rendered_source());
+        setup.push_text(";");
+        Some(Lvalue::Nested(Box::new(lvalue::Nested {
+            binding: held.clone(),
+            base: origin::Fragment::plain(held.as_str()),
+            steps: vec![PlaceStep::Setup(setup)],
+            ty: value.ty.clone(),
+        })))
     }
 
     /// The value of `call`, a call on the place `receiver` (written as

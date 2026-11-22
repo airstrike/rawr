@@ -39,6 +39,7 @@ pub(super) const HELD: [Held; 4] = [
             capability::Kind::Debug,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     }),
     Held::Value(held::Value {
@@ -257,6 +258,11 @@ fn error(message: impl Into<String>) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into().into(), Position::NONE).into()
 }
 
+/// An error's message: a `String`, a `&str` or a `Cow<str>`'s text.
+fn message(value: &Dynamic) -> Dynamic {
+    crate::cow::text(value.clone())
+}
+
 fn read_value<T: Clone + 'static>(
     value: &Dynamic,
     expected: &str,
@@ -300,11 +306,11 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
     );
     bind("io::Error::new", |args| {
         let kind = read_value::<ErrorKind>(args[0], "ErrorKind")?;
-        let text = read_value::<ImmutableString>(args[1], "String")?;
+        let text = read_value::<ImmutableString>(&message(args[1]), "String")?;
         Ok(made(std::io::Error::new(kind, text.to_string())))
     });
     bind("io::Error::other", |args| {
-        let text = read_value::<ImmutableString>(args[0], "String")?;
+        let text = read_value::<ImmutableString>(&message(args[0]), "String")?;
         Ok(made(std::io::Error::other(text.to_string())))
     });
     bind("io::Error::from", |args| {

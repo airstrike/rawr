@@ -1087,7 +1087,7 @@ pub fn await_main(future: crate::future::Future) {
 }
 
 /// The Rawr `main`'s future as the native entry awaits it: its status is
-/// the process's, as `main`'s output gives Rust's (0, or 1 for an `Err`),
+/// the process's, as `main`'s output gives Rust's (`program::Termination`),
 /// and 101 when it fails.
 #[unsafe(no_mangle)]
 pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Output = i32> + Send>> {
@@ -1106,13 +1106,13 @@ pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Outp
         let _entered = crate::future::enter();
         crate::future::drain();
         script.poll_output(cx).map(|output| match output {
-            Ok(value) => match value.try_cast::<Result<Dynamic, Dynamic>>() {
-                Some(Err(error)) => {
-                    main_stderr(&format!("Error: {error:?}\n"));
-                    1
+            Ok(value) => {
+                let ended = crate::program::Termination::of(value);
+                if let Some(report) = ended.report() {
+                    main_stderr(&format!("{report}\n"));
                 }
-                _ => 0,
-            },
+                i32::from(ended.status())
+            }
             Err(error) => {
                 main_stderr(&main_panic(&error));
                 101
@@ -1744,8 +1744,8 @@ fn main_text(text: &str) -> Option<String> {
 ///
 /// - A script type that was removed while a live value of it is held:
 ///   the running program's state, a value native code holds as a handle,
-///   a pending task or a captured closure (#1746). A static of a script
-///   type holds none: each read is its initializer (D862). One whose
+///   a pending task or a captured closure (#1746), or a static the value
+///   its first read made (#2519). One whose
 ///   fields or variants changed is left to [`admit`], which rewrites its
 ///   live values in place or says why it can't (#2026), and checks again
 ///   with the callables native code holds. Its derives aren't its
@@ -1766,15 +1766,24 @@ pub fn refusal(
     candidate: &crate::reload::Candidate,
 ) -> Option<String> {
     // A type a live value holds that the save changed the fields of is
-    // left to the admission, which rewrites the value (#2026).
-    if let Some(reason) = departure(
-        current.schemas(),
-        candidate.schemas(),
-        |identity, schema| {
-            (schema.is_none() && crate::types::nominal::census::holds(identity))
-                .then_some(Hold::Value)
+    // left to the admission, which rewrites the value (#2026). A static the
+    // candidate doesn't declare alike is a new one, and holds no value
+    // that lives on (#2519).
+    let departed = crate::place::statics::apart(
+        || candidate.kept_statics(),
+        || {
+            let reason = departure(
+                current.schemas(),
+                candidate.schemas(),
+                |identity, schema| {
+                    (schema.is_none() && crate::types::nominal::census::holds(identity))
+                        .then_some(Hold::Value)
+                },
+            );
+            (reason, crate::place::statics::After::Restore)
         },
-    ) {
+    );
+    if let Some(reason) = departed {
         return Some(reason);
     }
     if !crate::future::admits() {
@@ -1954,50 +1963,67 @@ pub fn admit(bootstrap: Bootstrap) -> Admission {
     let next = Current::new(bootstrap);
     let mut migrated = None;
     if let Some(running) = CURRENT.with(|slot| slot.borrow().clone()) {
-        let kept = crate::future::kept();
-        let mut changed = Vec::new();
-        let old = running.bootstrap.generation().schemas();
-        let reason = departure(
-            old,
-            next.bootstrap.generation().schemas(),
-            |identity, schema| {
-                let makes = kept.iter().any(|(function, program)| {
-                    !crate::future::Remote::rebinds(&*next.shared, function, program.as_ref())
-                        && program.makes(identity).is_some_and(|made| {
-                            schema.is_none_or(|schema| !made.same_representation(schema))
-                        })
-                });
-                if !crate::types::nominal::census::holds(identity) {
-                    return makes.then_some(Hold::Code);
-                }
-                // Old code could make the old shape again after a rewrite.
-                if schema.is_none() || makes {
-                    return Some(Hold::Value);
-                }
-                changed.push(identity.clone());
-                None
+        // A static `next` doesn't declare alike is a new one: the old one's
+        // value holds no type, and drops once `next` is admitted (#2519).
+        let admitted = crate::place::statics::apart(
+            || next.bootstrap.catalog().authority().kept_statics(),
+            || match admission(&running, &next) {
+                Ok(report) => (Ok(report), crate::place::statics::After::Release),
+                Err(reason) => (Err(reason), crate::place::statics::After::Restore),
             },
         );
-        if let Some(reason) = reason {
-            return Admission::Refused(reason);
-        }
-        let authority = next.bootstrap.catalog().authority();
-        if let Some(reason) = suspension(
-            |key| authority.machine_body(key),
-            |key| authority.in_async_fn(key),
-        ) {
-            return Admission::Refused(reason);
-        }
-        if !changed.is_empty() {
-            match migrate(&running, &next, &changed) {
-                Ok(report) => migrated = report,
-                Err(reason) => return Admission::Refused(reason),
-            }
+        match admitted {
+            Ok(report) => migrated = report,
+            Err(reason) => return Admission::Refused(reason),
         }
         replaced(&running, &next);
     }
     install(next);
     Admission::Admitted(migrated)
+}
+
+/// Whether `next` may replace `running`: `Ok` with what the migration of
+/// the live values of a type whose fields changed did, or `Err` with why
+/// it can't replace it.
+fn admission(running: &Current, next: &Current) -> Result<Option<String>, String> {
+    let kept = crate::future::kept();
+    let mut changed = Vec::new();
+    let old = running.bootstrap.generation().schemas();
+    let reason = departure(
+        old,
+        next.bootstrap.generation().schemas(),
+        |identity, schema| {
+            let makes = kept.iter().any(|(function, program)| {
+                !crate::future::Remote::rebinds(&*next.shared, function, program.as_ref())
+                    && program.makes(identity).is_some_and(|made| {
+                        schema.is_none_or(|schema| !made.same_representation(schema))
+                    })
+            });
+            if !crate::types::nominal::census::holds(identity) {
+                return makes.then_some(Hold::Code);
+            }
+            // Old code could make the old shape again after a rewrite.
+            if schema.is_none() || makes {
+                return Some(Hold::Value);
+            }
+            changed.push(identity.clone());
+            None
+        },
+    );
+    if let Some(reason) = reason {
+        return Err(reason);
+    }
+    let authority = next.bootstrap.catalog().authority();
+    if let Some(reason) = suspension(
+        |key| authority.machine_body(key),
+        |key| authority.in_async_fn(key),
+    ) {
+        return Err(reason);
+    }
+    if changed.is_empty() {
+        return Ok(None);
+    }
+    migrate(running, next, &changed)
 }
 
 /// Note that `next` replaces `running`, for a marked `main`'s own frame

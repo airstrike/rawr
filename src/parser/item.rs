@@ -1492,8 +1492,9 @@ fn parse_type_alias(
     })
 }
 
-/// `static NAME: T = value;`: an immutable static is read as a `const`,
-/// whose value it always has. A `static mut` is not supported yet.
+/// `static NAME: T = value;`: an immutable static, parsed as a `const` is,
+/// whose one value its first read makes and every read shares (#2519). A
+/// `static mut` is not supported yet.
 fn parse_static(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
@@ -1508,25 +1509,20 @@ fn parse_static(
         ))
         .into_err(*position));
     }
-    {
-        let name = parse_name(input, "after 'static'")?;
-        // Read as a `const`: a move out of it (rustc's E0507) is left to
-        // rustc.
-        #[cfg(test)]
-        crate::resolve::borrowck::note_unlowered("a `static` item, read as a `const`", name.span);
-        parse_const_rest(
-            input,
-            crate::item::Header {
-                attributes,
-                visibility,
-                span: Span::NONE,
-                scope: None,
-            },
-            start,
-            name,
-        )
-        .map(crate::item::Parsed::Function)
-    }
+    let name = parse_name(input, "after 'static'")?;
+    let mut function = parse_const_rest(
+        input,
+        crate::item::Header {
+            attributes,
+            visibility,
+            span: Span::NONE,
+            scope: None,
+        },
+        start,
+        name,
+    )?;
+    function.static_item = true;
+    Ok(crate::item::Parsed::Function(function))
 }
 
 /// The rest of a named `const` item after `const`: `const NAME: T = v;`,
@@ -3426,6 +3422,7 @@ fn parse_function_rest(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
+            static_item: false,
             asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
@@ -3450,6 +3447,7 @@ fn parse_function_rest(
         body_span,
         body_syntax,
         constant: false,
+        static_item: false,
         asynchronous: false,
         span,
     })
@@ -4447,6 +4445,7 @@ fn parse_associated_const(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: true,
+            static_item: false,
             asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
@@ -4498,6 +4497,7 @@ fn finish_associated_const(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        static_item: false,
         asynchronous: false,
         span,
     })
@@ -4546,6 +4546,7 @@ fn parse_const_rest(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        static_item: false,
         asynchronous: false,
         span,
     })
@@ -5503,34 +5504,35 @@ fn erase_fn_bounds(
     output: &mut Option<type_ref::Type>,
     outlives: &[(crate::item::Name, crate::item::Name)],
 ) {
-    // `I: Iterator` with no `Item` equality: its item is a lifted
-    // parameter, `<I as Iterator>::Item`, which the call infers.
+    // `I: Iterator` with no `Item = T`: `I::Item` is a parameter of its
+    // own, as a `where I::Item: ..` clause lifts it.
     for index in 0..generics.len() {
-        let generic = &generics[index];
-        let Some(trait_name) = generic.bounds.iter().find_map(|bound| {
-            let (last, prefix) = bound.segments.split_last()?;
-            iterator_trait(&last.name.text)?;
-            prefix
-                .iter()
-                .all(|module| matches!(module.name.text.as_str(), "std" | "core" | "iter"))
-                .then(|| last.name.clone())
+        let Some(bound) = generics[index].bounds.iter().find(|bound| {
+            bound.segments.split_last().is_some_and(|(last, prefix)| {
+                iterator_trait(&last.name.text).is_some()
+                    && prefix
+                        .iter()
+                        .all(|module| matches!(module.name.text.as_str(), "std" | "core" | "iter"))
+            })
         }) else {
             continue;
         };
-        if generic
+        let trait_name = bound.segments[bound.segments.len() - 1].name.clone();
+        let named = generics[index]
             .projections
             .iter()
-            .any(|(owner, item, _)| owner.text == trait_name.text && item.text == "Item")
-        {
-            continue;
+            .any(|(owner, associated, _)| {
+                owner.text == trait_name.text && associated.text == "Item"
+            });
+        if !named {
+            let item = crate::item::Name {
+                text: "Item".into(),
+                span: bound.span,
+            };
+            let base = generics[index].name.clone();
+            associated_parameter(generics, &base, Some(trait_name), &item)
+                .expect("`associated_parameter` fails only for a bound naming no trait");
         }
-        let base = generic.name.clone();
-        let item = crate::item::Name {
-            text: "Item".into(),
-            span: trait_name.span,
-        };
-        // The base is declared and the trait named, so a parameter is lifted.
-        let _ = associated_parameter(generics, &base, Some(trait_name), &item);
     }
     generics.retain(|generic| {
         // `I: Iterator<Item = T>` (or `IntoIterator`): `impl Iterator<Item =
@@ -6614,7 +6616,7 @@ fn parse_private_function(
     )?)))
 }
 
-fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
+pub(super) fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
     use crate::item::BodyTokenKind as Kind;
 
     let (kind, width) = match token {

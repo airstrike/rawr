@@ -3,6 +3,10 @@
 //! its site runs and keeps for the program's life, at a stable `'static`
 //! address, as a registry that keeps a callsite by its address assumes.
 //!
+//! A static the interpreter holds, of a body or of the program, is kept the
+//! same way: its initializer runs at its first read, and every read, on
+//! every thread, shares the one value it made (#2519).
+//!
 //! A static is found by its key: its site and the fingerprint of its
 //! block's declarations. A new generation that declares it alike reuses
 //! the place and never runs its initializer again. A changed declaration
@@ -31,6 +35,9 @@ enum State {
     Reserved { memory: Option<Memory> },
     /// Written: its place, which marked code reads.
     Settled(Place),
+    /// Written: a value the interpreter holds, whose copies share what a
+    /// `Mutex` or a `RefCell` in it holds.
+    Kept(Dynamic),
 }
 
 /// A written static: its value, reached where it is and never moved.
@@ -198,6 +205,88 @@ pub fn slot(key: &str) -> Slot {
         .clone()
 }
 
+/// How every key of a static the interpreter keeps starts, which tells it
+/// apart in a generation's code from any other text (#2519).
+pub const KEPT: &str = "\u{1}kept:";
+
+/// What becomes of the kept statics a swap leaves out once `decide` in
+/// [`apart`] has decided.
+#[cfg(feature = "rust-import")]
+pub enum After {
+    /// The swap happens: their values drop.
+    Release,
+    /// The swap doesn't: they keep their values.
+    Restore,
+}
+
+/// `decide`'s answer, given while the census leaves out the values of the
+/// statics the interpreter keeps that the next generation doesn't declare
+/// (the keys `declared` doesn't give): a static whose initializer or type
+/// changed, or that was removed, is a new static, so no check of the
+/// values that live counts the old one's (D862, #2519). `declared` runs
+/// only when a static is kept. Each such static's reads wait while
+/// `decide` runs, and its value drops once `decide` says to release it.
+#[cfg(feature = "rust-import")]
+pub fn apart<R>(
+    declared: impl FnOnce() -> std::collections::BTreeSet<crate::ImmutableString>,
+    decide: impl FnOnce() -> (R, After),
+) -> R {
+    let kept: Vec<(Box<str>, Slot)> = statics()
+        .slots
+        .iter()
+        .filter(|(key, _)| key.starts_with(KEPT))
+        .map(|(key, slot)| (key.clone(), slot.clone()))
+        .collect();
+    if kept.is_empty() {
+        return decide().0;
+    }
+    let declared = declared();
+    let left: Vec<(Box<str>, Slot)> = kept
+        .into_iter()
+        .filter(|(key, _)| !declared.contains(&**key))
+        .collect();
+    let mut states: Vec<_> = left.iter().map(|(_, slot)| slot.state()).collect();
+    let mut aside = std::collections::HashMap::new();
+    for state in &mut states {
+        if let State::Kept(value) = &mut **state {
+            crate::program::model::migration::tally(value, &mut aside);
+        }
+    }
+    let (answer, after) = crate::types::nominal::census::aside(aside, decide);
+    if let After::Release = after {
+        let mut statics = statics();
+        for (key, slot) in &left {
+            if statics
+                .slots
+                .get(key)
+                .is_some_and(|kept| Shared::ptr_eq(&kept.0, &slot.0))
+            {
+                statics.slots.remove(key);
+            }
+        }
+        drop(statics);
+        let released: Vec<State> = states
+            .iter_mut()
+            .map(|state| std::mem::replace(&mut **state, State::Reserved { memory: None }))
+            .collect();
+        drop(states);
+        drop(released);
+    }
+    answer
+}
+
+/// The key of every static the interpreter keeps, for a test to leave the
+/// statics of the tests running beside it out of [`apart`].
+#[cfg(all(test, feature = "rust-import"))]
+pub(crate) fn kept() -> std::collections::BTreeSet<crate::ImmutableString> {
+    statics()
+        .slots
+        .keys()
+        .filter(|key| key.starts_with(KEPT))
+        .map(|key| (**key).into())
+        .collect()
+}
+
 /// The statics being built that refer to each other, for `change`.
 fn building<R>(change: impl FnOnce(&mut Building) -> R) -> R {
     change(&mut statics().building)
@@ -219,7 +308,25 @@ impl Slot {
     pub fn value(&self) -> Dynamic {
         match &*self.state() {
             State::Settled(place) => Dynamic::from(place.clone()),
+            State::Kept(value) => value.clone(),
             State::Reserved { .. } => Dynamic::from(self.clone()),
+        }
+    }
+
+    /// Keep `value`, the interpreter's, as the static's, and give the value
+    /// every read shares: `value`, or the one another thread's read of the
+    /// static kept first.
+    pub fn keep(&self, value: Dynamic) -> RawrResult {
+        let mut state = self.state();
+        match &*state {
+            State::Reserved { memory: None } => {
+                *state = State::Kept(value.clone());
+                Ok(value)
+            }
+            State::Kept(kept) => Ok(kept.clone()),
+            State::Reserved { memory: Some(_) } | State::Settled(_) => {
+                Err(failure("a static is written once"))
+            }
         }
     }
 
@@ -290,6 +397,7 @@ impl Slot {
                 drop(state);
                 lasting_place(&place)
             }
+            State::Kept(_) => None,
             State::Reserved { memory } => {
                 if memory.is_none() {
                     *memory = Some(Memory::of::<T>());

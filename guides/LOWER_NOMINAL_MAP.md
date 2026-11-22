@@ -71,6 +71,7 @@ Modules are named by their symbols; line numbers drift.
 | `path` | qualified paths | `parse_qualified_path`, `parse_owner_function`, `parse_imported_variant`, `parse_builtin_path` |
 | `trait_call` | trait method calls | `parse_std_trait_call`, `parse_typed_std_trait_call`, `parse_*trait*_call` |
 | `traits` | trait resolution | `select_impl`, `receiver_method`, `type_implements`, `check_associated_bounds` |
+| `std_scope` | std traits in scope at a method call | `std_trait_in_scope`, `unscoped_std_method` |
 | `generics` | generic instances and witnesses | `fresh_generics`, `finish_witnesses`, `bind_instance`, `instantiate` |
 | `operator` | operators and casts | `parse_binary`, `apply_binary`, `cast`, `operator_impl`, `index_impl` |
 | `compare` | comparisons | `equality`, `partial_ord_operator`, `parse_ord_method`, `compare_value`, `equal_value` |
@@ -79,10 +80,13 @@ Modules are named by their symbols; line numbers drift.
 | `construct` | values built by name | `parse_struct_fields`, `parse_array`, `parse_prelude_constructor`, `parse_imported_struct` |
 | `constant` | literals, constants, compile-time macros | `literal`, `literal_kind`, `constant_use`, `compile_time_text` |
 | `local_type` | types written in bodies | `parse_local_type`, `dyn_type`, `resolve_type`, `parse_alias_type` |
+| `stored` | a `&mut` stored in a value, and views of a collection's elements (D1113) | `parse_stored`, `store_borrow`, `store_argument`, `view_of`, `view_call`, `stored_holder`, `through_stored`, `holds_stored`, `stored_temporary`, `bind_stored`, `bind_stored_pattern`, `bind_kept`, `lend_kept` |
 | `format` | format strings and specs | `format::Spec`, `format::RawSpec`, `DebugSpec`, `parse_format`, `parse_print`, `parse_panic_macro`, `parse_dbg` |
 | `builtin_method` | builtin values' methods | `parse_string_method`, `parse_option_method`, `parse_result_method`, `vec_method`, `str_method`, `int_method` |
 | `time` | `Duration` and `Instant` | `parse_time_method`, `time_binary`, `time_method` |
 | `from_str` | `FromStr` and std's parse errors | `parse_str_parse`, `ParseError`, `parse_text` |
+| `error_object` | std's `dyn Error` | `ErrorObject`, `error_object`, `parse_error_member` |
+| `any_object` | std's `dyn Any` and the downcasts of it and of `dyn Error` | `any_object::Key`, `AnyObject`, `any_object`, `parse_downcast`, `downcast_key` |
 | `std_item` | std paths in bodies | `check_std_path`, `parse_mem_call`, `parse_size_of`, `std_alias` |
 | `names` | names in scope and their errors | `lexical_scope`, `unknown_variable`, `unknown_function` |
 | `emit` | emitting operations | `op_call`, `materialize`, `private_call`, `write_over` |
@@ -97,7 +101,7 @@ Modules are named by their symbols; line numbers drift.
 | `host_signature` | crate signatures at a call | `select_host_signature_form`, `instantiate_host_signature`, `instantiate_host_type` |
 | `host_call` | crate calls, values and fields | `parse_host_method`, `call_host_function`, `parse_host_macro`, `read_imported_field`, `ImportedContext` |
 | `collect` | crate uses a body collects | `collect_imported_call`, `crossing_slots` |
-| `dispatch` | function and method writers | the `write_*` dispatchers, `dispatch_host_method`, `copied_parameters` |
+| `dispatch` | function and method writers | the `write_*` dispatchers, `dispatch_host_method`, `copied_parameters`, `function_kept`, `method_kept` |
 | `relocate` | syntax tree rewriting | `relocate`, `rewrite_statements` |
 
 Existing modules (`places`, `borrows`, `drops`, `std_method`, `std_impl`,

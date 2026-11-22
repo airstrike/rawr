@@ -195,7 +195,12 @@ impl<'a> Parser<'a> {
                 _ if self.macro_definition_ahead() => self.parse_local_macro()?,
                 _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
-                _ => self.parse_statement()?,
+                // The method's output reaches its tail, as a function's
+                // does: each arm of a tail `match` coerces to it.
+                _ => {
+                    let expected = self.tail_expected(Some(definition.output()));
+                    self.parse_tail_expecting(Some(&expected))?;
+                }
             }
         }
 
@@ -574,6 +579,14 @@ impl<'a> Parser<'a> {
 
     pub(super) fn function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         self.check_function_signature(definition)?;
+        // Every thread shares a static, so its type is `Sync`.
+        if definition.body.static_item
+            && let Some(output) = &definition.output
+            && let Some(error) = self.unshared_static(&Ty::from_resolved(output), output.span())
+        {
+            return Err(error);
+        }
+        let kept = self.kept_static_key(definition);
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose
             // temporaries are promoted to `'static`.
@@ -593,6 +606,14 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         if let Some(output) = &definition.output {
             self.settle_opaque(output);
+        }
+        // A static the interpreter holds is one value, which its first read
+        // makes and every read shares (#2519).
+        if let Some(key) = kept {
+            let initializer = self.output.split_off(0).surrounded("{\n", "\n}");
+            let read = self.kept_static(&key, initializer);
+            self.output.push(read);
+            self.output.push_text("\n");
         }
         if !definition.body.constant && !definition.body.asynchronous {
             self.close_body_drops()?;

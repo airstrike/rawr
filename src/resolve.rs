@@ -34,13 +34,14 @@ pub(crate) use error::{
     RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,
-    Callee, Category, Chain, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead,
-    Lint, MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness,
-    OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent,
-    Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected, Unresolved,
+    Annotation, ArgumentMismatch, Arguments, Arms, Assignment, Beyond, BinaryOperation,
+    BindingSite, Bound, Boxing, Callee, Category, Chain, Cloning, Detail, Error, Expansion, Fields,
+    Import, Imported, Instead, Lint, MacroScope, Missing, MissingImpl, MoveCause, MovedPlace,
+    MutBinding, Opaqueness, OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private,
+    Receiver, Referent, Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected,
+    UnmetBound, UnmetBounds, Unresolved,
 };
-pub use imports::{Candidate, Imports};
+pub use imports::{Candidate, Direct, Imports};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {
@@ -1853,10 +1854,10 @@ fn resolve_imports(
             if let Some((side, previous)) = previous {
                 return Err(Error::duplicate(
                     binding.name.text.clone(),
-                    binding.name.span,
                     side.noun(),
                     import(side),
                     previous,
+                    true,
                 ));
             }
             if let item::Import::Type { definition, owner } = &binding.target {
@@ -3176,6 +3177,7 @@ fn resolve_function(
             lowering: item::Lowering::Unavailable,
             syntax: parsed.body_syntax,
             constant: parsed.constant,
+            static_item: parsed.static_item,
             asynchronous: parsed.asynchronous,
             text: None,
             elide: None,
@@ -3877,7 +3879,11 @@ fn resolve_methods(
                 };
                 let key = crate::item::Key::associated(owner.key(), member, kind);
                 let mut definition = method::Definition::new(id, key, owner, &function, source)
-                    .in_generic_impl(&item.generics, owner_arguments(&item.owner))
+                    .in_generic_impl(
+                        &item.generics,
+                        owner_arguments(&item.owner),
+                        item.owner.span(),
+                    )
                     .with_trait(name.text.clone())
                     .with_trait_arguments(arguments.clone());
                 if from_trait {
@@ -3972,7 +3978,11 @@ fn resolve_methods(
                 };
                 let key = crate::item::Key::associated(owner.key(), member, kind);
                 let definition = method::Definition::new(id, key, owner, function, shell.source)
-                    .in_generic_impl(&item.generics, owner_arguments(&item.owner))
+                    .in_generic_impl(
+                        &item.generics,
+                        owner_arguments(&item.owner),
+                        item.owner.span(),
+                    )
                     .with_trait(name.text.clone())
                     .with_trait_arguments(arguments.clone());
                 function.body.lowering = item::Lowering::NominalMethod(id);
@@ -4023,7 +4033,7 @@ fn resolve_methods(
                         .any(|ty| names_in_host_type(ty, &generic.name.text, false, host));
             }
             let definition = method::Definition::new(id, key, owner, function, shell.source)
-                .in_generic_impl(&generics, owner_arguments(&item.owner));
+                .in_generic_impl(&generics, owner_arguments(&item.owner), item.owner.span());
             function.body.lowering = item::Lowering::NominalMethod(id);
             methods.push(definition);
         }

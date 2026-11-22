@@ -565,15 +565,24 @@ impl<'a> Parser<'a> {
                 }
                 // rustc stops at a first segment nothing in scope names.
                 if self.unresolved_root(&first) {
-                    return Err(Error::UnknownType {
-                        name: first.clone(),
-                        reference: Span::new(
-                            name_span.start(),
-                            text_end(name_span.start(), &first),
-                        ),
-                        path: true,
-                        imports: Box::default(),
-                    });
+                    let mut start = name_span.start();
+                    let mut segments = name
+                        .split("::")
+                        .map(|segment| {
+                            let at = Span::new(start, text_end(start, segment));
+                            start = text_end(at.end(), "::");
+                            (ImmutableString::from(segment), at)
+                        })
+                        .collect::<Vec<_>>();
+                    // A value's path goes on past the type, as
+                    // `time::Duration::from_secs` does.
+                    let mut ahead = self.input.clone();
+                    if let (Some((Token::DoubleColon, _)), Some((Token::Identifier(next), at))) =
+                        (ahead.next(), ahead.next())
+                    {
+                        segments.push((next.as_str().into(), point_span(at)));
+                    }
+                    return Err(self.unresolved_root_error(&segments));
                 }
                 // The path through the module a `use` binds, as rustc
                 // resolves it, which a miss demands from the crate; the

@@ -414,6 +414,55 @@ impl<'a> Parser<'a> {
         if member.as_str() == "parse" {
             return self.parse_str_parse(value);
         }
+        // A `String`'s own changes, which a `&str` or a `&mut str` has
+        // none of: rustc's E0599 for its type.
+        let receiver_ty = self.inference.resolve(&value.ty);
+        if *without_references(&receiver_ty) != Ty::String
+            && (STR_CHANGES.contains(&member.as_str()) || member.as_str() == "as_mut_str")
+            && !member.as_str().starts_with("make_ascii_")
+        {
+            let name = receiver_ty.name(&self.models);
+            return Err(Error::NoItem {
+                owner: name.clone(),
+                member,
+                reference: member_span,
+                receiver: Box::new(crate::resolve::Receiver {
+                    kind: receiver_ty.sort(&self.models),
+                    declared: name.clone(),
+                    found: name,
+                    definition: None,
+                }),
+                similar: None,
+                unsatisfied: None,
+            });
+        }
+        if matches!(member.as_str(), "drain" | "replace_range")
+            && matches!(self.peek(), Token::LeftParen)
+            && *without_references(&self.inference.resolve(&value.ty)) == Ty::String
+        {
+            return self.parse_string_range_change(value, &member);
+        }
+        // `s.as_mut_str()`: the `&mut str` of the `String` place, which a
+        // change through it writes.
+        if member.as_str() == "as_mut_str"
+            && matches!(self.peek(), Token::Unit)
+            && *without_references(&self.inference.resolve(&value.ty)) == Ty::String
+            && value.lvalue.is_some()
+        {
+            let end = self.next().1;
+            let whole = span(value.span.start(), end);
+            if let Some(error) = self.immutable_borrow(&value, whole) {
+                return Err(error);
+            }
+            self.mutable_use(&value, whole);
+            let mut value = value;
+            value.ty = Ty::Reference {
+                mutable: true,
+                target: Box::new(Ty::UnsizedStr),
+            };
+            value.span = whole;
+            return Ok(value.retain_origin());
+        }
         let (mut arguments, end) =
             self.parse_std_arguments(&value.ty, &member, "string method arguments")?;
         for argument in &mut arguments {
@@ -539,16 +588,19 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let mut operands = vec![value.rendered_source(), code.to_string().into()];
-                for argument in &mut arguments {
-                    let expected = match (name, self.inference.resolve(&argument.ty)) {
-                        ("repeat" | "is_char_boundary", _) => Ty::Int(Int::Usize),
-                        (_, Ty::Char) => Ty::Char,
+                for (index, argument) in arguments.iter_mut().enumerate() {
+                    let expected = match (name, index, self.inference.resolve(&argument.ty)) {
+                        ("repeat" | "is_char_boundary", ..) | ("replacen", 2, _) => {
+                            Ty::Int(Int::Usize)
+                        }
+                        ("replacen", 1, _) => Ty::Str,
+                        (.., Ty::Char) => Ty::Char,
                         _ => Ty::Str,
                     };
                     self.coerce_expr(&expected, argument)?;
                     operands.push(argument.rendered_source());
                 }
-                operands.resize_with(4, || "()".into());
+                operands.resize_with(5, || "()".into());
                 // The trims borrow from the receiver; the others make a
                 // new `String`.
                 let ty = match output {
@@ -571,7 +623,7 @@ impl<'a> Parser<'a> {
                 (call, Ty::Bool)
             }
             // A `String` changed in place, by bytes, with Rust's panics.
-            ("pop" | "clear", [])
+            ("pop" | "clear" | "make_ascii_uppercase" | "make_ascii_lowercase", [])
             | ("insert" | "insert_str", [_, _])
             | ("remove" | "truncate" | "split_off", [_]) => {
                 let code = STR_CHANGES
@@ -603,7 +655,11 @@ impl<'a> Parser<'a> {
             // over the string's pieces; `as_bytes()` a `&[u8]` and
             // `into_bytes()` a `Vec<u8>`.
             ("bytes" | "char_indices" | "as_bytes" | "into_bytes", [])
-            | ("splitn" | "rsplitn", [_, _]) => {
+            | ("splitn" | "rsplitn", [_, _])
+            | ("matches" | "match_indices", [_])
+                if !matches!(member.as_str(), "matches" | "match_indices")
+                    || matches!(argument_type, Some(Ty::String | Ty::Str | Ty::Char)) =>
+            {
                 let code = STR_PIECES
                     .iter()
                     .position(|name| *name == member.as_str())
@@ -619,11 +675,20 @@ impl<'a> Parser<'a> {
                     operands.push(count.rendered_source());
                     operands.push(pattern.rendered_source());
                 }
+                if let [pattern] = arguments.as_mut_slice() {
+                    let expected = match self.inference.resolve(&pattern.ty) {
+                        Ty::Char => Ty::Char,
+                        _ => Ty::Str,
+                    };
+                    self.coerce_expr(&expected, pattern)?;
+                    operands.push(pattern.rendered_source());
+                }
                 operands.resize(4, "()".into());
                 let pieces = self.prelude_op(PreludeOp::StrPieces, operands);
                 let item = match member.as_str() {
                     "bytes" | "as_bytes" | "into_bytes" => Ty::Int(Int::U8),
                     "char_indices" => Ty::Tuple(Box::new([Ty::Int(Int::Usize), Ty::Char])),
+                    "match_indices" => Ty::Tuple(Box::new([Ty::Int(Int::Usize), Ty::Str])),
                     _ => Ty::Str,
                 };
                 let array = Ty::Array {
@@ -688,6 +753,60 @@ impl<'a> Parser<'a> {
             }
         };
         Ok(self.operator_expr(rendered, ty, expression))
+    }
+
+    /// `s.drain(range)`, the removed bytes' chars as an iterator, and
+    /// `s.replace_range(range, with)`, which puts `with` in their place.
+    /// The range is std's `RangeBounds<usize>`, read as `v.drain` reads it.
+    fn parse_string_range_change(
+        &mut self,
+        value: ParsedExpr,
+        member: &str,
+    ) -> Result<ParsedExpr, Error> {
+        let open = self.expect(Token::LeftParen, "'(' after the method")?;
+        let bounds = self.parse_range_or_expr()?;
+        let replacement = if member == "replace_range" {
+            self.expect(Token::Comma, "',' after `replace_range`'s range")?;
+            let mut with = self.parse_expr()?;
+            self.strip_string_reference(&mut with);
+            self.coerce_expr(&Ty::Str, &mut with)?;
+            Some(with)
+        } else {
+            None
+        };
+        let end = self.close_arguments("')' after the method's arguments")?;
+        self.range_operand(open, end);
+        let Err((low, high, inclusive)) = bounds else {
+            return Err(self.unsupported("a `String` range of something other than a range"));
+        };
+        let bound = |this: &mut Self, bound: Option<ParsedExpr>, open: &str| {
+            Ok::<_, Error>(match bound {
+                Some(bound) => {
+                    this.require_type(&Ty::Int(Int::Usize), &bound.ty, bound.span)?;
+                    bound.rendered_source()
+                }
+                None => open.into(),
+            })
+        };
+        let low = bound(self, low, "0")?;
+        let mut window = vec![bound(self, high, "-1")?, inclusive.to_string().into()];
+        window.extend(replacement.as_ref().map(ParsedExpr::rendered_source));
+        let code = STR_CHANGES
+            .iter()
+            .position(|name| *name == member)
+            .expect("a listed `String` method");
+        let operands = vec![
+            origin::Fragment::from(code.to_string()),
+            low,
+            origin::Fragment::join(window, ", ").surrounded("[", "]"),
+        ];
+        let helper = self.push_op(Op::Prelude(PreludeOp::StrChange));
+        let source = self.mutation_call(&value, &helper, operands)?;
+        let ty = match replacement {
+            Some(_) => Ty::Unit,
+            None => Ty::iter(Ty::Char),
+        };
+        Ok(self.operator_expr(source, ty, span(value.span.start(), end)))
     }
 
     /// The `Option` methods Rust code reaches for, as Rust names them. Each
@@ -1210,8 +1329,11 @@ impl<'a> Parser<'a> {
         // `v.get_mut(i).unwrap()` is the element's place, which the
         // `Option` locates: it is evaluated, panicking on `None`, each time
         // the place is reached.
+        // `o.unwrap()` of an `Option` that holds a stored `&mut` is the
+        // reference, moved out (`stored.rs`).
+        let stored = keeps_place && (self.holds_stored(&value) || self.stored_temporary(&value));
         let place = match &value.lvalue {
-            Some(lvalue) if keeps_place && !matches!(lvalue, Lvalue::Slice(_)) => {
+            Some(lvalue) if keeps_place && !stored && !matches!(lvalue, Lvalue::Slice(_)) => {
                 let mut nested = places::as_nested(lvalue);
                 let mut setup = source.clone();
                 setup.push_text(";");
@@ -1232,6 +1354,9 @@ impl<'a> Parser<'a> {
             self.lend_place(&value, expression);
         }
         let mut parsed = self.operator_expr(source, ty, expression);
+        if stored {
+            return Ok(self.through_stored(parsed));
+        }
         if place.is_some() {
             parsed.lvalue = place;
         }
@@ -2227,6 +2352,10 @@ pub(super) const STR_CHANGES: &[&str] = &[
     "push",
     "push_str",
     "retain",
+    "drain",
+    "replace_range",
+    "make_ascii_uppercase",
+    "make_ascii_lowercase",
 ];
 
 /// `STR_CHANGES`' `code` on the string taken by reference, by bytes and
@@ -2241,6 +2370,34 @@ pub(super) fn str_change(
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
     let at = usize::try_from(args[2].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
     let operand = args[3].clone();
+    let name = STR_CHANGES.get(code).copied().unwrap_or_default();
+    if matches!(name, "drain" | "replace_range") {
+        return str_range_change(context, args[0], name, at, operand);
+    }
+    // `str`'s own changes in place, which a `String` reaches through its
+    // `DerefMut`.
+    if let Some(change) = match name {
+        "make_ascii_uppercase" => Some(str::make_ascii_uppercase as fn(&mut str)),
+        "make_ascii_lowercase" => Some(str::make_ascii_lowercase as fn(&mut str)),
+        _ => None,
+    } {
+        if let Some(place) = crate::place::get(args[0]) {
+            let mut text = crate::place::text::copied(args[0])?;
+            change(&mut text);
+            let mut operands = [Dynamic::from(ImmutableString::from(text))];
+            return match context {
+                Some(context) => {
+                    place.invoke_in(context, crate::place::Operation::Store, &mut operands)
+                }
+                None => place.invoke(crate::place::Operation::Store, &mut operands),
+            };
+        }
+        let mut text = args[0]
+            .write_lock::<ImmutableString>()
+            .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
+        change(text.make_mut());
+        return Ok(Dynamic::UNIT);
+    }
     if let Some(place) = crate::place::get(args[0]) {
         use crate::place::Operation;
         let (operation, indexes): (Operation, &[usize]) = match STR_CHANGES.get(code).copied() {
@@ -2268,7 +2425,6 @@ pub(super) fn str_change(
     let mut text = args[0]
         .write_lock::<ImmutableString>()
         .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
-    let name = STR_CHANGES.get(code).copied().unwrap_or_default();
     // Rust asserts a char boundary before changing the string there.
     let boundary = |text: &str, at: usize, what: &str| -> Result<(), Box<EvalAltResult>> {
         if text.is_char_boundary(at) {
@@ -2359,6 +2515,88 @@ pub(super) fn str_change(
     }
 }
 
+/// `String::drain` and `String::replace_range` (`name`) of the bytes from
+/// `low` to the end `window` gives (`[high, inclusive]`, `-1` for an open
+/// end), and the replacement after it: the drained chars, or `()`. They
+/// panic as std's do, for a range out of bounds or off a char boundary.
+fn str_range_change(
+    context: Option<&NativeCallContext<'_>>,
+    receiver: &mut Dynamic,
+    name: &str,
+    low: usize,
+    window: Dynamic,
+) -> RawrResult {
+    let window = window
+        .into_array()
+        .map_err(|_| invariant("a `String` range's end is an array"))?;
+    let high = window
+        .first()
+        .and_then(|high| high.as_int().ok())
+        .unwrap_or(-1);
+    let high = usize::try_from(high).ok();
+    let inclusive = window
+        .get(1)
+        .is_some_and(|inclusive| inclusive.as_bool().unwrap_or(false));
+    let replacement = window
+        .get(2)
+        .map(|with| with.clone_cast::<ImmutableString>());
+    let panic = |message: String| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let checked = |text: &str| -> Result<(usize, usize), String> {
+        let (low, high) = drain_window(low, high, inclusive, text.len())?;
+        for (at, what) in [(low, "start"), (high, "end")] {
+            if !text.is_char_boundary(at) {
+                let what = if name == "drain" { what } else { "n" };
+                return Err(format!("assertion failed: self.is_char_boundary({what})"));
+            }
+        }
+        Ok((low, high))
+    };
+    if let Some(place) = crate::place::get(receiver) {
+        use crate::place::Operation;
+        let text = crate::place::text::copied(receiver)?;
+        let (low, high) = match checked(&text) {
+            Ok(window) => window,
+            Err(message) => return panic(message),
+        };
+        let invoke = |operation, operands: &mut [Dynamic]| match context {
+            Some(context) => place.invoke_in(context, operation, operands),
+            None => place.invoke(operation, operands),
+        };
+        let drained = invoke(
+            Operation::Drain,
+            &mut [(low as INT).into(), (high as INT).into()],
+        )?;
+        return match replacement {
+            Some(with) => invoke(
+                Operation::InsertStr,
+                &mut [(low as INT).into(), with.into()],
+            ),
+            None => Ok(drained),
+        };
+    }
+    let mut text = receiver
+        .write_lock::<ImmutableString>()
+        .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
+    let (low, high) = match checked(&text) {
+        Ok(window) => window,
+        Err(message) => return panic(message),
+    };
+    Ok(match replacement {
+        Some(with) => {
+            text.make_mut().replace_range(low..high, &with);
+            Dynamic::UNIT
+        }
+        None => Dynamic::from_array(
+            text.make_mut()
+                .drain(low..high)
+                .map(Dynamic::from)
+                .collect(),
+        ),
+    })
+}
+
 /// The string methods `StrPieces` runs, by code: each gives an array.
 /// `from_utf8` gives a `Result` of the text or its error's `Debug` text,
 /// `utf8_display` that error's message from its `Debug` text, and `debug`
@@ -2371,11 +2609,29 @@ pub(super) const STR_PIECES: &[&str] = &[
     "debug",
     "utf8_display",
     "rsplitn",
+    "matches",
+    "match_indices",
+    "from_utf8_lossy",
 ];
 
 pub(super) fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
     let name = STR_PIECES.get(code).copied().unwrap_or_default();
+    if name == "from_utf8_lossy" {
+        let bytes: Vec<u8> = args[0]
+            .as_array_ref()
+            .map_err(|_| invariant("a `&[u8]` is not an array at runtime"))?
+            .iter()
+            .map(|byte| u8::try_from(byte.as_int().unwrap_or_default()).unwrap_or_default())
+            .collect();
+        let text = Dynamic::from(ImmutableString::from(
+            String::from_utf8_lossy(&bytes).as_ref(),
+        ));
+        return Ok(Dynamic::from(match std::str::from_utf8(&bytes) {
+            Ok(_) => super::cow::Value::Borrowed(text),
+            Err(_) => super::cow::Value::Owned(text),
+        }));
+    }
     if name == "from_utf8" {
         let bytes: Vec<u8> = args[0]
             .as_array_ref()
@@ -2449,6 +2705,22 @@ pub(super) fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
                 }
             }
         }
+        "matches" | "match_indices" => {
+            let pattern = match args[2].as_char() {
+                Ok(c) => c.to_string(),
+                Err(_) => args[2].clone_cast::<ImmutableString>().to_string(),
+            };
+            let found = text.match_indices(pattern.as_str());
+            if name == "matches" {
+                found.map(|(_, piece)| string(piece)).collect()
+            } else {
+                found
+                    .map(|(index, piece)| {
+                        Dynamic::from_array(vec![(index as crate::INT).into(), string(piece)])
+                    })
+                    .collect()
+            }
+        }
         _ => return Err(invariant("an unknown string method")),
     };
     Ok(Dynamic::from_array(pieces))
@@ -2466,6 +2738,7 @@ pub(super) const STR_METHODS: &[(&str, usize, char)] = &[
     ("to_ascii_uppercase", 0, 's'),
     ("to_ascii_lowercase", 0, 's'),
     ("replace", 2, 's'),
+    ("replacen", 3, 's'),
     ("repeat", 1, 's'),
     ("find", 1, 'f'),
     ("rfind", 1, 'f'),
@@ -2485,8 +2758,7 @@ pub(super) const STR_METHODS: &[(&str, usize, char)] = &[
 pub(super) fn str_method(
     text: &str,
     code: usize,
-    a: &Dynamic,
-    b: &Dynamic,
+    [a, b, c]: [&Dynamic; 3],
 ) -> Result<Dynamic, Box<EvalAltResult>> {
     let string = |value: &str| Dynamic::from(ImmutableString::from(value));
     let pattern = |value: &Dynamic| match value.as_char() {
@@ -2505,6 +2777,10 @@ pub(super) fn str_method(
         "to_ascii_uppercase" => string(&text.to_ascii_uppercase()),
         "to_ascii_lowercase" => string(&text.to_ascii_lowercase()),
         "replace" => string(&text.replace(&pattern(a), &pattern(b))),
+        "replacen" => {
+            let count = usize::try_from(c.as_int().unwrap_or(0)).unwrap_or(0);
+            string(&text.replacen(&pattern(a), &pattern(b), count))
+        }
         "repeat" => string(&text.repeat(usize::try_from(a.as_int().unwrap_or(0)).unwrap_or(0))),
         "find" => option(text.find(&pattern(a)).map(|at| Dynamic::from(at as INT))),
         "rfind" => option(text.rfind(&pattern(a)).map(|at| Dynamic::from(at as INT))),

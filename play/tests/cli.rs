@@ -199,3 +199,28 @@ fn cli_runs_rawr_webs_fixtures_as_rustc_does() {
         );
     }
 }
+
+/// A `main` ends as std's `Termination` reports its output: an `ExitCode`
+/// is the status (#2088), and an `Err` of a `Box<dyn Error>` writes
+/// `Error: ` and its `Debug` text, then fails with 1 (#2091).
+#[test]
+fn cli_ends_a_main_as_its_termination_reports() {
+    let code = text_result(
+        "use std::process::ExitCode;\nfn main() -> ExitCode {\n    println!(\"hi\");\n    ExitCode::from(3)\n}\n",
+        &[],
+    );
+    assert_eq!((code.text().as_str(), code.status), ("hi\n", 3));
+    let ok = text_result(
+        "fn main() -> Result<std::process::ExitCode, String> {\n    Ok(std::process::ExitCode::FAILURE)\n}\n",
+        &[],
+    );
+    assert_eq!((ok.text().as_str(), ok.status), ("", 1));
+    let failed = text_result(
+        "use std::error::Error;\nfn main() -> Result<(), Box<dyn Error>> {\n    Err(Box::new(std::io::Error::other(\"disk\")))\n}\n",
+        &[],
+    );
+    assert_eq!(
+        (failed.text().as_str(), failed.status),
+        ("Error: Custom { kind: Other, error: \"disk\" }\n", 1)
+    );
+}

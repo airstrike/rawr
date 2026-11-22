@@ -107,7 +107,6 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_binding(&mut self, let_keyword: bool) -> Result<(), Error> {
         let pending = self.field_entries.len();
-        let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         let opened = self.calls_noted;
         let depth = self.temporary_scopes.len();
@@ -132,7 +131,6 @@ impl<'a> Parser<'a> {
         }
         bound?;
         self.statement_frames(start, opened, frames, true)?;
-        self.end_lend_self(outer_lend, start);
         self.settle_parses()
     }
 
@@ -311,11 +309,51 @@ impl<'a> Parser<'a> {
         {
             self.closure_hint = Some(inputs);
         }
+        let chosen = if block_like {
+            self.choose_ahead()
+        } else {
+            None
+        };
+        let outer_chosen = std::mem::replace(&mut self.chosen, chosen);
         let value = self.parse_expr_expecting(annotation.as_ref());
+        let chosen = std::mem::replace(&mut self.chosen, outer_chosen);
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let s = v.as_mut_slice();` is `let s = &mut v;` of the slice.
+        let viewed = self.viewed_whole.take() == Some(value.span);
         self.frame_value(&mut value);
+        // `let r = if c { &mut a } else { &mut b };`: `r` holds where the
+        // place the run chose is (`chosen.rs`).
+        if let Some(chosen) = chosen {
+            let chose = chosen
+                .chose()
+                .map_err(|refused| Error::UnsupportedNominalSyntax {
+                    construct:
+                        "a `&mut` chosen by a branch, of a place that is not a local of the \
+                            body or a part of one: not supported in Rawr yet"
+                            .into(),
+                    source: refused,
+                })?;
+            if chose {
+                if let Some(annotation) = &annotation {
+                    self.coerce_expr(annotation, &mut value)?;
+                }
+                let mut rendered = origin::Fragment::plain(format!("let {name} = "));
+                rendered.push(value.rendered_source());
+                rendered.push_text(";");
+                let rendered = self.with_field_entries(pending, rendered);
+                self.write_output(rendered, span(start, value.span.end()));
+                self.entry_aliases.remove(&name);
+                self.bound_value(&name, name_span, &value, value_start);
+                self.select_local(name, name_span, value.ty.clone(), mutable);
+                self.last_type = Ty::Unit;
+                self.last_expression = None;
+                return self
+                    .consume_binding_terminator(start, let_keyword)
+                    .map(|_| ());
+            }
+        }
         if moved_reference
             && matches!(
                 self.inference.resolve(&value.ty),
@@ -328,9 +366,8 @@ impl<'a> Parser<'a> {
         // `let mut it = v.iter_mut();`: each `it.next()` lends the next
         // element of `v`.
         match self.pending_iter_mut.take() {
-            Some(mut held) if held.declaration == value.span => {
-                held.declaration = name_span;
-                self.held_iter_mut.insert(name.clone(), held);
+            Some(held) if held.declaration == value.span => {
+                self.bind_iter_mut(&name, held, name_span, &mut value)?;
             }
             _ => {
                 self.held_iter_mut.remove(&name);
@@ -428,16 +465,6 @@ impl<'a> Parser<'a> {
                 .consume_binding_terminator(start, let_keyword)
                 .map(|_| ());
         }
-        // A closure that changes `self` writes it back after its statement,
-        // so it cannot outlive that statement in a local.
-        if self.lend_self
-            && matches!(
-                self.inference.resolve(&value.ty),
-                Ty::Fn { .. } | Ty::FnItem { .. } | Ty::Boxed(..)
-            )
-        {
-            return Err(self.unsupported("a closure that changes `self` kept in a local"));
-        }
         // `let r = &s;`, `let r = &s.a.b;` of a value Rust moves: `r` is the
         // place, read where it is at each use, as Rust's shared borrow
         // keeps it unchanged meanwhile (D568). A local shadowed ahead is
@@ -476,7 +503,7 @@ impl<'a> Parser<'a> {
             mutable: true,
             target,
         } = self.inference.resolve(&value.ty)
-            && (borrowing || moved_borrow)
+            && (borrowing || moved_borrow || viewed)
         {
             // `let mut r = &mut a;` given a new borrow later (`r = &mut b`),
             // or `let s = r;` of such a local: a runtime local holding
@@ -541,6 +568,26 @@ impl<'a> Parser<'a> {
                     .consume_binding_terminator(start, let_keyword)
                     .map(|_| ());
             }
+            // `let s = &mut v[1..3];`: `s` holds the reference to the range
+            // of elements (`view.rs`), and each use reaches them there.
+            if matches!(value.lvalue, Some(Lvalue::Slice(_))) {
+                let mut rendered = origin::Fragment::plain(format!("let {name} = "));
+                rendered.push(self.view_of(&value)?);
+                rendered.push_text(";");
+                if let Some(annotation) = &annotation {
+                    self.coerce_expr(annotation, &mut value)?;
+                }
+                let rendered = self.with_field_entries(pending, rendered);
+                self.write_output(rendered, span(start, value.span.end()));
+                self.entry_aliases.remove(&name);
+                self.bound_value(&name, name_span, &value, value_start);
+                self.select_local(name, name_span, value.ty.clone(), mutable);
+                self.last_type = Ty::Unit;
+                self.last_expression = None;
+                return self
+                    .consume_binding_terminator(start, let_keyword)
+                    .map(|_| ());
+            }
             // `let s = r;` moves the borrow `r` into `s`.
             let Some(Lvalue::Binding { binding: root, .. } | Lvalue::Place { binding: root, .. }) =
                 value.lvalue.clone()
@@ -588,21 +635,18 @@ impl<'a> Parser<'a> {
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
         }
+        // `let o = v.last_mut();`: `o` holds `Some` of the reference to
+        // the element's place (`stored.rs`).
+        if matches!(self.inference.resolve(&value.ty), Ty::Option(_)) {
+            self.store_borrow(&mut value)?;
+        }
 
         self.consume_imported_value(&value, &name, value.span)?;
         self.move_local(&mut value)?;
-        // The temporaries the value made drop when it is made, unless a
-        // borrow of one is the value, which Rust keeps to the block's end.
-        let temporaries = self.close_temporaries();
+        // The temporaries the value made drop when it is made, unless the
+        // `let` extends one, which Rust keeps to the block's end.
+        let (extended, temporaries) = self.extended_temporaries();
         if !temporaries.is_empty() {
-            if borrowed_value {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a `let` that borrows a temporary value whose type implements \
-                                `Drop`: keeping it to the block's end is not supported in Rawr yet"
-                        .into(),
-                    source: value.span,
-                });
-            }
             value.source = self.with_temporaries(&temporaries, value.rendered_source());
             value.prelude = origin::Fragment::default();
         }
@@ -623,6 +667,9 @@ impl<'a> Parser<'a> {
                 .map(|pipeline| (pipeline, *item)),
             _ => None,
         };
+        // An extended temporary is declared before the local, so it drops
+        // after it.
+        let declared = self.extend_temporaries(&extended, value.span)?;
         let hold = self.note_drop(&name, name_span, &ty)?;
         self.bound_value(&name, name_span, &value, value_start);
         self.local_types.push(LocalType {
@@ -648,7 +695,7 @@ impl<'a> Parser<'a> {
         // A shadowed value with drop glue is kept until its scope ends.
         if let Some(hold) = hold {
             let made = self.temporary("made");
-            let mut rendered = origin::Fragment::plain(format!("let {made} = "));
+            let mut rendered = origin::Fragment::plain(format!("{declared}let {made} = "));
             rendered.push(value.rendered_source());
             rendered.push_text(format!(
                 "; {hold} {keyword} {name} = {}({made});",
@@ -662,7 +709,7 @@ impl<'a> Parser<'a> {
                 .consume_binding_terminator(start, let_keyword)
                 .map(|_| ());
         }
-        let mut rendered = origin::Fragment::plain(format!("{keyword} {name} = "));
+        let mut rendered = origin::Fragment::plain(format!("{declared}{keyword} {name} = "));
         if let Some((pipeline, item)) = bound {
             let (code, pipeline, names) = self.bound_pipeline(pipeline);
             self.bound_iterators.insert(

@@ -95,6 +95,11 @@ pub(crate) fn named<'a>(
     WRITTEN.with_borrow(|written| written.get(name).copied())
 }
 
+/// Whether the std trait `definition` is in the prelude every program sees.
+pub(crate) fn in_prelude(definition: &str) -> bool {
+    std_table::prelude(EDITION).any(|path| path.kind == "trait" && path.definition == definition)
+}
+
 /// The stable std trait whose last segment is `name`, wherever std declares
 /// it: `named`, else the first std module that has one (`std::error::Error`).
 /// For what rawr asks of a trait it already knows the program names, never
@@ -437,6 +442,13 @@ const BODIES: &[(&str, &str, &str)] = &[
         "write_isize",
         "fn write_isize(&mut self, i: isize) {
         self.write_usize(i as usize)
+    }",
+    ),
+    (
+        "core::error::Error",
+        "source",
+        "fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
     }",
     ),
     (
@@ -912,7 +924,12 @@ mod tests {
             declared("IndexMut"),
             "<Idx> : Set(0) Index |  | index_mut(&mut self Idx) -> &mut Self::Output"
         );
-        assert_eq!(declared("Error"), "<> : Set(2) Display |  | ");
+        // `Error::source`, std's provided function, which rawr runs from
+        // std's body.
+        assert_eq!(
+            declared("Error"),
+            "<> : Set(2) Display |  | source(&self ) -> Option<&dyn Error> provided"
+        );
         // `io::Write::write` names `io::Error`, which rawr has no
         // representation for yet: the impl's own signature says so.
         let host = host::Registry::new();

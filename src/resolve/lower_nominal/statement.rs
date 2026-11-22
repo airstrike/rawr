@@ -116,7 +116,6 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_statement(&mut self) -> Result<(), Error> {
         let pending = self.field_entries.len();
-        let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         let opened = self.calls_noted;
         self.open_temporaries();
@@ -137,7 +136,6 @@ impl<'a> Parser<'a> {
         parsed?;
         self.statement_temporaries(start, &temporaries);
         self.statement_frames(start, opened, frames, false)?;
-        self.end_lend_self(outer_lend, start);
         self.settle_parses()
     }
 
@@ -170,34 +168,6 @@ impl<'a> Parser<'a> {
                 block.push_text(self.temporary_drops(temporaries));
                 block.push_text("}\n");
                 self.output.push(block);
-            }
-        }
-    }
-
-    /// End a statement that made a closure changing `self`: bind the
-    /// closure's `self` before the statement and write it back after it.
-    pub(super) fn end_lend_self(&mut self, outer: bool, start: usize) {
-        if !std::mem::replace(&mut self.lend_self, outer) {
-            return;
-        }
-        let mut statement = self.output.split_off(start);
-        statement.trim_end();
-        match self.last_expression {
-            Some((tail, endpoint)) if tail >= start => {
-                let value = self.temporary("tail");
-                let mut source = origin::Fragment::plain(format!(
-                    "{{ let {SELF_CAPTURE} = self; let {value} = "
-                ));
-                source.push(statement);
-                source.push_text(format!("; self = {SELF_CAPTURE}; {value} }}"));
-                let tail = self.write_output(source, endpoint);
-                self.last_expression = Some((tail, endpoint));
-            }
-            _ => {
-                self.output
-                    .push_text(format!("let {SELF_CAPTURE} = self;\n"));
-                self.output.push(statement);
-                self.output.push_text(format!("\nself = {SELF_CAPTURE};\n"));
             }
         }
     }
@@ -417,6 +387,27 @@ impl<'a> Parser<'a> {
         }
         let referent =
             matches!(binding.ty, Ty::Reference { .. }) && !matches!(value.ty, Ty::Reference { .. });
+        // `s = &mut b;` or `s = r;` of a `let s;` with no value yet: `s` is
+        // a `&mut` local given its borrow there. One whose type is not yet
+        // known takes `r` by value, as rustc moves a `&mut` where no
+        // reference is expected (#2502).
+        let unset = (compound_operator(&assignment).is_none()
+            && deferred == Some(None)
+            && !binding.available)
+            .then(|| (binding.ty.clone(), binding.declaration))
+            .filter(|(ty, _)| {
+                matches!(
+                    self.inference.resolve(ty),
+                    Ty::Infer(_) | Ty::Reference { mutable: true, .. }
+                )
+            });
+        if let Some((ty, declaration)) = unset
+            && self.borrow_ahead()
+        {
+            let moved = matches!(self.inference.resolve(&ty), Ty::Infer(_));
+            self.select_local(binding_name.clone(), declaration, ty.clone(), false);
+            return self.rebind_selector(value.span, &ty, binding_name, true, moved);
+        }
         // `r = &mut b;` of a `&mut` local given new borrows.
         if compound_operator(&assignment).is_none()
             && immutable.is_none()
@@ -424,12 +415,18 @@ impl<'a> Parser<'a> {
             && !shared
             && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
         {
-            return self.rebind_selector(value.span, &value.ty, selector, mutable);
+            return self.rebind_selector(value.span, &value.ty, selector, mutable, false);
         }
         self.refuse_rebound_alias(value.span, &value.ty)?;
         let value_start = self.flow().value_start();
-        let mut replacement = self.parse_expr()?;
         let compound = compound_operator(&assignment).is_some();
+        // rustc checks a plain assignment's value against the place's type.
+        let mut replacement = if compound {
+            self.parse_expr()?
+        } else {
+            let place = value.ty.clone();
+            self.parse_expr_expecting(Some(&place))?
+        };
         self.assigned_place(
             value.span,
             &value.ty,

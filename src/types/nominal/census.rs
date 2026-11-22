@@ -56,25 +56,49 @@ impl Entry {
     }
 }
 
+/// The values a check of the values that live leaves out, by their type:
+/// those of the statics a swap leaves behind (#2519), set [`aside`].
+static ASIDE: std::sync::Mutex<Option<HashMap<type_def::Identity, usize>>> =
+    std::sync::Mutex::new(None);
+
+/// What `run` gives, while every count leaves out `aside`, values of each
+/// script type that no longer live for the program though they aren't
+/// dropped yet.
+#[cfg(feature = "rust-import")]
+pub(crate) fn aside<R>(aside: HashMap<type_def::Identity, usize>, run: impl FnOnce() -> R) -> R {
+    let set = |counts| {
+        *ASIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = counts;
+    };
+    set(Some(aside));
+    let ran = run();
+    set(None);
+    ran
+}
+
 /// Whether a value of the script type `identity` lives in this process.
 #[must_use]
 pub(crate) fn holds(identity: &type_def::Identity) -> bool {
-    with_entries(|entries| {
-        entries
-            .get(identity)
-            // The entry's own token is the one reference that is no value's.
-            .is_some_and(|entry| Arc::strong_count(&(entry.0).0) > 1)
-    })
+    count(identity) > 0
 }
 
 /// How many values of the script type `identity` live in this process.
 #[must_use]
 pub(crate) fn count(identity: &type_def::Identity) -> usize {
-    with_entries(|entries| {
+    let held = with_entries(|entries| {
         entries
             .get(identity)
+            // The entry's own token is the one reference that is no value's.
             .map_or(0, |entry| Arc::strong_count(&(entry.0).0) - 1)
-    })
+    });
+    let aside = ASIDE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|aside| aside.get(identity).copied())
+        .unwrap_or(0);
+    held.saturating_sub(aside)
 }
 
 #[cfg(test)]

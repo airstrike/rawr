@@ -1195,18 +1195,15 @@ impl<'a> Parser<'a> {
                     member: member.clone(),
                     reference: member_span,
                 }
-            } else if let [(root, root_span), _, ..] = &segments[..]
+            } else if let [(root, _), _, ..] = &segments[..]
                 && self.unresolved_root(root)
             {
                 // rustc stops at the first segment it can't resolve: a
                 // crate the program doesn't depend on, as `tokio` in
                 // `tokio::task::spawn_local(..)` without tokio (#1149).
-                Error::UnknownType {
-                    name: root.clone(),
-                    reference: span(root_span.start(), text_end(root_span.start(), root)),
-                    path: true,
-                    imports: Box::default(),
-                }
+                let mut path = segments.clone();
+                path.push((member.clone(), member_span));
+                self.unresolved_root_error(&path)
             } else {
                 let imports = if owner.contains("::") {
                     Box::default()
@@ -1462,6 +1459,7 @@ impl<'a> Parser<'a> {
                 reference: member_span,
                 receiver: Box::new(this.receiver(owner_id, &Ty::Script(owner_id, Box::default()))),
                 similar,
+                unsatisfied: None,
             }
         };
         let Nominal::Enum { definition, item } = model else {
@@ -1562,7 +1560,7 @@ impl<'a> Parser<'a> {
         } else if matches!(self.peek(), Token::LeftParen) {
             self.next();
             while !matches!(self.peek(), Token::RightParen) {
-                args.push(self.parse_expr()?);
+                args.push(self.parse_stored(Self::parse_expr)?);
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
                 } else {
@@ -1765,6 +1763,9 @@ impl<'a> Parser<'a> {
         self.mutable_arguments(&arguments, lent.iter().copied())?;
         self.move_copied_in(&mut arguments, &copied);
         self.lend_mutable(&mut arguments, &lent)?;
+        let kept = method_kept(&definition);
+        self.mutable_arguments(&arguments, kept.iter().copied())?;
+        self.lend_kept(&mut arguments, &kept)?;
         let source = origin::Fragment::call(
             method_name(&definition),
             arguments
@@ -2241,6 +2242,34 @@ impl<'a> Parser<'a> {
                 Box::new(Ty::String),
                 Box::new(Ty::ParseError(ParseError::Utf8)),
             );
+            return Ok(self.operator_expr(source, ty, expression));
+        }
+        // `String::from_utf8_lossy(bytes)`: a `Cow<str>`, borrowed of valid
+        // UTF-8 and owned with each invalid sequence replaced.
+        if builtin == Ty::String
+            && member.as_str() == "from_utf8_lossy"
+            && let [bytes] = arguments.as_mut_slice()
+        {
+            let expected = Ty::Reference {
+                mutable: false,
+                target: Box::new(Ty::sequence(sequence::Kind::Slice, Ty::Int(Int::U8))),
+            };
+            self.coerce_expr(&expected, bytes)?;
+            let code = STR_PIECES
+                .iter()
+                .position(|name| *name == "from_utf8_lossy")
+                .expect("a listed piece")
+                .to_string();
+            let source = self.prelude_op(
+                PreludeOp::StrPieces,
+                [
+                    bytes.rendered_source(),
+                    code.into(),
+                    "()".into(),
+                    "()".into(),
+                ],
+            );
+            let ty = Ty::Cow(Box::new(Ty::UnsizedStr));
             return Ok(self.operator_expr(source, ty, expression));
         }
         if member.as_str() == "from"

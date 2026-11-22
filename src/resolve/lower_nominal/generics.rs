@@ -45,9 +45,24 @@ impl<'a> Parser<'a> {
     /// The bounds of the item's type parameters `generics`, which its body
     /// knows them by.
     pub(super) fn read_generics(&mut self, generics: &[item::Generic]) {
+        // A trait bound's supertraits' capabilities bound the parameter
+        // too, as rustc elaborates them: `E: Error` is `Debug`.
+        let elaborated = |generic: &item::Generic| {
+            let implied = generic.traits.iter().filter_map(|name| {
+                self.models
+                    .traits
+                    .get(&name.text)
+                    .map(|(_, declared)| declared.supertraits.0)
+            });
+            capability::Set::from_explicit(
+                std::iter::once(generic.bounds)
+                    .chain(implied)
+                    .flat_map(capability::Set::iter),
+            )
+        };
         self.generics = generics
             .iter()
-            .map(|generic| (generic.name.text.clone(), generic.bounds))
+            .map(|generic| (generic.name.text.clone(), elaborated(generic)))
             .collect();
         self.generic_traits = generic_traits(generics);
         self.generic_trait_arguments = generic_trait_arguments(generics);
@@ -252,20 +267,30 @@ impl<'a> Parser<'a> {
     /// `argument` coerced to `input`, the type the call's expectation gives
     /// its parameter of type `formal`, which then takes that type, as rustc
     /// checks an argument against its expected input. An argument that
-    /// doesn't coerce to it is left to the parameter's own coercion.
+    /// doesn't coerce to it is left to the parameter's own coercion, and
+    /// the mismatch is given back where its type is not `input`'s.
     pub(super) fn coerce_expected_input(
         &mut self,
         input: &Ty,
         formal: &Ty,
         argument: &mut ParsedExpr,
-    ) {
+    ) -> Option<Error> {
         let checkpoint = self.inference.checkpoint();
         let mut coerced = argument.clone();
-        if self.coerce_expr(input, &mut coerced).is_ok() && self.unify_type(formal, input) {
-            self.inference.commit(checkpoint);
-            *argument = coerced;
-        } else {
-            self.inference.rollback(checkpoint);
+        match self.coerce_expr(input, &mut coerced) {
+            Ok(_) if self.unify_type(formal, input) => {
+                self.inference.commit(checkpoint);
+                *argument = coerced;
+                None
+            }
+            Ok(_) => {
+                self.inference.rollback(checkpoint);
+                None
+            }
+            Err(error) => {
+                self.inference.rollback(checkpoint);
+                Some(error)
+            }
         }
     }
 
@@ -308,7 +333,7 @@ impl<'a> Parser<'a> {
                     })?;
             let place = crate::resolve::Bound {
                 bound,
-                callee,
+                callee: Some(callee),
                 argument: this.whole_expression(argument.span),
             };
             Some(crate::resolve::Required {
@@ -722,6 +747,33 @@ impl<'a> Parser<'a> {
             let code = match self.inference.resolve(&ty) {
                 Ty::Int(Int::Var(_)) => kind_code(Ty::Int(Int::I32)),
                 ty => kind_code(ty),
+            };
+            let replacement = format!("{code:<width$}", width = placeholder.len());
+            self.output.replace_same_length(&placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure.body.replace_same_length(&placeholder, &replacement);
+            }
+        }
+        for pending in std::mem::take(&mut self.pending_operands) {
+            let super::operator::PendingOperands {
+                placeholder,
+                ty,
+                at,
+            } = pending;
+            let code = match self.inference.resolve(&ty) {
+                Ty::Int(Int::Var(_)) => kind_code(Ty::Int(Int::I32)),
+                Ty::Int(kind) if !kind.wide() && !matches!(kind, Int::U64 | Int::Usize) => {
+                    kind_code(Ty::Int(kind))
+                }
+                Ty::Float(Float::Var(_)) => kind_code(Ty::Float(Float::F64)),
+                ty @ Ty::Float(_) => kind_code(ty),
+                ty => {
+                    return Err(Error::TypeMismatch {
+                        expected: Ty::Int(Int::I64).name(&self.models),
+                        actual: ty.name(&self.models),
+                        expression: at,
+                    });
+                }
             };
             let replacement = format!("{code:<width$}", width = placeholder.len());
             self.output.replace_same_length(&placeholder, &replacement);
@@ -1195,6 +1247,73 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(substitution)
+    }
+
+    /// rustc's E0599 for an inherent method whose impl's bounds the
+    /// receiver's type arguments don't meet, at `substitution`: the probe
+    /// passes the method by (`S(Opaque).show()` of `impl<T: Debug> S<T>`).
+    /// An argument inference has not settled is the bound's to check later.
+    pub(super) fn impl_bounds_met(
+        &self,
+        definition: &method::Definition,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        receiver: &Ty,
+        member_span: Span,
+    ) -> Result<(), Error> {
+        if definition.trait_name().is_some() {
+            return Ok(());
+        }
+        let generics = definition.generics();
+        let impl_generics = &generics[..generics.len() - definition.own_generics().len()];
+        let mut bounds = Vec::new();
+        for generic in impl_generics {
+            let Some(ty) = substitution.get(&generic.name.text) else {
+                continue;
+            };
+            let ty = self.inference.resolve(ty);
+            if contains_inference(&ty) || contains(&ty, &|ty| matches!(ty, Ty::Param(..))) {
+                continue;
+            }
+            let unmet = |trait_name: ImmutableString, bound: Span| crate::resolve::UnmetBound {
+                ty: ty.name(&self.models),
+                derive: matches!(ty, Ty::Script(..)) && crate::resolve::derivable(&trait_name),
+                trait_name,
+                bound,
+                declared: self.declared_name(&ty),
+            };
+            for (kind, bound) in &generic.written {
+                if !self.type_provides(&ty, *kind) {
+                    bounds.push(unmet(kind.name().into(), *bound));
+                }
+            }
+            // A generic trait's bound is its arguments' to check.
+            for name in generic.traits.iter().filter(|name| {
+                !generic
+                    .trait_arguments
+                    .iter()
+                    .any(|(bound, _)| *bound == name.text)
+            }) {
+                if !self.type_implements(&ty, &name.text) {
+                    bounds.push(unmet(name.text.clone(), name.span));
+                }
+            }
+        }
+        // A bound a std type misses through its own (`Vec<Opaque>: Debug`)
+        // is rustc's requirement chain, which the later check reports.
+        if bounds.is_empty() || bounds.iter().any(|unmet| unmet.declared.is_none()) {
+            return Ok(());
+        }
+        Err(Error::NoItem {
+            owner: definition.owner_name().into(),
+            member: definition.name().into(),
+            reference: member_span,
+            receiver: Box::new(self.receiver(definition.owner(), receiver)),
+            similar: None,
+            unsatisfied: Some(Box::new(crate::resolve::UnmetBounds {
+                owner: definition.owner_span(),
+                bounds: bounds.into_boxed_slice(),
+            })),
+        })
     }
 }
 

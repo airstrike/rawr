@@ -4,8 +4,8 @@
 #[cfg(feature = "rust-import")]
 use super::ImportedFunctionProof;
 use super::{
-    cell, counted, cow, dyn_arguments, error_object, range, range_type_id, sequence, thread,
-    Models, Nominal, ParseError, PreludeOp,
+    any_object, cell, counted, cow, dyn_arguments, error_object, range, range_type_id, sequence,
+    thread, Models, Nominal, ParseError, PreludeOp,
 };
 use crate::resolve::type_ref;
 use crate::types::nominal;
@@ -515,6 +515,49 @@ pub(super) struct Unplaced {
     /// Why an assignment to it is rustc's E0594, where it is behind a
     /// pointer that can't change it.
     pub(super) assigned: Option<Unassignable>,
+    /// The static item it is, or is a part of.
+    pub(super) of_static: Option<StaticPart>,
+}
+
+/// A static item's place, or a part of it.
+#[derive(Clone)]
+pub(super) struct StaticPart {
+    item: ImmutableString,
+    /// rustc's name for the place: `NAME`, `NAME.0`.
+    path: String,
+}
+
+impl Unplaced {
+    /// The static item `name`, which no use moves out of (rustc's E0507).
+    pub(super) fn static_item(name: &str) -> Self {
+        Self {
+            moved: ("E0507", format!("cannot move out of static item `{name}`")),
+            assigned: None,
+            of_static: Some(StaticPart {
+                item: name.into(),
+                path: name.to_string(),
+            }),
+        }
+    }
+
+    /// What Rust refuses of the part `member` below it (`.0`, `.field`).
+    pub(super) fn member(&self, member: &str) -> Self {
+        let Some(StaticPart { item, path }) = &self.of_static else {
+            return self.clone();
+        };
+        let path = format!("{path}.{member}");
+        Self {
+            moved: (
+                "E0507",
+                format!("cannot move out of `{path}` as `{item}` is a static item"),
+            ),
+            assigned: None,
+            of_static: Some(StaticPart {
+                item: item.clone(),
+                path,
+            }),
+        }
+    }
 }
 
 /// The pointer a place is behind that makes an assignment to it rustc's
@@ -1164,6 +1207,7 @@ impl Ty {
                     "bool" => Self::Bool,
                     "char" => Self::Char,
                     "String" => Self::String,
+                    crate::resolve::type_ref::UNSIZED_STR => Self::UnsizedStr,
                     "Ordering" => Self::Ordering,
                     "Arguments" => Self::Arguments,
                     "Duration" => Self::Time(Time::Duration),
@@ -1499,6 +1543,12 @@ impl Ty {
             {
                 Some(TypeId::of::<error_object::ErrorObject>())
             }
+            // std's `dyn Any` is the value with its type a coercion makes.
+            Self::Dyn(name, bindings)
+                if name.as_str() == "Any" && bindings.is_empty() && models.std_trait("Any") =>
+            {
+                Some(TypeId::of::<any_object::AnyObject>())
+            }
             Self::Param(..)
             | Self::Projection(..)
             | Self::Dyn(..)
@@ -1548,6 +1598,7 @@ impl Ty {
             TypeId::of::<nominal::Struct>(),
             TypeId::of::<nominal::Enum>(),
             TypeId::of::<error_object::ErrorObject>(),
+            TypeId::of::<any_object::AnyObject>(),
         ]
         .into_iter()
     }

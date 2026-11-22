@@ -89,6 +89,29 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Whether the next tokens are a turbofish `::<..>` that ends its path,
+    /// as `W::<i32>(1)` or `W::<i32>` does and `W::<i32>::new()` doesn't.
+    pub(super) fn turbofish_ends_path(&self) -> bool {
+        let mut ahead = self.input.clone();
+        if !matches!(ahead.next(), Some((Token::DoubleColon, _))) {
+            return false;
+        }
+        let mut depth = 0usize;
+        for (token, _) in ahead.by_ref() {
+            match token {
+                Token::LessThan => depth += 1,
+                Token::GreaterThan => depth = depth.saturating_sub(1),
+                Token::RightShift => depth = depth.saturating_sub(2),
+                Token::SemiColon | Token::EOF => return false,
+                _ => {}
+            }
+            if depth == 0 {
+                return !matches!(ahead.next(), Some((Token::DoubleColon, _)));
+            }
+        }
+        false
+    }
+
     /// A struct named as a value: `S` of `struct S;`, `W(a, b)` of a tuple
     /// struct, or `W` uncalled, the function from its fields to it, as
     /// Rust's tuple struct constructors are (`.map(W)`).
@@ -134,12 +157,29 @@ impl<'a> Parser<'a> {
             item: item.clone(),
         };
         let (struct_ty, substitution) = self.fresh_nominal(&model, expression);
+        // `W::<i32>(1)`: a generic tuple struct's arguments (#2215).
+        if matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::LessThan)
+        {
+            self.next();
+            self.next();
+            let written = self.parse_turbofish_types()?;
+            let written = Ty::Script(definition.id(), written.into_boxed_slice());
+            self.require_type(&written, &struct_ty, expression)?;
+        }
         let inputs: Box<[Ty]> = item
             .fields
             .iter()
             .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
             .collect();
         let arity = inputs.len();
+        // The fields as written: a `&mut` given to one that is no
+        // reference moves (`move_unless_reborrowed`).
+        let written: Box<[Ty]> = item
+            .fields
+            .iter()
+            .map(|field| Ty::from_resolved(&field.ty))
+            .collect();
         let declared = self
             .models
             .type_in_this_file(&item.key)
@@ -167,7 +207,8 @@ impl<'a> Parser<'a> {
         } else {
             self.next();
             while !matches!(self.peek(), Token::RightParen) {
-                args.push(self.parse_expr_expecting(inputs.get(args.len()))?);
+                let expected = inputs.get(args.len());
+                args.push(self.parse_stored(|parser| parser.parse_expr_expecting(expected))?);
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
                 } else {
@@ -191,9 +232,10 @@ impl<'a> Parser<'a> {
                 arguments: Some(places),
             });
         }
-        for (value, expected) in args.iter_mut().zip(inputs.iter()) {
+        for ((value, expected), written) in args.iter_mut().zip(inputs.iter()).zip(&written) {
             self.coerce_expr(expected, value)?;
             self.move_local(value)?;
+            self.move_unless_reborrowed(value, Some(written));
         }
         let parts: Vec<_> = args
             .iter()
@@ -392,6 +434,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|element| self.inference.resolve(&element.ty))
             .collect::<Vec<_>>();
+        let hint_given = hint.clone();
         let (element, skip) = match (hint, elements.first()) {
             (Some(hint), _) => (hint, 0),
             (None, Some(_)) if let Some(pointer) = self.fn_choice(&types) => (pointer, 0),
@@ -410,6 +453,7 @@ impl<'a> Parser<'a> {
         }
         for value in &mut elements {
             self.move_local(value)?;
+            self.move_unless_reborrowed(value, hint_given.as_ref());
         }
         let parts: Vec<_> = elements
             .iter()
@@ -516,7 +560,7 @@ impl<'a> Parser<'a> {
             }
             self.start_element(elements.len());
             let outer = std::mem::replace(&mut self.no_struct, false);
-            let element = self.parse_expr();
+            let element = self.parse_stored(Self::parse_expr);
             self.no_struct = outer;
             elements.push(element?);
             if matches!(self.peek(), Token::SemiColon) && elements.len() == 1 {
@@ -751,6 +795,9 @@ impl<'a> Parser<'a> {
         variant: Prelude,
         start: Span,
     ) -> Result<ParsedExpr, Error> {
+        // The type the variant is expected to have, which says whether a
+        // `&mut` payload is reborrowed or moved (`move_unless_reborrowed`).
+        let expectation = self.block_expectation();
         let turbofish = self.parse_prelude_turbofish(variant)?;
         let inferred = turbofish.is_none();
         let (ok, err) = match turbofish {
@@ -770,7 +817,7 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::LeftParen) {
             return Ok(self.prelude_function(variant, ok, err, start));
         }
-        let (mut arguments, end) = self.parse_call_arguments("prelude variant arguments")?;
+        let (mut arguments, end) = self.parse_borrowing_arguments("prelude variant arguments")?;
         let expression = span(start.start(), end);
         let [value] = arguments.as_mut_slice() else {
             return Err(Error::argument_count(
@@ -781,6 +828,11 @@ impl<'a> Parser<'a> {
                 expression,
             ));
         };
+        // `Some(&mut self.a)` an `Option<&mut T>` output returns gives its
+        // path (`places::returned_place`).
+        if !self.place_output {
+            self.store_borrow(value)?;
+        }
         let stored = match variant {
             Prelude::Some | Prelude::None => "stored in an `Option`",
             Prelude::Ok | Prelude::Err => "stored in a `Result`",
@@ -802,6 +854,14 @@ impl<'a> Parser<'a> {
         };
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
+        let payload = match (variant, expectation.map(|ty| self.inference.resolve(&ty))) {
+            _ if !inferred => Some(expected.clone()),
+            (Prelude::Some, Some(Ty::Option(payload))) => Some(*payload),
+            (Prelude::Ok, Some(Ty::Result(payload, _)))
+            | (Prelude::Err, Some(Ty::Result(_, payload))) => Some(*payload),
+            _ => None,
+        };
+        self.move_unless_reborrowed(value, payload.as_ref());
         // A payload that never comes, as `Some(return)`'s, is the variable
         // it was coerced into, which a later use settles or the fallback
         // makes `!`: copyness waits for it, as rustc's does.
@@ -934,9 +994,11 @@ impl<'a> Parser<'a> {
                     .iter()
                     .find(|known| known.name.text == field)
                     .map(|known| instantiate(&Ty::from_resolved(&known.ty), &substitution));
-                self.parse_expr_expecting(expected.as_ref())?
+                self.parse_stored(|parser| parser.parse_expr_expecting(expected.as_ref()))?
             } else {
-                self.parse_name_primary(field.clone(), field_span)?
+                let mut value = self.parse_name_primary(field.clone(), field_span)?;
+                self.store_borrow(&mut value)?;
+                value
             };
             if values.insert(field.clone(), (value, field_span)).is_some() {
                 return Err(Error::InvalidConstruction {
@@ -1014,9 +1076,11 @@ impl<'a> Parser<'a> {
                 .iter()
                 .find(|known| known.name.text == *field)
                 .expect("unknown fields were rejected");
-            let expected = instantiate(&Ty::from_resolved(&declared.ty), &substitution);
+            let written = Ty::from_resolved(&declared.ty);
+            let expected = instantiate(&written, &substitution);
             self.coerce_expr(&expected, value)?;
             self.move_local(value)?;
+            self.move_unless_reborrowed(value, Some(&written));
             let temporary = self.temporary("field");
             prelude.push_text(format!("let {temporary} = "));
             prelude.push(value.rendered_source());

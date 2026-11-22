@@ -761,6 +761,13 @@ impl Parser<'_> {
             declared: signature.lifetimes.declared.to_vec(),
             elided,
             variances,
+            naming: borrowck::Naming {
+                elisions: own.elided,
+                input_elided: own.input_elided,
+                first: signature.lifetimes.first.clone(),
+                introduced: signature.lifetimes.introduced,
+                implemented: signature.lifetimes.owner.is_some(),
+            },
         };
         self.flow().own_signature(parameters, own.output, names);
         Ok(())
@@ -1430,7 +1437,9 @@ impl Parser<'_> {
                 .iter()
                 .any(|closure| closure.key == **key && !closure.captures.is_empty());
         }
-        if self.flow().part_of_made(span) {
+        // No constant whose value needs a drop is promoted (`&D("a")` of a
+        // `D` with `impl Drop`).
+        if self.flow().part_of_made(span) || self.needs_drop(ty, span).unwrap_or(false) {
             return true;
         }
         matches!(
@@ -1919,9 +1928,9 @@ impl Parser<'_> {
 
     /// `r = ..` of a `&mut` local `r` that is its place at run time, before
     /// the value is read: one given new borrows is a runtime local of its
-    /// own (`reborrow.rs`), but not yet one that borrows a field or an
-    /// element, or one in an async body, for which a new borrow would write
-    /// the place instead. A shared reference written through it (`*r = x`,
+    /// own (`reborrow.rs`), but not yet one whose place no runtime local
+    /// can hold (`reborrow_source`), or one in an async body, for which a
+    /// new borrow would write the place instead. A shared reference written through it (`*r = x`,
     /// `h.x = x`) is a value its place takes.
     pub(super) fn refuse_rebound_alias(&mut self, target: Span, ty: &Ty) -> Result<(), Error> {
         let Some((name, declaration)) = self.flow().mentioned_local(target.start()) else {
@@ -1952,8 +1961,8 @@ impl Parser<'_> {
         if alias && matches!(self.inference.resolve(ty), Ty::Reference { .. }) && !same {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
-                    "giving the `&mut` local `{name}` a new borrow when it borrows a field or \
-                     an element, or in an async body: not supported in Rawr yet"
+                    "giving the `&mut` local `{name}` a new borrow when it borrows a place no \
+                     runtime local can hold, or in an async body: not supported in Rawr yet"
                 )
                 .into(),
                 source: target,
@@ -2188,8 +2197,9 @@ impl Parser<'_> {
                 ..
             }) => {
                 // The facts give where the value's first and last tokens start.
-                let returned = self.expression_span(report.returned());
-                Err(Error::Outlives(Box::new((*report).returned_at(returned))))
+                Err(Error::Outlives(Box::new(
+                    report.returned_at(|returned| self.expression_span(returned)),
+                )))
             }
             Some(conflict) => Err(Error::BorrowConflict {
                 code: conflict.code,

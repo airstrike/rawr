@@ -1813,7 +1813,7 @@ fn a_mismatched_argument_is_underlined_whole() {
     );
     let report = rendered("fn take(s: String) {}\nfn main() {\n    take(1 + 23);\n}\n");
     assert!(
-        report.contains("  |          ^^^^^^ expected `String`, found integer"),
+        report.contains("  |     ---- ^^^^^^ expected `String`, found integer"),
         "{report}"
     );
 }
@@ -3499,6 +3499,7 @@ fn an_unmet_derivable_bound_suggests_the_derive() {
             "  |     |\n",
             "  |     required by a bound introduced by this call\n",
             "  |\n",
+            "  = note: add `#[derive(Debug)]` to `Q` or manually `impl Debug for Q`\n",
             "note: required by a bound in `dbg`\n",
             " --> main.rs:5:11\n",
             "  |\n",
@@ -4499,6 +4500,7 @@ fn a_format_argument_lacking_a_trait_labels_its_placeholder() {
             "  |               required by this formatting parameter\n",
             "  |\n",
             "  = help: the trait `Debug` is not implemented for `S`\n",
+            "  = note: add `#[derive(Debug)]` to `S` or manually `impl Debug for S`\n",
             "help: consider annotating `S` with `#[derive(Debug)]`\n",
         )),
         "{shown}"

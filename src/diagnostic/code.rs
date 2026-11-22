@@ -88,6 +88,7 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_TYPE_SHAPE, "RAWR-RESOLVE-TYPE-SHAPE", "Invalid structural type grammar."),
     (RESOLVE_DUPLICATE_ITEM, "RAWR-RESOLVE-DUPLICATE-ITEM", "Duplicate source item."),
     (RESOLVE_DUPLICATE_IMPORT, "E0252", "Two imports of one name in one namespace, as rustc reports it."),
+    (RESOLVE_REDEFINED, "E0255", "An import of a name a declaration of its module binds in one namespace, as rustc reports it."),
     (RESOLVE_UNKNOWN_TYPE, "E0425", "A type name nothing in scope declares, as rustc reports it."),
     (RESOLVE_UNKNOWN_IMPORT, "E0432", "A `use` of a path that doesn't exist, as rustc reports it."),
     (RESOLVE_INVALID_IMPORT, "RAWR-RESOLVE-INVALID-IMPORT", "Invalid compile-time import."),

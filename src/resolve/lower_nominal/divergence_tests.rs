@@ -1972,26 +1972,6 @@ main();
 "#,
         Ok("2 1\n"),
     );
-    // A tuple's members swapped. This is rustc's first report: it reports
-    // `'b: 'a` after it, which rawr does not.
-    signature_verdict(
-        r#"
-fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
-fn main() { let (a, b) = (1, 2); println!("{:?}", f((&a, &b))); }
-main();
-"#,
-        Err(r#"
-error: lifetime may not live long enough
- --> <script>:2:61
-  |
-2 | fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
-  |      --  -- lifetime `'b` defined here                      ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
-  |      |
-  |      lifetime `'a` defined here
-  |
-  = help: consider adding the following bound: `'a: 'b`
-"#),
-    );
     signature_verdict(
         r#"
 fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { (x.1, x.0) }
@@ -2134,22 +2114,6 @@ error: lifetime may not live long enough
 2 | fn f<'a>(x: &'a &'a i32) -> &'a &'static i32 { x }
   |      -- lifetime `'a` defined here             ^ returning this value requires that `'a` must outlive `'static`
 "#),
-    );
-    // rustc marks the branch's `x`, and rawr the whole `if`.
-    let report = refused(
-        r#"
-fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
-fn main() { let (a, b) = (1, 2); println!("{:?}", f(Some(&a), &b)); }
-main();
-"#,
-    );
-    assert!(
-        report.starts_with("error: lifetime may not live long enough"),
-        "{report}"
-    );
-    assert!(
-        report.contains("function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`"),
-        "{report}"
     );
     // rustc's E0621 where the parameter's lifetime is elided.
     signature_verdict(
@@ -3747,6 +3711,7 @@ main();
   |             |
   |             required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
  --> <script>:7:1
   |
@@ -3792,6 +3757,7 @@ main();
   |                              |
   |                              required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
  --> <script>:6:1
   |
@@ -3942,6 +3908,7 @@ note: required by a bound in `show`
   |             |
   |             required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
   = note: required for `({integer}, Opaque)` to implement `Debug`
   = note: 1 redundant requirement hidden
   = note: required for `Option<({integer}, Opaque)>` to implement `Debug`
@@ -3974,6 +3941,7 @@ note: required by a bound in `show`
     assert!(
         report.contains(
             r#"  = help: the trait `Debug` is not implemented for `Opaque`
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 note: required for `W<Opaque>` to implement `Debug`
  --> <script>:5:8
   |
@@ -5012,6 +4980,3024 @@ main();
         assert!(
             report.starts_with("error[E0382]: borrow of moved value: `r`"),
             "{report}"
+        );
+    }
+}
+
+#[test]
+fn a_mut_local_takes_a_new_borrow_of_a_field_or_an_element() {
+    // `r = &mut s.right` and `e = &mut v[1]` move a `&mut` local on to a
+    // part of a local, in a loop too, as rustc's build runs them (#121).
+    let output = printed(
+        r#"
+struct S { left: i32, right: i32 }
+struct Node { val: i32, kids: Vec<i32> }
+fn main() {
+    let mut s = S { left: 1, right: 2 };
+    let mut v = vec![10, 20];
+    let mut r = &mut s.left;
+    *r += 10;
+    r = &mut s.right;
+    *r += 20;
+    let mut e = &mut v[0];
+    *e += 1;
+    e = &mut v[1];
+    *e += 2;
+    println!("{} {} {:?}", s.left, s.right, v);
+    let mut nodes = vec![Node { val: 1, kids: vec![] }, Node { val: 2, kids: vec![] }];
+    let mut whole = 0;
+    let mut r = &mut whole;
+    for i in 0..2 {
+        *r += 1;
+        r = &mut nodes[i].val;
+        *r *= 10;
+    }
+    *r += 5;
+    let mut k = &mut nodes[0].kids;
+    k.push(1);
+    k = &mut nodes[1].kids;
+    k.push(2);
+    println!("{} {} {} {:?} {:?}", whole, nodes[0].val, nodes[1].val, nodes[0].kids, nodes[1].kids);
+    let mut t = (1, 2);
+    let mut a = [5, 6, 7];
+    let mut m = &mut t.0;
+    *m += 1;
+    m = &mut t.1;
+    *m += 1;
+    let i = 2;
+    m = &mut a[i];
+    *m += 1;
+    println!("{:?} {:?}", t, a);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "11 22 [11, 22]\n1 11 25 [1] [2]\n(2, 3) [5, 6, 8]\n"
+    );
+    // The new borrow conflicts as rustc's does.
+    let report = refused(
+        r#"
+struct S { left: i32, right: i32 }
+fn main() {
+    let mut s = S { left: 1, right: 2 };
+    let mut r = &mut s.left;
+    r = &mut s.right;
+    let q = &mut s.right;
+    *r += 1;
+    *q += 1;
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0499]: cannot borrow `s.right` as mutable more than once at a time"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+struct S { left: i32, right: i32 }
+fn main() {
+    let mut s = S { left: 1, right: 2 };
+    let mut r = &mut s.left;
+    *r += 1;
+    r = &mut s.right;
+    s.right = 5;
+    *r += 1;
+    println!("{}", s.left);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0506]: cannot assign to `s.right` because it is borrowed"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_chosen_by_a_branch_refers_to_the_place_the_run_chose() {
+    // `if c { &mut a } else { &mut b }` and a `match` choosing a field
+    // give a `&mut` local the place the run chose, as rustc's build runs
+    // them, in a loop and in a `&mut self` method too (#122).
+    let output = printed(
+        r#"
+struct S { x: Vec<i32>, y: Vec<i32>, z: Vec<i32> }
+struct T { a: i32, b: i32 }
+impl T {
+    fn bump(&mut self, first: bool) {
+        let r = if first { &mut self.a } else { &mut self.b };
+        *r += 1;
+    }
+}
+fn main() {
+    let mut a = 1;
+    let mut b = 2;
+    let c = a < b;
+    let r = if c { &mut a } else { &mut b };
+    *r += 10;
+    println!("{} {}", a, b);
+    let mut s = S { x: vec![], y: vec![], z: vec![] };
+    for k in 0..6 {
+        let r = match k % 3 { 0 => &mut s.x, 1 => { &mut s.y } _ => if k > 4 { &mut s.z } else { &mut s.x } };
+        r.push(k);
+    }
+    println!("{:?} {:?} {:?}", s.x, s.y, s.z);
+    let mut r = &mut a;
+    for i in 0..4 {
+        *r += i;
+        r = if i % 2 == 0 { &mut b } else { &mut a };
+    }
+    *r += 100;
+    println!("{} {}", a, b);
+    let mut v = vec![1, 2, 3];
+    let mut w = 0;
+    let i = 2;
+    let e = if i < v.len() { &mut v[i] } else { &mut w };
+    *e *= 7;
+    println!("{:?} {}", v, w);
+    let mut t = T { a: 0, b: 0 };
+    t.bump(true);
+    t.bump(false);
+    t.bump(false);
+    println!("{} {}", t.a, t.b);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "11 2\n[0, 2, 3] [1, 4] [5]\n113 6\n[1, 2, 21] 0\n1 2\n"
+    );
+    // A loan of one branch is not live through the other, nor through a
+    // loop's next iteration, as a shared one's isn't.
+    let output = printed(
+        r#"
+fn main() {
+    let mut x = vec![1];
+    let y = vec![2];
+    for k in 0..3 {
+        let r = if k > 1 { &x } else { &y };
+        println!("{:?}", r);
+        x.push(k);
+    }
+    let mut p = vec![];
+    let mut q = vec![];
+    for k in 0..3 {
+        let r = if k > 1 { &mut p } else { &mut q };
+        r.push(k);
+        p.push(9);
+    }
+    println!("{:?} {:?}", p, q);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[2]\n[2]\n[1, 0, 1]\n[9, 9, 2, 9] [0, 1]\n");
+    let report = refused(
+        r#"
+fn main() {
+    let mut a = 1;
+    let mut b = 2;
+    let c = a < b;
+    let r = if c { &mut a } else { &mut b };
+    a += 1;
+    *r += 10;
+    println!("{} {}", a, b);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0503]: cannot use `a` because it was mutably borrowed\n --> <script>:7:5"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_self_chain_runs_on_a_temporary_kept_to_the_statement_end() {
+    // `Config::new().time().io().build()` of the program's own `&mut self
+    // -> &mut Self` methods: the temporary is made once and lives to the
+    // statement's end, as rustc keeps it (#2074).
+    let program = |main: &str| {
+        format!(
+            r#"
+struct Config {{ time: bool, io: bool, n: u32 }}
+impl Config {{
+    fn new() -> Config {{ println!("new"); Config {{ time: false, io: false, n: 0 }} }}
+    fn time(&mut self) -> &mut Self {{ self.time = true; self.n += 1; self }}
+    fn io(&mut self) -> &mut Self {{ self.io = true; self.n += 10; self }}
+    fn build(&self) -> String {{ format!("{{}} {{}} {{}}", self.time, self.io, self.n) }}
+}}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    let output = printed(&program(
+        r#"let s = Config::new().time().io().build();
+    println!("{}", s);
+    println!("{}", Config::new().io().time().time().build());"#,
+    ));
+    assert_eq!(output, "new\ntrue true 11\nnew\ntrue true 12\n");
+    let report = refused(&program(
+        r#"let c = Config::new().time(); println!("{}", c.n);"#,
+    ));
+    assert!(
+        report.starts_with("error[E0716]: temporary value dropped while borrowed"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_local_in_an_array_or_vec_literal_moves_into_it() {
+    // rustc reborrows a `&mut` only where a reference is expected, so
+    // `vec![r]` and `[r]` move `r` (#2502).
+    for literal in ["vec![r]", "[r]"] {
+        let report = refused(&format!(
+            "fn main() {{ let mut x = 1; let r = &mut x; let v = {literal}; *r += 1; drop(v); }}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with("error[E0382]: use of moved value: `r`"),
+            "{report}"
+        );
+    }
+    // A `Vec<&mut i32>` parameter expects a reference: `r` is reborrowed.
+    let output = printed(
+        r#"
+fn take(v: Vec<&mut i32>) { println!("{}", v.len()); }
+fn main() { let mut x = 1; let r = &mut x; take(vec![r]); *r += 1; println!("{}", x); }
+main();
+"#,
+    );
+    assert_eq!(output, "1\n2\n");
+}
+
+#[test]
+fn a_mut_stored_in_a_value_reaches_its_place() {
+    // A `&mut` in a struct, a tuple struct, a tuple, `Some` and `vec!`
+    // reaches the place it borrows, as rustc's build runs them (#184,
+    // #2503); a derived `Debug` writes what each refers to.
+    let output = printed(
+        r#"
+#[derive(Debug, PartialEq, PartialOrd)]
+struct S<'a> { a: &'a mut i32 }
+struct D<'a>(&'a mut Vec<i32>);
+fn main() {
+    let mut x = 1;
+    let s = S { a: &mut x };
+    *s.a += 5;
+    println!("{:?}", s);
+    let mut z = 6;
+    let mut w = 7;
+    let (t, u) = (S { a: &mut z }, S { a: &mut w });
+    println!("{} {} {}", s == t, s == u, s < u);
+    println!("{}", x);
+    let mut v = vec![1];
+    let d = D(&mut v);
+    d.0.push(2);
+    println!("{:?}", v);
+    let mut y = 3;
+    let o = Some(&mut y);
+    if let Some(r) = o {
+        *r = 7;
+    }
+    println!("{}", y);
+    let mut a = 1;
+    let mut b = 2;
+    let mut refs = vec![&mut a, &mut b];
+    *refs[0] += 5;
+    *refs[1] *= 3;
+    for r in refs {
+        *r += 10;
+    }
+    println!("{} {}", a, b);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "S { a: 6 }\ntrue false true\n6\n[1, 2]\n7\n16 16\n");
+}
+
+#[test]
+fn an_option_of_a_mut_kept_in_a_local_reaches_its_place() {
+    // `v.last_mut()` kept in a local holds `Some` of the element's place,
+    // so a write through its `unwrap()` changes `v` (#195).
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let mut o = v.last_mut();
+    let r = o.unwrap();
+    *r = 9;
+    println!("{:?}", v);
+    let e = v.get_mut(1);
+    if let Some(e) = e {
+        *e = 5;
+    }
+    match v.first_mut() {
+        Some(x) => *x *= 7,
+        None => {}
+    }
+    let f = v.first_mut();
+    match f {
+        Some(x) => *x += 1,
+        None => {}
+    }
+    let none = v.get_mut(10).is_none();
+    println!("{:?} {}", v, none);
+    let mut w = vec![String::from("a")];
+    let t = w.get_mut(0);
+    t.unwrap().push('c');
+    println!("{:?}", w);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2, 9]\n[8, 5, 9] true\n[\"ac\"]\n");
+}
+
+#[test]
+fn a_mut_field_reborrowed_through_self_reaches_its_place() {
+    // `&mut *self.a` of a `&mut` field returns the place the field refers
+    // to, and a method changes it through `self` (#2503).
+    let output = printed(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> {
+    fn whole(&mut self) -> &mut i32 { &mut *self.a }
+    fn bump(&mut self) { *self.a += 1; }
+}
+fn main() {
+    let mut x = 1;
+    let mut s = S { a: &mut x };
+    s.bump();
+    *s.whole() += 10;
+    println!("{}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "12\n");
+}
+
+#[test]
+fn disjoint_stored_borrows_of_one_local_run_without_a_data_race() {
+    // Two stored `&mut`s of one local's parts, and a method on one part
+    // given a stored `&mut` of another, run as rustc's build runs them:
+    // the part a call is lent is a cell of its own (D1113).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct S<'a> { a: &'a mut i32, b: &'a mut i32 }
+impl<'a> S<'a> {
+    fn add_to_a(&mut self) { *self.a += *self.b; }
+}
+fn sw(a: &mut i32, b: &mut i32) { let t = *a; *a = *b; *b = t; }
+struct Buf { data: Vec<u8> }
+struct State { n: u32 }
+struct Ctx { buf: Buf, state: State }
+struct Writer<'a> { out: &'a mut Buf }
+struct Lent<'a> { state: &'a mut State }
+impl State {
+    fn step(&mut self, w: &mut Writer) { self.n += 1; w.out.data.push(self.n as u8); }
+}
+fn main() {
+    let mut p = (1, 2);
+    let t = (&mut p.0, &mut p.1);
+    std::mem::swap(t.0, t.1);
+    println!("{:?}", p);
+    let mut s = S { a: &mut p.0, b: &mut p.1 };
+    s.add_to_a();
+    sw(s.a, s.b);
+    println!("{:?}", s);
+    println!("{:?}", p);
+    let mut ctx = Ctx { buf: Buf { data: vec![] }, state: State { n: 0 } };
+    let mut w = Writer { out: &mut ctx.buf };
+    ctx.state.step(&mut w);
+    let lent = Lent { state: &mut ctx.state };
+    lent.state.step(&mut w);
+    println!("{:?} {}", ctx.buf.data, ctx.state.n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "(2, 1)\nS { a: 1, b: 3 }\n(1, 3)\n[1, 2] 2\n");
+}
+
+#[test]
+fn a_mut_stored_in_a_value_keeps_its_loan() {
+    // The borrow checker's verdicts hold for a `&mut` in a value, as
+    // rustc's do.
+    let report = refused(
+        r#"
+struct D<'a>(&'a mut Vec<i32>);
+fn main() {
+    let mut v = vec![];
+    let d = D(&mut v);
+    v.push(1);
+    d.0.push(2);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0499]: cannot borrow `v` as mutable more than once at a time"),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+fn main() {
+    let mut x = 1;
+    let s = S { a: &mut x };
+    x += 1;
+    *s.a += 1;
+    println!("{}", x);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0503]: cannot use `x` because it was mutably borrowed"),
+        "{report}"
+    );
+}
+
+#[test]
+fn every_lifetime_a_returned_value_must_outlive_is_reported() {
+    // rustc reports one error for each lifetime that must outlive another,
+    // the lifetimes it names numbered across them, then the help that
+    // relates them (#2487).
+    signature_verdict(
+        r#"fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+fn main() { let (a, b) = (1, 2); println!("{:?}", f((&a, &b))); }
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:61
+  |
+1 | fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+  |      --  -- lifetime `'b` defined here                      ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+
+error: lifetime may not live long enough
+ --> <script>:1:61
+  |
+1 | fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+  |      --  -- lifetime `'b` defined here                      ^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+
+help: `'a` and `'b` must be the same: replace one with the other
+"#),
+    );
+    signature_verdict(
+        r#"use std::cell::Cell;
+fn f<'a, 'b>(x: Cell<&'a i32>) -> Cell<&'b i32> { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:51
+  |
+2 | fn f<'a, 'b>(x: Cell<&'a i32>) -> Cell<&'b i32> { x }
+  |      --  -- lifetime `'b` defined here            ^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+  = note: requirement occurs because of the type `Cell<&i32>`, which makes the generic argument `&i32` invariant
+  = note: the struct `Cell<T>` is invariant over the parameter `T`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+ --> <script>:2:51
+  |
+2 | fn f<'a, 'b>(x: Cell<&'a i32>) -> Cell<&'b i32> { x }
+  |      --  -- lifetime `'b` defined here            ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of the type `Cell<&i32>`, which makes the generic argument `&i32` invariant
+  = note: the struct `Cell<T>` is invariant over the parameter `T`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+help: `'b` and `'a` must be the same: replace one with the other
+"#),
+    );
+    signature_verdict(
+        r#"fn f<'a, 'b, 'c>(x: &'a i32, y: &'b i32) -> (&'c i32, &'c i32) { (x, y) }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:66
+  |
+1 | fn f<'a, 'b, 'c>(x: &'a i32, y: &'b i32) -> (&'c i32, &'c i32) { (x, y) }
+  |      --      -- lifetime `'c` defined here                       ^^^^^^ function was supposed to return data with lifetime `'c` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'c`
+
+error: lifetime may not live long enough
+ --> <script>:1:66
+  |
+1 | fn f<'a, 'b, 'c>(x: &'a i32, y: &'b i32) -> (&'c i32, &'c i32) { (x, y) }
+  |          --  -- lifetime `'c` defined here                       ^^^^^^ function was supposed to return data with lifetime `'c` but it is returning data with lifetime `'b`
+  |          |
+  |          lifetime `'b` defined here
+  |
+  = help: consider adding the following bound: `'b: 'c`
+
+help: the following changes may resolve your lifetime errors
+  |
+  = help: add bound `'a: 'c`
+  = help: add bound `'b: 'c`
+"#),
+    );
+    signature_verdict(
+        r#"fn f<'a, 'b, 'c>(x: &'a i32) -> (&'b i32, &'c i32) { (x, x) }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:54
+  |
+1 | fn f<'a, 'b, 'c>(x: &'a i32) -> (&'b i32, &'c i32) { (x, x) }
+  |      --  -- lifetime `'b` defined here               ^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &Vec<&i32>) -> &Vec<&i32> { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:53
+  |
+2 | impl S { fn g(&self, x: &Vec<&i32>) -> &Vec<&i32> { x } }
+  |               -         -                           ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &'a Vec<&'a i32>) -> &'a Vec<&'a i32> { x } }
+  |              ++++            ++      ++           ++      ++
+
+error: lifetime may not live long enough
+ --> <script>:2:53
+  |
+2 | impl S { fn g(&self, x: &Vec<&i32>) -> &Vec<&i32> { x } }
+  |               -              -                      ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'3`
+  |               |              |
+  |               |              let's call the lifetime of this reference `'3`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &Vec<&'a i32>) -> &'a Vec<&'a i32> { x } }
+  |              ++++                 ++           ++      ++
+"#),
+    );
+}
+
+#[test]
+fn a_returned_branch_is_marked_where_it_borrows() {
+    // rustc marks the branch of an `if` or a `match` the value takes its
+    // borrow from (#2488).
+    signature_verdict(
+        r#"fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
+fn main() { let (a, b) = (1, 2); println!("{:?}", f(Some(&a), &b)); }
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:79
+  |
+1 | fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
+  |      --  -- lifetime `'b` defined here                                        ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { match y { 0 => Some(y), _ => x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:96
+  |
+1 | fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { match y { 0 => Some(y), _ => x } }
+  |      --  -- lifetime `'b` defined here                                                         ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"fn g<'a, 'b>(x: &'a i32, y: &'b i32, c: bool) -> (&'b i32, &'a i32) { if c { (x, y) } else { (y, x) } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:78
+  |
+1 | fn g<'a, 'b>(x: &'a i32, y: &'b i32, c: bool) -> (&'b i32, &'a i32) { if c { (x, y) } else { (y, x) } }
+  |      --  -- lifetime `'b` defined here                                       ^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+
+error: lifetime may not live long enough
+ --> <script>:1:78
+  |
+1 | fn g<'a, 'b>(x: &'a i32, y: &'b i32, c: bool) -> (&'b i32, &'a i32) { if c { (x, y) } else { (y, x) } }
+  |      --  -- lifetime `'b` defined here                                       ^^^^^^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+
+help: `'a` and `'b` must be the same: replace one with the other
+"#),
+    );
+}
+
+#[test]
+fn two_elided_lifetimes_are_given_a_named_one() {
+    // rustc suggests one named lifetime for two elided ones: written in the
+    // output, or else at the shorter one's reference, and at the longer
+    // one's, a new one declared or the function's first reused (#2489).
+    // A store through a `&mut` parameter too.
+    signature_verdict(
+        r#"fn g(v: &mut Vec<&i32>, x: &i32) { v.push(x); }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:36
+  |
+1 | fn g(v: &mut Vec<&i32>, x: &i32) { v.push(x); }
+  |                  -         -       ^^^^^^^^^ argument requires that `'1` must outlive `'2`
+  |                  |         |
+  |                  |         let's call the lifetime of this reference `'1`
+  |                  let's call the lifetime of this reference `'2`
+  |
+  = note: requirement occurs because of a mutable reference to `Vec<&i32>`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider introducing a named lifetime parameter
+  |
+1 | fn g<'a>(v: &mut Vec<&'a i32>, x: &'a i32) { v.push(x); }
+  |     ++++              ++           ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &i32) -> &i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:41
+  |
+2 | impl S { fn g(&self, x: &i32) -> &i32 { x } }
+  |               -         -               ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &'a i32) -> &'a i32 { x } }
+  |              ++++            ++          ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g<T>(&self, x: &i32, _t: T) -> &i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:51
+  |
+2 | impl S { fn g<T>(&self, x: &i32, _t: T) -> &i32 { x } }
+  |                  -         -                      ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |                  |         |
+  |                  |         let's call the lifetime of this reference `'1`
+  |                  let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a, T>(&self, x: &'a i32, _t: T) -> &'a i32 { x } }
+  |               +++               ++                 ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &'_ i32) -> &'_ i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:47
+  |
+2 | impl S { fn g(&self, x: &'_ i32) -> &'_ i32 { x } }
+  |               -         -                     ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 - impl S { fn g(&self, x: &'_ i32) -> &'_ i32 { x } }
+2 + impl S { fn g<'a>(&self, x: &'a i32) -> &'a i32 { x } }
+  |
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &Vec<&i32>) -> &i32 { x[0] } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:47
+  |
+2 | impl S { fn g(&self, x: &Vec<&i32>) -> &i32 { x[0] } }
+  |               -              -                ^^^^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |              |
+  |               |              let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &Vec<&'a i32>) -> &'a i32 { x[0] } }
+  |              ++++                 ++           ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g<'b>(&self, x: &i32, _y: &'b i32) -> &i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:58
+  |
+2 | impl S { fn g<'b>(&self, x: &i32, _y: &'b i32) -> &i32 { x } }
+  |                   -         -                            ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |                   |         |
+  |                   |         let's call the lifetime of this reference `'1`
+  |                   let's call the lifetime of this reference `'2`
+  |
+help: consider reusing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'b>(&self, x: &'b i32, _y: &'b i32) -> &'b i32 { x } }
+  |                              ++                       ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: & i32) -> & i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:43
+  |
+2 | impl S { fn g(&self, x: & i32) -> & i32 { x } }
+  |               -         -                 ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &'a  i32) -> &'a  i32 { x } }
+  |              ++++            ++           ++
+"#),
+    );
+}
+
+#[test]
+fn a_use_of_a_declared_name_is_e0255() {
+    // rustc's E0255 at the second of a `use` and a declaration of one name
+    // (#2497).
+    signature_verdict(
+        r#"mod a { pub mod inner {} pub use self::inner; }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `inner` is defined multiple times
+ --> <script>:1:34
+  |
+1 | mod a { pub mod inner {} pub use self::inner; }
+  |         -------------            ^^^^^^^^^^^ `inner` reimported here
+  |         |
+  |         previous definition of the module `inner` here
+  |
+  = note: `inner` must be defined only once in the type namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+1 | mod a { pub mod inner {} pub use self::inner as other_inner; }
+  |                                              ++++++++++++++
+"#),
+    );
+    signature_verdict(
+        r#"mod a { pub use self::inner; pub mod inner {} }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `inner` is defined multiple times
+ --> <script>:1:30
+  |
+1 | mod a { pub use self::inner; pub mod inner {} }
+  |                 -----------  ^^^^^^^^^^^^^ `inner` redefined here
+  |                 |
+  |                 previous import of the module `inner` here
+  |
+  = note: `inner` must be defined only once in the type namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+1 | mod a { pub use self::inner as other_inner; pub mod inner {} }
+  |                             ++++++++++++++
+"#),
+    );
+    signature_verdict(
+        r#"mod m { pub fn f() {} }
+use m::f;
+fn f() {}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `f` is defined multiple times
+ --> <script>:3:1
+  |
+2 | use m::f;
+  |     ---- previous import of the value `f` here
+3 | fn f() {}
+  | ^^^^^^ `f` redefined here
+  |
+  = note: `f` must be defined only once in the value namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+2 | use m::f as other_f;
+  |          ++++++++++
+"#),
+    );
+    signature_verdict(
+        r#"mod m { pub struct S; }
+use m::S;
+pub struct S<T>(T);
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `S` is defined multiple times
+ --> <script>:3:1
+  |
+2 | use m::S;
+  |     ---- previous import of the type `S` here
+3 | pub struct S<T>(T);
+  | ^^^^^^^^^^^^^^^^^^^ `S` redefined here
+  |
+  = note: `S` must be defined only once in the type namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+2 | use m::S as OtherS;
+  |          +++++++++
+"#),
+    );
+}
+
+#[test]
+fn a_mismatched_argument_is_marked_at_the_argument() {
+    // rustc's E0308 at the argument, the callee labelled, where the
+    // expectation gives a generic call's parameter its type or the
+    // parameter's type is the function's own (#2498).
+    signature_verdict(
+        r#"trait Shape { fn area(&self) -> f64; }
+struct Sq(f64);
+struct Ci(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+impl Shape for Ci { fn area(&self) -> f64 { self.0 } }
+fn id<T: Shape>(t: T) -> T { t }
+fn main() { let mut x = id(Sq(1.0)); x = id(Ci(2.0)); println!("{}", x.area()); }
+main();
+"#,
+        Err(r#"
+error[E0308]: mismatched types
+ --> <script>:7:45
+  |
+7 | fn main() { let mut x = id(Sq(1.0)); x = id(Ci(2.0)); println!("{}", x.area()); }
+  |                                          -- ^^^^^^^ expected `Sq`, found `Ci`
+  |                                          |
+  |                                          arguments to this function are incorrect
+  |
+help: the return type of this call is `Ci` due to the type of the argument passed
+ --> <script>:7:42
+  |
+7 | fn main() { let mut x = id(Sq(1.0)); x = id(Ci(2.0)); println!("{}", x.area()); }
+  |                                          ^^^-------^
+  |                                             |
+  |                                             this argument influences the return type of `id`
+note: function defined here
+ --> <script>:6:4
+  |
+6 | fn id<T: Shape>(t: T) -> T { t }
+  |    ^^           ----
+"#),
+    );
+    signature_verdict(
+        r#"struct Sq(f64);
+struct Ci(f64);
+fn wrap<T>(t: T) -> Vec<T> { vec![t] }
+fn main() { let _v: Vec<Sq> = wrap(Ci(2.0)); }
+main();
+"#,
+        Err(r#"
+error[E0308]: mismatched types
+ --> <script>:4:36
+  |
+4 | fn main() { let _v: Vec<Sq> = wrap(Ci(2.0)); }
+  |                               ---- ^^^^^^^ expected `Sq`, found `Ci`
+  |                               |
+  |                               arguments to this function are incorrect
+  |
+help: the return type of this call is `Ci` due to the type of the argument passed
+ --> <script>:4:31
+  |
+4 | fn main() { let _v: Vec<Sq> = wrap(Ci(2.0)); }
+  |                               ^^^^^-------^
+  |                                    |
+  |                                    this argument influences the return type of `wrap`
+note: function defined here
+ --> <script>:3:4
+  |
+3 | fn wrap<T>(t: T) -> Vec<T> { vec![t] }
+  |    ^^^^    ----
+"#),
+    );
+    signature_verdict(
+        r#"struct Sq(f64);
+struct Ci(f64);
+fn take(t: Sq) -> Sq { t }
+fn main() { let _s = take(Ci(2.0)); }
+main();
+"#,
+        Err(r#"
+error[E0308]: mismatched types
+ --> <script>:4:27
+  |
+4 | fn main() { let _s = take(Ci(2.0)); }
+  |                      ---- ^^^^^^^ expected `Sq`, found `Ci`
+  |                      |
+  |                      arguments to this function are incorrect
+  |
+note: function defined here
+ --> <script>:3:4
+  |
+3 | fn take(t: Sq) -> Sq { t }
+  |    ^^^^ -----
+"#),
+    );
+}
+
+#[test]
+fn an_untyped_closure_adds_at_the_type_its_call_gives() {
+    // `a + b` of two closure parameters nothing has typed waits for the
+    // call, as rustc's obligation does, and is checked at that kind
+    // (#2512). The output is rustc's.
+    let output = printed(
+        r#"
+fn main() {
+    let f = |a, b| a + b;
+    let g = |a, b| a * b;
+    println!("{} {} {}", (|a, b| a + b)(3, 3), f(3, 3), g(2.5, 2.0));
+    println!("{} {}", (|a, b| a - b)(7u8, 2), (|a, b| a + b)(1.5f32, 0.1));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 6 5\n5 1.6\n");
+    let error = Engine::new()
+        .run("fn main() { let f = |a, b| a + b; let x: i8 = f(100i8, 100); println!(\"{}\", x); }\nmain();\n")
+        .expect_err("an `i8` sum past 127 panics");
+    assert!(
+        error.to_string().contains("attempt to add with overflow"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_program_traits_generic_method_through_its_path_takes_its_turbofish() {
+    // `Conv::conv::<u16>(&s)` and `<S as Conv>::conv` of a generic method
+    // run the impl's body at the call's type (#2513). The output is
+    // rustc's.
+    let output = printed(
+        r#"
+struct S(u8);
+trait Conv { fn conv<T: From<u8>>(&self) -> T; }
+impl Conv for S { fn conv<T: From<u8>>(&self) -> T { T::from(self.0) } }
+fn main() {
+    let s = S(3);
+    let b: f64 = Conv::conv(&s);
+    println!("{} {:?} {}", Conv::conv::<u16>(&s), b, <S as Conv>::conv::<u32>(&s));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 3.0 3\n");
+}
+
+#[test]
+fn a_trait_for_str_is_called_through_its_path_on_a_str() {
+    // `Shout::shout("hi")` takes `"hi"` as `&Self` of `impl Shout for str`,
+    // as `<str as ToString>::to_string("x")` does std's (#2514). The
+    // output is rustc's.
+    let output = printed(
+        r#"
+trait Shout { fn shout(&self) -> String; }
+impl Shout for str { fn shout(&self) -> String { self.to_uppercase() } }
+impl Shout for i32 { fn shout(&self) -> String { format!("{}!", self) } }
+fn main() {
+    println!("{} {} {}", Shout::shout("hi"), Shout::shout(&5), <str as Shout>::shout("x"));
+    println!("{}", <str as ToString>::to_string("y"));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "HI 5! X\ny\n");
+}
+
+#[test]
+fn an_iterator_parameter_with_no_item_written_has_its_methods() {
+    // `I: Iterator` with no `Item = T` has `I::Item` as a parameter of its
+    // own, so `i.count()` and `i.collect()` are the iterator's (#2507).
+    // The output is rustc's.
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+fn count<I: Iterator>(i: I) -> usize { i.count() }
+fn listed<I>(i: I) -> Vec<I::Item> where I: Iterator, I::Item: Debug { i.collect() }
+fn first<I: IntoIterator>(i: I) -> Option<I::Item> { i.into_iter().next() }
+fn main() {
+    println!("{} {:?} {:?}", count([1, 2].iter()), listed(vec![3, 4].into_iter()), first(vec!["a"]));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 [3, 4] Some(\"a\")\n");
+}
+
+#[test]
+fn a_method_whose_impl_bounds_fail_exists_but_is_e0599() {
+    // rustc's probe finds `show` of `impl<T: Debug> S<T>` and refuses it
+    // for `S<Opaque>` (#2504).
+    let report = refused(
+        r#"use std::fmt::Debug;
+struct Opaque;
+struct S<T>(T);
+impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+fn main() { S(Opaque).show(); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            r#"error[E0599]: the method `show` exists for struct `S<Opaque>`, but its trait bounds were not satisfied
+ --> <script>:5:23
+  |
+2 | struct Opaque;
+  | ------------- doesn't satisfy `Opaque: Debug`
+3 | struct S<T>(T);
+  | ----------- method `show` not found for this struct
+4 | impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+5 | fn main() { S(Opaque).show(); }
+  |                       ^^^^ method cannot be called on `S<Opaque>` due to unsatisfied trait bounds
+  |
+note: trait bound `Opaque: Debug` was not satisfied
+ --> <script>:4:9
+  |
+4 | impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+  |         ^^^^^  ----
+  |         |
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+"#
+        ),
+        "{report}"
+    );
+    // Two bounds of one type are listed together, and the derive names
+    // both.
+    let report = refused(
+        r#"use std::fmt::Debug;
+struct Opaque;
+struct S<T>(T);
+impl<T: Debug + Clone> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+fn main() { let s = S(Opaque); let r = &s; r.show(); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            r#"error[E0599]: the method `show` exists for reference `&S<Opaque>`, but its trait bounds were not satisfied
+ --> <script>:5:46
+  |
+2 | struct Opaque;
+  | ------------- doesn't satisfy `Opaque: Clone` or `Opaque: Debug`
+...
+5 | fn main() { let s = S(Opaque); let r = &s; r.show(); }
+  |                                              ^^^^ method cannot be called on `&S<Opaque>` due to unsatisfied trait bounds
+  |
+note: the following trait bounds were not satisfied:
+      `Opaque: Clone`
+      `Opaque: Debug`
+ --> <script>:4:9
+  |
+4 | impl<T: Debug + Clone> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+  |         ^^^^^   ^^^^^  ----
+  |         |       |
+  |         |       unsatisfied trait bound introduced here
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Clone, Debug)]`
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_traits_bounds_on_its_parameters_are_checked_at_its_impls() {
+    // `impl Show<Opaque> for A` of `trait Show<T> where T: Debug` is
+    // refused at its header, as rustc refuses it (#2505).
+    for (bound, column) in [("<T> where T: Debug", 24), ("<T: Debug>", 15)] {
+        let report = refused(&format!(
+            "use std::fmt::Debug;\nstruct Opaque;\nstruct A;\ntrait Show{bound} {{ fn show(&self) {{}} }}\nimpl Show<Opaque> for A {{}}\nfn main() {{}}\nmain();\n"
+        ));
+        let expected = format!(
+            r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:5:6
+  |
+5 | impl Show<Opaque> for A {{}}
+  |      ^^^^^^^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
+note: required by a bound in `Show`
+ --> <script>:4:{column}
+"#
+        );
+        assert!(report.starts_with(&expected), "{report}");
+        assert!(
+            report.contains("required by this bound in `Show`\nhelp: consider annotating `Opaque` with `#[derive(Debug)]`\n"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn a_borrow_of_a_block_tail_temporary_kept_by_a_let_is_e0716() {
+    // A block tail's temporaries end with the block, as edition 2024 has
+    // it, so the `let` can't keep a borrow of one (#159).
+    for program in [
+        "fn main() { let r = { String::from(\"a\").as_str() }; println!(\"{r}\"); }\nmain();",
+        "fn main() { let v = vec![String::from(\"a\")]; let r: &str = { v.clone()[0].as_str() }; println!(\"{r}\"); }\nmain();",
+    ] {
+        let report = refused(program);
+        assert!(
+            report.starts_with("error[E0716]: temporary value dropped while borrowed"),
+            "{report}"
+        );
+    }
+    // A borrow the tail extends lives on with the `let`.
+    let output = printed(
+        r#"
+fn main() {
+    let r = { &String::from("a") };
+    let s: &str = { let _t = String::from("b"); &String::from("c") };
+    println!("{r} {s}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a c\n");
+}
+
+#[test]
+fn a_block_or_a_box_keeps_the_borrows_of_its_value() {
+    // The value of a block is its tail's and a `Box`'s is what it boxes,
+    // with the borrows they hold (#147).
+    for value in [
+        "{ let c = || &v; c() }",
+        "Box::new(|| v.len())",
+        "Box::new(&v)",
+    ] {
+        let report = refused(&format!(
+            "fn main() {{ let mut v = vec![1]; let r = {value}; v.push(2); let _ = &r; }}\nmain();"
+        ));
+        assert!(
+            report.starts_with(
+                "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as \
+                 immutable"
+            ),
+            "{value}: {report}"
+        );
+    }
+    let report = refused(
+        r#"
+fn make() -> Box<dyn Fn() -> usize> {
+    let v = vec![1];
+    Box::new(|| v.len())
+}
+fn main() { println!("{}", make()()); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0373]: closure may outlive the current function, but it borrows `v`, which \
+             is owned by the current function"
+        ),
+        "{report}"
+    );
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2];
+    let n = { let a = &v; a.len() };
+    v.push(3);
+    let r = { let a = &v; a };
+    let b = Box::new(&v);
+    println!("{n} {r:?} {}", b.len());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 [1, 2, 3] 3\n");
+}
+
+#[test]
+fn a_move_out_of_a_static_is_e0507() {
+    // A static is a place, which no use moves out of (#192).
+    let program = |main: &str| {
+        format!(
+            "struct Pair {{ name: String, n: i32 }}\nstatic PAIR: Pair = Pair {{ name: String::new(), n: 2 }};\nstatic NAME: String = String::new();\nfn take(s: String) -> usize {{ s.len() }}\nfn main() {{ {main} }}\nmain();"
+        )
+    };
+    for (main, message) in [
+        ("take(NAME);", "cannot move out of static item `NAME`"),
+        ("let s = NAME;", "cannot move out of static item `NAME`"),
+        (
+            "let s = PAIR.name;",
+            "cannot move out of `PAIR.name` as `PAIR` is a static item",
+        ),
+        (
+            "static LOCAL: String = String::new(); let s = LOCAL;",
+            "cannot move out of static item `LOCAL`",
+        ),
+    ] {
+        let report = refused(&program(main));
+        assert!(
+            report.starts_with(&format!("error[E0507]: {message}")),
+            "{main}: {report}"
+        );
+    }
+    let output = printed(&program(
+        "let n = PAIR.n; let r = &PAIR.name; let c = PAIR.name.clone(); println!(\"{n} [{r}] [{c}] {}\", NAME.len());",
+    ));
+    assert_eq!(output, "2 [] [] 0\n");
+}
+
+#[test]
+fn a_static_of_a_type_that_is_not_sync_is_e0277() {
+    // Every thread shares a static, so its type is `Sync` (#1563).
+    let report = refused(
+        "use std::cell::RefCell;\nstatic HITS: RefCell<i32> = RefCell::new(0);\nfn main() {}\nmain();",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `RefCell<i32>` cannot be shared between threads safely
+ --> <script>:2:14
+  |
+2 | static HITS: RefCell<i32> = RefCell::new(0);
+  |              ^^^^^^^^^^^^ `RefCell<i32>` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `RefCell<i32>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    let report = refused(
+        "use std::cell::Cell;\nfn main() {\n    static C: Cell<i32> = Cell::new(0);\n    C.set(1);\n}\nmain();",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Cell<i32>` cannot be shared between threads safely
+ --> <script>:3:15
+  |
+3 |     static C: Cell<i32> = Cell::new(0);
+  |               ^^^^^^^^^ `Cell<i32>` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `Cell<i32>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicI32` instead
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    let report = refused(
+        r#"use std::cell::Cell;
+struct Inner {
+    c: Cell<f64>,
+}
+struct Outer {
+    n: i32,
+    inner: Inner,
+}
+static O: Outer = Outer { n: 1, inner: Inner { c: Cell::new(0.0) } };
+static E: (i32, Cell<u8>) = (1, Cell::new(0));
+fn main() {}
+main();"#,
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Cell<f64>` cannot be shared between threads safely
+ --> <script>:9:11
+  |
+9 | static O: Outer = Outer { n: 1, inner: Inner { c: Cell::new(0.0) } };
+  |           ^^^^^ `Cell<f64>` cannot be shared between threads safely
+  |
+  = help: within `Outer`, the trait `Sync` is not implemented for `Cell<f64>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `Inner`
+ --> <script>:2:8
+  |
+2 | struct Inner {
+  |        ^^^^^
+note: required because it appears within the type `Outer`
+ --> <script>:5:8
+  |
+5 | struct Outer {
+  |        ^^^^^
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    let report = refused(
+        "use std::cell::Cell;\nstatic E: (i32, Cell<u8>) = (1, Cell::new(0));\nfn main() {}\nmain();",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Cell<u8>` cannot be shared between threads safely
+ --> <script>:2:11
+  |
+2 | static E: (i32, Cell<u8>) = (1, Cell::new(0));
+  |           ^^^^^^^^^^^^^^^ `Cell<u8>` cannot be shared between threads safely
+  |
+  = help: within `(i32, Cell<u8>)`, the trait `Sync` is not implemented for `Cell<u8>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU8` instead
+  = note: required because it appears within the type `(i32, Cell<u8>)`
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    // A `Mutex` is `Sync`.
+    let output = printed(
+        "use std::sync::Mutex;\nstatic M: Mutex<i32> = Mutex::new(4);\nfn main() { println!(\"{}\", *M.lock().unwrap()); }\nmain();",
+    );
+    assert_eq!(output, "4\n");
+}
+
+#[test]
+fn temporaries_drop_where_rustc_2024_drops_them() {
+    // A temporary drops at the end of its statement, a block tail's before
+    // the block's locals, a condition's before the body, an `if let`
+    // subject's before the `else`, and one a `let` extends with the block
+    // (#870).
+    let output = printed(
+        r#"
+struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn label(&self) -> &'static str {
+        self.0
+    }
+    fn again(&self) -> D {
+        D("again")
+    }
+    fn ok(&self) -> bool {
+        true
+    }
+}
+struct W<'a>(&'a D);
+fn main() {
+    let a = D("a");
+    println!("{}", a.again().label());
+    let n = D("let").label().len();
+    println!("after let {n}");
+    let x = {
+        let _l = D("local");
+        D("tail").label().len()
+    };
+    println!("after block {x}");
+    if D("cond").ok() {
+        println!("if body");
+    }
+    let mut once = true;
+    while D("while").ok() && once {
+        once = false;
+        println!("while body");
+    }
+    match D("scrutinee").ok() {
+        _ => println!("match arm"),
+    }
+    if let false = D("if let").ok() {
+        println!("if let body");
+    } else {
+        println!("if let else");
+    }
+    D("statement").ok();
+    let r = &D("extended");
+    let s = Some(&D("some"));
+    let w = W(&D("w"));
+    let t = (&D("t1"), D("t2"));
+    println!("end {} {} {} {}", r.0, s.unwrap().0, (w.0).0, (t.0).0);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "again\ndrop again\ndrop let\nafter let 3\ndrop tail\ndrop local\nafter block 4\n\
+         drop cond\nif body\ndrop while\nwhile body\ndrop while\nmatch arm\ndrop scrutinee\n\
+         drop if let\nif let else\ndrop statement\nend extended some w t1\ndrop t2\ndrop t1\n\
+         drop w\ndrop some\ndrop extended\ndrop a\n"
+    );
+    // A `while let` subject's temporaries drop with each iteration, and at
+    // a jump out of the body.
+    let output = printed(
+        r#"
+struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn pick(&self, n: i32) -> Option<i32> {
+        if n < 3 { Some(n) } else { None }
+    }
+}
+fn early(n: i32) -> i32 {
+    if let Some(k) = D("early").pick(n) {
+        if k == 0 {
+            return 10;
+        }
+        println!("past {k}");
+    }
+    n
+}
+fn main() {
+    let mut n = 0;
+    while let Some(k) = D("loop").pick(n) {
+        n += 1;
+        if k == 0 {
+            continue;
+        }
+        println!("body {k}");
+        if k == 2 {
+            break;
+        }
+    }
+    println!("{} {}", early(0), early(1));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "drop loop\nbody 1\ndrop loop\nbody 2\ndrop loop\ndrop early\npast 1\ndrop early\n10 1\n"
+    );
+}
+
+#[test]
+fn an_if_let_subject_temporary_ends_before_the_else() {
+    // A temporary of an `if let` subject whose drop uses a borrow holds it
+    // through the consequent and not the alternative, as edition 2024 has
+    // it (#870).
+    let program = |consequent: &str, alternative: &str| {
+        format!(
+            "struct G<'a>(&'a Vec<i32>);\nimpl Drop for G<'_> {{ fn drop(&mut self) {{}} }}\nimpl G<'_> {{ fn first(&self) -> Option<i32> {{ self.0.first().copied() }} }}\nfn main() {{ let mut v: Vec<i32> = Vec::new(); if let Some(x) = G(&v).first() {{ {consequent} }} else {{ {alternative} }} println!(\"{{v:?}}\"); }}\nmain();"
+        )
+    };
+    assert_eq!(
+        printed(&program("println!(\"{x}\");", "v.push(1);")),
+        "[1]\n"
+    );
+    let report = refused(&program("v.push(x);", "println!(\"none\");"));
+    assert!(
+        report.starts_with(
+            "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_static_is_one_value_its_first_read_makes_and_every_read_shares() {
+    // A program's static and a body's, of a `Mutex` or of a struct holding
+    // one, keep what each call and each thread puts in them, and a copy of
+    // a static changes apart from it (#2519). The output is rustc's.
+    let output = printed(
+        r#"
+use std::sync::Mutex;
+static HITS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+struct Log { lines: Mutex<Vec<&'static str>> }
+static LOG: Log = Log { lines: Mutex::new(Vec::new()) };
+static FIRST: Option<i32> = Some(1);
+fn hit(n: i32) { HITS.lock().unwrap().push(n); }
+fn tick() -> i32 {
+    static TICKS: Mutex<i32> = Mutex::new(0);
+    let mut ticks = TICKS.lock().unwrap();
+    *ticks += 1;
+    *ticks
+}
+fn main() {
+    hit(1);
+    hit(2);
+    std::thread::spawn(|| hit(3)).join().unwrap();
+    LOG.lines.lock().unwrap().push("a");
+    LOG.lines.lock().unwrap().push("b");
+    let mut first = FIRST;
+    if let Some(n) = first.as_mut() { *n += 1; }
+    println!("hits {:?}", HITS.lock().unwrap());
+    println!("{:?} {} {} {}", LOG.lines.lock().unwrap(), tick(), tick(), tick());
+    println!("{:?} {:?}", first, FIRST);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "hits [1, 2, 3]\n[\"a\", \"b\"] 1 2 3\nSome(2) Some(1)\n"
+    );
+}
+
+#[test]
+fn a_static_keeps_its_value_across_generations_until_its_initializer_changes() {
+    // Each run is a generation of one program: a static's value is kept by
+    // its path, type and initializer, a body static's by its site too, so
+    // an edit of a function keeps both, and an edit of the initializer
+    // starts a new value (#2519, D862).
+    let generation = |push: i32, initializer: &str| {
+        printed(&format!(
+            r#"
+use std::sync::Mutex;
+static GENERATIONS: Mutex<Vec<i32>> = {initializer};
+fn record() -> i32 {{
+    static CALLS: Mutex<i32> = Mutex::new(0);
+    *CALLS.lock().unwrap() += 1;
+    GENERATIONS.lock().unwrap().push({push});
+    *CALLS.lock().unwrap()
+}}
+fn main() {{ let calls = record(); println!("{{:?}} {{}}", GENERATIONS.lock().unwrap(), calls); }}
+main();
+"#
+        ))
+    };
+    assert_eq!(generation(1, "Mutex::new(Vec::new())"), "[1] 1\n");
+    assert_eq!(generation(2, "Mutex::new(Vec::new())"), "[1, 2] 2\n");
+    assert_eq!(generation(3, "Mutex::new(vec![0])"), "[0, 3] 3\n");
+}
+
+#[test]
+fn a_closure_that_changes_self_reaches_self_where_it_is_kept() {
+    // A closure kept in a local, called later or nested, changes the
+    // receiver's fields where they are, as rustc's capture of them
+    // borrows them (#189, D1113).
+    let output = printed(
+        r#"
+struct S { a: i32, b: Vec<i32>, items: Vec<i32> }
+impl S {
+    fn total(&mut self) {
+        self.items.iter().for_each(|x| self.a += x);
+    }
+    fn run(&mut self) -> usize {
+        let mut add = |x: i32| { self.b.push(x); self.b.len() };
+        add(4);
+        let n = add(5);
+        self.a += 1;
+        n
+    }
+    fn nested(&mut self) {
+        let mut f = |k: i32| { let mut g = |j: i32| self.b.push(j * k); g(1); g(2); };
+        f(10);
+    }
+}
+fn fill(v: &mut Vec<i32>) {
+    let mut add = |x: i32| v.push(x);
+    add(7);
+    add(8);
+}
+fn main() {
+    let mut s = S { a: 0, b: vec![], items: vec![1, 2, 3] };
+    s.total();
+    let n = s.run();
+    s.nested();
+    let mut v = vec![];
+    fill(&mut v);
+    let mut list = vec![S { a: 0, b: vec![], items: vec![5] }];
+    list[0].total();
+    list[0].run();
+    println!("{} {} {:?} {:?} {} {:?}", s.a, n, s.b, v, list[0].a, list[0].b);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 2 [4, 5, 10, 20] [7, 8] 6 [4, 5]\n");
+}
+
+#[test]
+fn a_mut_local_moves_where_no_reference_is_expected() {
+    // rustc moves a `&mut` local given whole where the expected type is
+    // no reference: `Some(r)`, a tuple, a generic field, a `let s;` of no
+    // type (#2502).
+    for (shape, holder) in [
+        ("", "let o = Some(r);"),
+        ("", "let o = (r, 2);"),
+        ("struct G<T>(T);", "let o = G(r);"),
+        ("struct N<T> { t: T }", "let o = N { t: r };"),
+        ("", "let o; o = r;"),
+    ] {
+        let report = refused(&format!(
+            "{shape}\nfn main() {{ let mut x = 1; let r = &mut x; {holder} *r += 1; drop(o); }}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with("error[E0382]: use of moved value: `r`"),
+            "{holder}: {report}"
+        );
+    }
+    // Where a reference is expected, `r` is reborrowed, and a `let s;`
+    // given a `&mut` reaches its place.
+    let output = printed(
+        r#"
+struct G<T>(T);
+fn take(o: Option<&mut i32>) { if let Some(m) = o { *m += 1; } }
+fn main() {
+    let mut x = 1;
+    let r = &mut x;
+    take(Some(r));
+    let t: (&mut i32, i32) = (r, 2);
+    *t.0 += 1;
+    let o = Some::<&mut i32>(r);
+    drop(o);
+    let s: &mut i32;
+    s = r;
+    *s += 1;
+    *r += 1;
+    let mut y = 1;
+    let g = G(&mut y);
+    *g.0 += 1;
+    let mut z = 1;
+    let u;
+    u = &mut z;
+    *u += 5;
+    println!("{} {} {}", x, y, z);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "5 2 6\n");
+}
+
+#[test]
+fn a_mut_parameter_a_function_keeps_is_the_callers_place() {
+    // A `&mut` parameter whose lifetime the output, another parameter or
+    // the impl names is lent as the reference to the caller's place, so
+    // the value keeping it reaches that place; two of one local's parts
+    // stay apart (D1113).
+    let output = printed(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> {
+    fn new(a: &'a mut i32) -> S<'a> { S { a } }
+    fn inc(&mut self) { *self.a += 1; }
+}
+fn pair<'a>(n: &mut i32, a: &'a mut i32) -> S<'a> { *n += 1; S { a } }
+struct T<'a> { x: &'a mut i32, y: &'a mut i32 }
+impl<'a> T<'a> {
+    fn new(x: &'a mut i32, y: &'a mut i32) -> T<'a> { T { x, y } }
+    fn bump(&mut self) { *self.x += 1; *self.y += 2; }
+}
+struct P { l: i32, r: i32 }
+struct Bag<T> { items: Vec<T> }
+impl<T> Bag<T> {
+    fn add(&mut self, t: T) { self.items.push(t); }
+}
+fn keep<T>(t: T) -> Vec<T> { vec![t] }
+fn main() {
+    let mut x = 1;
+    let mut s = S::new(&mut x);
+    s.inc();
+    s.inc();
+    println!("{}", x);
+    let mut p = (1, 2);
+    let t = pair(&mut p.0, &mut p.1);
+    *t.a += 10;
+    println!("{:?}", p);
+    let mut q = P { l: 1, r: 2 };
+    let mut u = T::new(&mut q.l, &mut q.r);
+    u.bump();
+    std::mem::swap(u.x, u.y);
+    u.bump();
+    println!("{} {}", q.l, q.r);
+    let mut a = 1;
+    let mut b = 2;
+    let mut bag = Bag { items: Vec::new() };
+    bag.add(&mut a);
+    bag.add(&mut b);
+    for e in bag.items { *e += 10; }
+    let mut c = 1;
+    let r = &mut c;
+    for e in keep(r) { *e += 4; }
+    println!("{} {} {}", a, b, c);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3\n(2, 12)\n5 4\n11 12 5\n");
+}
+
+#[test]
+fn an_option_of_a_mut_given_or_matched_reaches_its_place() {
+    // `f(v.get_mut(i))` gives the callee `Some` of the element's place,
+    // and `if let Some(m) = &mut o` of an `Option<&mut T>` reaches it
+    // through `**m`.
+    let output = printed(
+        r#"
+fn bump(o: Option<&mut i32>) { if let Some(r) = o { *r += 100; } }
+fn main() {
+    let mut v = vec![1, 2, 3];
+    bump(v.get_mut(1));
+    bump(v.last_mut());
+    bump(v.get_mut(9));
+    println!("{:?}", v);
+    let mut x = 1;
+    let mut o: Option<&mut i32> = Some(&mut x);
+    if let Some(m) = &mut o { **m += 1; }
+    if let Some(m) = o.as_mut() { **m += 1; }
+    match &mut o { Some(m) => **m += 10, None => {} }
+    println!("{}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 102, 103]\n13\n");
+}
+
+#[test]
+fn a_derived_hash_of_a_mut_field_hashes_what_it_refers_to() {
+    // rustc derives `Hash` for a `&mut T` field from `T`.
+    let output = printed(
+        r#"
+use std::collections::HashSet;
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct W<'a> { a: &'a mut i32, n: u8 }
+fn main() {
+    let mut p = (3, 3, 4);
+    let mut set = HashSet::new();
+    set.insert(W { a: &mut p.0, n: 1 });
+    set.insert(W { a: &mut p.1, n: 1 });
+    set.insert(W { a: &mut p.2, n: 1 });
+    let mut x = 5;
+    let mut y = 5;
+    let mut t = HashSet::new();
+    t.insert(W { a: &mut x, n: 2 });
+    println!("{} {}", set.len(), t.contains(&W { a: &mut y, n: 2 }));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 true\n");
+}
+
+#[test]
+fn a_swap_releases_the_value_of_a_static_the_next_generation_declares_otherwise() {
+    // A swap to a generation that declares a static alike keeps its value.
+    // One whose initializer changed holds no value while the swap is
+    // checked, and drops the old one once admitted; a refused swap puts it
+    // back (#2519, D862).
+    use crate::place::statics::{apart, kept, After};
+    let program = |initializer: &str| {
+        format!(
+            "use std::sync::Mutex;\nstatic SWAPPED: Mutex<Vec<i32>> = {initializer};\n\
+             fn main() {{ SWAPPED.lock().unwrap().push(1); println!(\"{{:?}}\", SWAPPED.lock().unwrap()); }}\nmain();\n"
+        )
+    };
+    let alike = program("Mutex::new(Vec::new())");
+    let edited = Engine::new()
+        .compile_executable(program("Mutex::new(vec![0])"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let same = Engine::new()
+        .compile_executable(&alike)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(printed(&alike), "[1]\n");
+    let ours = same.kept_statics();
+    assert_eq!(ours.len(), 1, "{ours:?}");
+    assert!(edited.kept_statics().is_disjoint(&ours));
+    // The statics of the tests running beside this one stay declared.
+    let declaring = |declared: std::collections::BTreeSet<crate::ImmutableString>| {
+        let mut others = kept();
+        others.retain(|key| !ours.contains(key));
+        others.extend(declared);
+        others
+    };
+    apart(|| declaring(same.kept_statics()), || ((), After::Release));
+    assert_eq!(printed(&alike), "[1, 1]\n");
+    let held = apart(
+        || declaring(edited.kept_statics()),
+        || (kept().is_superset(&ours), After::Restore),
+    );
+    assert!(held, "a withdrawn static keeps its slot, without its value");
+    assert_eq!(printed(&alike), "[1, 1, 1]\n");
+    apart(|| declaring(edited.kept_statics()), || ((), After::Release));
+    assert!(kept().is_disjoint(&ours));
+    assert_eq!(printed(&alike), "[1]\n");
+}
+
+#[test]
+fn std_errors_box_walk_their_sources_and_downcast() {
+    // `?` boxes io, parse and the program's own errors as `dyn Error`,
+    // which keeps each error, its type and its `source`: a chain walks,
+    // `downcast_ref`, `is` and a box's `downcast` give the error back, and
+    // a `&e` is a `&dyn Error` (#798, #2091). A method's tail `match`
+    // coerces each arm to its output, and `let n: i32 = s.parse()?`
+    // converts the parse's error by `From`.
+    let output = printed(
+        r#"
+use std::error::Error;
+use std::fmt;
+use std::io;
+use std::num::ParseIntError;
+#[derive(Debug)]
+enum AppError {
+    Io(io::Error),
+    Parse(ParseIntError),
+    Config(String),
+}
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::Io(_) => write!(f, "io failed"),
+            AppError::Parse(_) => write!(f, "parse failed"),
+            AppError::Config(what) => write!(f, "bad config: {what}"),
+        }
+    }
+}
+impl Error for AppError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            AppError::Io(e) => Some(e),
+            AppError::Parse(e) => Some(e),
+            AppError::Config(_) => None,
+        }
+    }
+}
+impl From<ParseIntError> for AppError {
+    fn from(e: ParseIntError) -> Self {
+        AppError::Parse(e)
+    }
+}
+fn read_number(text: &str) -> Result<i32, AppError> {
+    let n: i32 = text.trim().parse()?;
+    if n < 0 {
+        return Err(AppError::Config(format!("{n} is negative")));
+    }
+    Ok(n)
+}
+fn report(e: &dyn Error) {
+    print!("{e}");
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        print!(" <- {c}");
+        cause = c.source();
+    }
+    println!();
+}
+fn run(step: u8) -> Result<i32, Box<dyn Error>> {
+    match step {
+        0 => Ok(read_number("x1")?),
+        1 => Err(Box::new(AppError::Io(io::Error::new(io::ErrorKind::NotFound, "gone")))),
+        2 => Ok(read_number("-4")?),
+        3 => Ok("zz".parse::<i32>()?),
+        4 => Err(Box::new(io::Error::other("raw io"))),
+        _ => Err("plain text".into()),
+    }
+}
+fn main() {
+    for step in 0..6 {
+        let e = run(step).unwrap_err();
+        report(e.as_ref());
+        println!("{:?}", e);
+        if let Some(io) = e.downcast_ref::<io::Error>() {
+            println!("io {:?}", io.kind());
+        }
+        if let Some(p) = e.downcast_ref::<ParseIntError>() {
+            println!("parse {p}");
+        }
+        println!("{} {}", e.is::<AppError>(), e.is::<io::Error>());
+        match e.downcast::<AppError>() {
+            Ok(app) => println!("app {app}"),
+            Err(other) => println!("other {other}"),
+        }
+    }
+    report(&AppError::Parse("q".parse::<u8>().unwrap_err()));
+    println!("{:?}", read_number("7"));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "parse failed <- invalid digit found in string\n\
+         Parse(ParseIntError { kind: InvalidDigit })\ntrue false\napp parse failed\n\
+         io failed <- gone\nIo(Custom { kind: NotFound, error: \"gone\" })\ntrue false\n\
+         app io failed\n\
+         bad config: -4 is negative\nConfig(\"-4 is negative\")\ntrue false\n\
+         app bad config: -4 is negative\n\
+         invalid digit found in string\nParseIntError { kind: InvalidDigit }\n\
+         parse invalid digit found in string\nfalse false\n\
+         other invalid digit found in string\n\
+         raw io\nCustom { kind: Other, error: \"raw io\" }\nio Other\nfalse true\n\
+         other raw io\n\
+         plain text\n\"plain text\"\nfalse false\nother plain text\n\
+         parse failed <- invalid digit found in string\nOk(7)\n"
+    );
+    // A `dyn Error`'s downcasts take an error type, as rustc's `T: Error`.
+    let report = refused(
+        "use std::error::Error;\n\
+         fn main() { let e: Box<dyn Error> = \"x\".into(); println!(\"{}\", e.is::<String>()); }",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0277]: the trait bound `String: std::error::Error` is not satisfied"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_generic_error_boxes_by_its_bound() {
+    // `E: Error` is `Debug` and `Display` through `Error`'s supertraits,
+    // so a generic wrapper implements `Error` and lends its error as a
+    // `&dyn Error`. An `Arc` of an error is an `Arc<dyn Error>`.
+    let output = printed(
+        r#"
+use std::error::Error;
+use std::fmt;
+#[derive(Debug)]
+struct Context<E> { what: &'static str, inner: E }
+impl<E: fmt::Display> fmt::Display for Context<E> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}", self.what) }
+}
+impl<E: Error + 'static> Error for Context<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> { Some(&self.inner) }
+}
+fn depth<E: Error>(e: &E) -> usize {
+    let mut n = 0;
+    let mut cause = e.source();
+    while let Some(c) = cause { n += 1; cause = c.source(); }
+    n
+}
+fn main() {
+    let inner = "x".parse::<i32>().unwrap_err();
+    let e: Box<dyn Error> = Box::new(Context { what: "loading", inner: inner.clone() });
+    println!("{} <- {}", e, e.source().unwrap());
+    println!("{}", depth(&Context { what: "w", inner }));
+    let shared: std::sync::Arc<dyn Error + Send + Sync> =
+        std::sync::Arc::new(std::io::Error::other("shared"));
+    println!("{} {}", shared, std::sync::Arc::clone(&shared).to_string());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "loading <- invalid digit found in string\n1\nshared shared\n"
+    );
+}
+
+#[test]
+fn dyn_any_downcasts_by_the_values_type() {
+    // A value boxed or lent as `dyn Any` keeps its type, which `is`,
+    // `downcast_ref` and a box's `downcast` compare (#1284).
+    let output = printed(
+        r#"
+use std::any::Any;
+#[derive(Debug)]
+struct Point { x: i32 }
+fn describe(value: &dyn Any) -> String {
+    if let Some(n) = value.downcast_ref::<i32>() {
+        format!("i32 {n}")
+    } else if let Some(s) = value.downcast_ref::<String>() {
+        format!("string {s}")
+    } else if let Some(p) = value.downcast_ref::<Point>() {
+        format!("point {}", p.x)
+    } else if value.is::<&str>() {
+        "a str".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+fn main() {
+    let items: Vec<Box<dyn Any>> = vec![
+        Box::new(7i32),
+        Box::new(String::from("hi")),
+        Box::new(Point { x: 3 }),
+        Box::new("slice"),
+        Box::new(2.5f64),
+    ];
+    for item in &items {
+        println!("{}", describe(item.as_ref()));
+    }
+    println!("{}", describe(&41));
+    let sent: Box<dyn Any + Send> = Box::new(Point { x: 9 });
+    match sent.downcast::<Point>() {
+        Ok(p) => println!("got {:?}", p),
+        Err(_) => println!("not a point"),
+    }
+    let other: Box<dyn Any> = Box::new(1u8);
+    match other.downcast::<i32>() {
+        Ok(_) => println!("i32"),
+        Err(back) => println!("still any: {}", back.is::<u8>()),
+    }
+    println!("{:?}", items[0]);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "i32 7\nstring hi\npoint 3\na str\nunknown\ni32 41\ngot Point { x: 9 }\n\
+         still any: true\nAny { .. }\n"
+    );
+}
+
+#[test]
+fn std_env_var_and_exit_code_run() {
+    // A program without the environment reads no variable, as `env!` has
+    // none: `VarError::NotPresent`, which boxes as a `dyn Error` (#645).
+    // An `ExitCode` is std's value (#2088).
+    let output = printed(
+        r#"
+use std::env::{self, VarError};
+use std::error::Error;
+use std::process::ExitCode;
+fn need() -> Result<String, Box<dyn Error>> {
+    Ok(env::var("RAWR_UNSET")?)
+}
+fn main() {
+    match env::var("HOME") {
+        Ok(v) => println!("set {v}"),
+        Err(VarError::NotPresent) => println!("not present"),
+        Err(VarError::NotUnicode(s)) => println!("bad {:?}", s),
+    }
+    let e = env::var("HOME").unwrap_err();
+    println!("{e} | {e:?} | {}", e == VarError::NotPresent);
+    println!("{:?} {:?}", env::var_os("HOME"), need().map_err(|e| e.to_string()));
+    let code = ExitCode::from(4);
+    let into: ExitCode = 9u8.into();
+    println!("{:?} {:?} {}", code, into, ExitCode::SUCCESS == ExitCode::from(0));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "not present\nenvironment variable not found | NotPresent | true\n\
+         None Err(\"environment variable not found\")\n\
+         ExitCode(unix_exit_status(4)) ExitCode(unix_exit_status(9)) true\n"
+    );
+}
+
+/// What `source` prints, run with `access`.
+fn printed_with(source: &str, access: crate::Access) -> String {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    engine.set_access(access);
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+    lines.lock().unwrap().clone()
+}
+
+#[test]
+fn str_matches_match_indices_and_replacen_run_as_stds() {
+    // A `&str` or `char` pattern's matches, their byte offsets, and the
+    // first `n` replaced (#2090).
+    let output = printed(
+        r#"
+fn main() {
+    let t = "abcXXabcYYabc";
+    let v: Vec<&str> = t.matches("abc").collect();
+    let w: Vec<(usize, &str)> = t.match_indices("abc").collect();
+    println!("{:?} {:?}", v, w);
+    println!("{} {} {}", t.replacen("abc", "-", 2), t.replacen('X', "", 1), t.matches('Y').count());
+    let owned = String::from("a,b,,c");
+    let at: Vec<usize> = owned.match_indices(',').map(|(i, _)| i).collect();
+    println!("{:?} {}", at, owned.replacen(",", ";", 0));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"abc\", \"abc\", \"abc\"] [(0, \"abc\"), (5, \"abc\"), (10, \"abc\")]\n\
+         -XX-YYabc abcXabcYYabc 2\n[1, 3, 4] a,b,,c\n"
+    );
+}
+
+#[test]
+fn string_drain_and_replace_range_change_the_string_as_stds() {
+    // std's `String::drain` and `replace_range` of a `RangeBounds<usize>`
+    // (#2521).
+    let output = printed(
+        r#"
+fn main() {
+    let mut s = String::from("hello");
+    s.replace_range(..2, "x");
+    let mut h = String::from("hello he");
+    let d: String = h.drain(..2).collect();
+    println!("{} {} {}", s, h, d);
+    let mut t = String::from("abcdef");
+    let r = 1..=2;
+    t.replace_range(r, "XYZ");
+    let tail: Vec<char> = t.drain(4..).collect();
+    println!("{} {:?}", t, tail);
+    t.replace_range(.., "all");
+    println!("{}", t);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "xllo llo he he\naXYZ ['d', 'e', 'f']\nall\n");
+    // A field's and an element's string change in place.
+    let output = printed(
+        r#"
+struct Named { name: String }
+fn main() {
+    let mut n = Named { name: String::from("héllo") };
+    let gone: String = n.name.drain(1..3).collect();
+    n.name.replace_range(0..1, "J");
+    let mut v = vec![String::from("abc")];
+    v[0].replace_range(1.., "Z");
+    println!("{} {} {:?}", n.name, gone, v);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Jllo é [\"aZ\"]\n");
+    assert_eq!(
+        panicked("fn main() {\n    let mut s = String::from(\"héllo\");\n    s.drain(..2);\n}\n"),
+        "thread 'main' panicked at main.rs:3:7:\nassertion failed: self.is_char_boundary(end)"
+    );
+    let report = refused("fn main() { let s = String::from(\"hello\"); s.drain(..2); }");
+    assert!(
+        report.starts_with(
+            "error[E0596]: cannot borrow `s` as mutable, as it is not declared as mutable"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn std_path_and_path_buf_methods_run_as_stds() {
+    // `Path::new`, its readers and file system queries, and `PathBuf`'s
+    // changes (#2087). A path the program may not read is no file.
+    let directory = std::env::temp_dir().join(format!("rawr-path-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("bar.txt"), "x").unwrap();
+    let source = format!(
+        r#"
+use std::path::{{Path, PathBuf}};
+fn main() {{
+    let p = Path::new("/tmp/foo/bar.txt");
+    println!("{{:?}} {{:?}} {{:?}} {{:?}}", p.extension(), p.file_name(), p.file_stem(), p.parent());
+    let j = p.parent().unwrap().join("baz.rs");
+    println!("{{}} {{}} {{}}", p.display(), j.display(), p.with_extension("md").display());
+    let mut b = PathBuf::from("/tmp");
+    b.push("x.txt");
+    println!("{{}} {{:?}}", b.set_extension("md"), b);
+    b.set_file_name("y");
+    println!("{{:?}}", b);
+    let popped = (b.pop(), b.pop());
+    println!("{{:?}} {{:?}}", popped, b);
+    let q: &Path = b.as_path();
+    println!("{{}} {{}} {{}}", q.is_absolute(), Path::new("a/b").is_relative(), q.starts_with("/"));
+    let dir = PathBuf::from({directory:?});
+    let file = dir.join("bar.txt");
+    println!("{{}} {{}} {{}}", dir.exists(), dir.is_dir(), dir.is_file());
+    println!("{{}} {{}} {{}}", file.exists(), file.is_file(), file.with_file_name("none").exists());
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    let denied = printed(&source);
+    std::fs::remove_dir_all(&directory).unwrap();
+    assert_eq!(
+        output,
+        "Some(\"txt\") Some(\"bar.txt\") Some(\"bar\") Some(\"/tmp/foo\")\n\
+         /tmp/foo/bar.txt /tmp/foo/baz.rs /tmp/foo/bar.md\n\
+         true \"/tmp/x.md\"\n\"/tmp/y\"\n(true, true) \"/\"\n\
+         true true true\ntrue true false\ntrue true false\n"
+    );
+    assert!(
+        denied.ends_with("false false false\nfalse false false\n"),
+        "{denied}"
+    );
+    // `Path::new(&S)` of a borrowed `String`, and a `&Path` given back
+    // owned.
+    let output = printed(
+        r#"
+use std::path::{Path, PathBuf};
+fn name(p: &Path) -> String {
+    p.file_name().unwrap().to_string_lossy().to_string()
+}
+fn main() {
+    let s = String::from("/a/b.rs");
+    let p = Path::new(&s);
+    let owned: PathBuf = p.to_path_buf();
+    let again = PathBuf::from(p);
+    let t = &s;
+    println!("{} {} {:?} {} {}", name(p), name(&owned), again, p == owned.as_path(), Path::new(t).display());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "b.rs b.rs \"/a/b.rs\" true /a/b.rs\n");
+    // A method std declares that rawr doesn't run is no unknown member.
+    let report = refused(
+        "use std::path::Path;\nfn main() { let p = Path::new(\"/a/b\"); p.strip_prefix(\"/a\"); }",
+    );
+    assert!(
+        report.starts_with("error: rawr doesn't run `Path::strip_prefix` yet"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_str_of_a_string_has_strs_methods() {
+    // `&mut *s`, `as_mut_str()` and a `&mut String` given for a `&mut str`
+    // lend the `String`'s text, which `str`'s own changes write (#821).
+    let output = printed(
+        r#"
+fn shout(r: &mut str) {
+    r.make_ascii_uppercase();
+}
+fn main() {
+    let mut s = String::from("abc");
+    let r: &mut str = &mut *s;
+    r.make_ascii_uppercase();
+    println!("{}", s);
+    let mut t = String::from("xyz");
+    shout(&mut t);
+    t.make_ascii_lowercase();
+    let mut u = String::from("Hello");
+    u.as_mut_str().make_ascii_lowercase();
+    println!("{} {}", t, u);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "ABC\nxyz hello\n");
+    // A `str` has none of a `String`'s changes, and a `&str` changes
+    // nothing.
+    for (program, expected) in [
+        (
+            "fn f(r: &mut str) { r.push_str(\"x\"); }\nfn main() {}\n",
+            "error[E0599]: no method named `push_str` found for mutable reference `&mut str` in \
+             the current scope",
+        ),
+        (
+            "fn main() { let s = \"abc\"; s.make_ascii_uppercase(); }",
+            "error[E0596]: cannot borrow `*s` as mutable, as it is behind a `&` reference",
+        ),
+        (
+            "fn main() { let s = String::from(\"a\"); s.make_ascii_uppercase(); }",
+            "error[E0596]: cannot borrow `s` as mutable, as it is not declared as mutable",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+#[test]
+fn text_and_sequence_comparisons_are_stds_impls() {
+    // `trim` gives a `&str`, which a `String` is compared with only by
+    // `PartialEq`, and an array is no `PartialEq<Vec<U>>` (#703).
+    let output = printed(
+        r#"
+fn main() {
+    let s = String::from("abc");
+    let v = vec![1, 2];
+    let a = [1, 2];
+    println!("{} {} {}", s.as_str() < "b", s == " abc ".trim(), " abc ".trim() == s);
+    println!("{} {} {} {} {}", v == a, &v[..] == v, v[..] == v, v == &a[..], a == v[..]);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "true true true\ntrue true true true true\n");
+    for (program, expected) in [
+        (
+            "fn main() { let s = String::from(\"abc\"); println!(\"{}\", s < \" a \".trim()); }",
+            "error[E0308]: mismatched types",
+        ),
+        (
+            "fn main() { let s = String::from(\"abc\"); println!(\"{}\", \" a \".trim() < s); }",
+            "error[E0308]: mismatched types",
+        ),
+        (
+            "fn main() { let a = [1, 2]; let v = vec![1, 2]; println!(\"{}\", a == v); }",
+            "error[E0277]: can't compare `[{integer}; 2]` with `Vec<{integer}>`",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+#[test]
+fn string_from_utf8_lossy_is_a_cow_of_the_text() {
+    // Borrowed of valid UTF-8, owned with U+FFFD for an invalid sequence.
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+fn main() {
+    let good = vec![104, 105];
+    let bad = [104, 0xff, 105];
+    let a = String::from_utf8_lossy(&good);
+    let b = String::from_utf8_lossy(&bad);
+    let kind = |c: &Cow<str>| match c {
+        Cow::Borrowed(_) => "borrowed",
+        Cow::Owned(_) => "owned",
+    };
+    println!("{} {} {} {}", a, b, kind(&a), kind(&b));
+    let owned: String = b.into_owned();
+    println!("{:?} {} {}", owned, a.len(), a == "hi");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "hi h\u{fffd}i borrowed owned\n\"h\u{fffd}i\" 2 true\n"
+    );
+    // A path's and an `OsString`'s `to_string_lossy` is std's `Cow<str>`
+    // too, which an `io::Error` takes as its message.
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+use std::ffi::OsString;
+use std::path::Path;
+fn main() {
+    let a = Path::new("x").to_string_lossy().into_owned();
+    let os = OsString::from("z");
+    let c: Cow<str> = os.to_string_lossy();
+    let d: String = Path::new("y").to_string_lossy().to_string();
+    let e = Path::new("w").to_string_lossy();
+    println!("{a} {c} {d} {} {} {:?}", e.len(), e == "w", e);
+    let error = std::io::Error::other(Path::new("bad").to_string_lossy());
+    let kind = std::io::Error::new(std::io::ErrorKind::NotFound, String::from("gone"));
+    println!("{} {}", error, kind);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "x z y 1 true \"w\"\nbad gone\n");
+}
+
+/// What the package of `files`, written under the build directory as
+/// `name`, prints when it runs.
+fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
+    use std::fs;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/graph-tests")
+        .join(format!("{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (path, text) in files {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let mut answers = crate::project::cargo::Answers::new();
+    let target = crate::project::Target::discover(&root, &mut answers).unwrap();
+    let graph = crate::package::Graph::load(&Engine::new(), &target, &mut answers)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let (ast, main) = engine
+        .compile_package(graph)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = crate::Scope::new();
+    let _: crate::Dynamic = engine
+        .eval_ast_with_scope::<crate::Dynamic>(&mut scope, &ast)
+        .unwrap();
+    let _: crate::Dynamic = engine
+        .call_fn_with_options::<crate::Dynamic>(
+            crate::CallFnOptions::new()
+                .eval_ast(false)
+                .rewind_scope(false),
+            &mut scope,
+            &ast,
+            main.expect("the package has a main"),
+            (),
+        )
+        .unwrap();
+    let _ = fs::remove_dir_all(&root);
+    lines.lock().unwrap().clone()
+}
+
+#[test]
+fn a_tuple_struct_s_constructor_takes_a_turbofish() {
+    // `W::<i32>(1)`, as rustc reads a generic tuple struct's constructor:
+    // called, uncalled, through a module, and an enum's variant (#2215).
+    let output = printed(
+        r#"
+#[derive(Debug)] struct W<T>(T);
+#[derive(Debug)] enum E<T> { V(T) }
+mod m { #[derive(Debug)] pub struct P<T>(pub T); }
+fn main() {
+    let w = W::<i32>(1);
+    let e = E::<u8>::V(2);
+    let p = m::P::<i8>(3);
+    let f = W::<u16>;
+    println!("{:?} {:?} {:?} {:?}", w, e, p, f(4));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "W(1) V(2) P(3) W(4)\n");
+    // The turbofish's type is the field's.
+    let report = refused("struct W<T>(T);\nfn main() { let w = W::<i32>(\"a\"); }\n");
+    assert!(
+        report.starts_with("error[E0308]: mismatched types"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_path_through_a_module_names_its_items_as_rustc_s_does() {
+    // A tuple struct's constructor, a variant pattern and a generic type
+    // in a `let` annotation through a module (#429, #572, #2203), and two
+    // functions' local items of one name (#1036).
+    let output = printed(
+        r#"
+mod canvas {
+    #[derive(Debug)] pub struct Degrees(pub f32);
+    pub mod inner { #[derive(Debug)] pub struct R(pub u8); }
+}
+mod bezier {
+    pub enum Curve<T> { Drawn(T), Empty }
+    pub mod k { pub enum E { A { x: i32 }, B } }
+    #[derive(Debug)] pub struct Pair<A, B>(pub A, pub B);
+}
+fn a() -> i32 { enum K { A } impl K { fn v(&self) -> i32 { 1 } } K::A.v() }
+fn b() -> i32 { enum K { B(i32) } impl K { fn v(&self) -> i32 { match self { K::B(n) => *n } } } K::B(5).v() }
+fn main() {
+    let v: Vec<canvas::inner::R> = vec![1, 2].into_iter().map(canvas::inner::R).collect();
+    println!("{:?} {:?}", canvas::Degrees(90.0), v);
+    let curve = bezier::Curve::Drawn(3);
+    let bezier::Curve::Drawn(n) = &curve else { return };
+    let e = bezier::k::E::A { x: 4 };
+    match e { bezier::k::E::A { x } => println!("{n} {x}"), bezier::k::E::B => {} }
+    let p: bezier::Pair<u8, Vec<bezier::Curve<i8>>> = bezier::Pair(1, vec![bezier::Curve::Empty]);
+    println!("{} {} {}", p.1.len(), a(), b());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Degrees(90.0) [R(1), R(2)]\n3 4\n1 1 5\n");
+}
+
+#[test]
+fn a_top_level_statement_names_an_inline_module_s_paths() {
+    // A script's statements resolve paths into its inline modules as a
+    // body does (#1141, #1348).
+    let output = printed(
+        r#"
+mod picks {
+    #[derive(Debug)] pub struct Count(pub i32);
+    pub fn twice(n: i32) -> i32 { n * 2 }
+    pub mod deep { pub fn f() -> i32 { 7 } }
+}
+println!("{:?} {} {}", picks::Count(2), picks::twice(3), picks::deep::f());
+let picks::Count(n) = picks::Count(5);
+println!("{n}");
+"#,
+    );
+    assert_eq!(output, "Count(2) 6 7\n5\n");
+}
+
+#[test]
+fn a_block_s_use_is_unseen_by_a_child_module_and_a_std_glob_shadows_the_prelude() {
+    // A body's `use` binds in its block alone, not for a child module's
+    // `use super::*;` (#1052).
+    let report = refused(
+        "mod outer {\n    pub fn f() -> usize { use std::collections::HashMap; \
+         let m: HashMap<i32, i32> = HashMap::new(); m.len() }\n    pub mod inner { use super::*; \
+         pub fn g() -> usize { let m: HashMap<i32, i32> = HashMap::new(); m.len() } }\n}\n\
+         fn main() { println!(\"{} {}\", outer::f(), outer::inner::g()); }\n",
+    );
+    assert!(
+        report.starts_with("error[E0425]: cannot find type `HashMap` in this scope"),
+        "{report}"
+    );
+    // `use std::fmt::*;` makes `Result` `fmt::Result`, and `use
+    // std::io::*;` makes it `io::Result` (#753).
+    let output = printed(
+        r#"
+mod text {
+    use std::fmt::*;
+    pub struct P;
+    impl Display for P { fn fmt(&self, f: &mut Formatter<'_>) -> Result { write!(f, "p") } }
+    pub fn g() -> Result { Ok(()) }
+}
+mod bytes {
+    use std::io::*;
+    pub fn g() -> Result<u8> { Ok(1) }
+}
+fn main() { println!("{} {:?} {:?}", text::P, text::g(), bytes::g()); }
+main();
+"#,
+    );
+    assert_eq!(output, "p Ok(()) Ok(1)\n");
+}
+
+#[test]
+fn a_std_item_or_module_with_no_use_is_rustc_s_error() {
+    // A bare std name no `use` brings in (#807).
+    for (program, error, help) in [
+        (
+            "fn main() { let r = Reverse(3); }\n",
+            "error[E0425]: cannot find function, tuple struct or tuple variant `Reverse` in this \
+             scope",
+            "help: consider importing this tuple struct\n  |\n1 + use std::cmp::Reverse;",
+        ),
+        (
+            "struct S<T> { p: PhantomData<T> }\nfn main() {}\n",
+            "error[E0425]: cannot find type `PhantomData` in this scope",
+            "help: consider importing this struct\n  |\n1 + use std::marker::PhantomData;",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(error), "{report}");
+        assert!(report.contains(help), "{report}");
+    }
+    // A module-relative std path with no `use` of its module, and the
+    // imports rustc offers: the module for a path of two segments, the
+    // item after it for a longer one, which the path then names directly
+    // (#808).
+    let report = refused("fn main() {\n    let d = time::Duration::from_secs(1);\n}\n");
+    assert!(
+        report.starts_with("error[E0433]: cannot find module or crate `time` in this scope"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "help: consider importing this struct\n  |\n1 + use std::time::Duration;\n  |\n\
+             help: if you import `Duration`, refer to it directly\n  |\n\
+             2 -     let d = time::Duration::from_secs(1);\n\
+             2 +     let d = Duration::from_secs(1);\n  |"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        "fn main() {\n    let m: collections::HashMap<i32, i32> = Default::default();\n}\n",
+    );
+    assert!(
+        report
+            .contains("help: consider importing this module\n  |\n1 + use std::collections;\n  |"),
+        "{report}"
+    );
+    let report =
+        refused("fn main() {\n    match 1.cmp(&2) { cmp::Ordering::Less => {} _ => {} }\n}\n");
+    assert!(
+        report.contains(
+            "help: consider importing one of these enums\n  |\n1 + use std::cmp::Ordering;\n  |\n\
+             1 + use std::sync::atomic::Ordering;\n"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        "fn main() {\n    let (mut a, mut b) = (1, 2);\n    mem::swap(&mut a, &mut b);\n}\n",
+    );
+    assert!(
+        report.starts_with("error[E0433]: cannot find module or crate `mem` in this scope"),
+        "{report}"
+    );
+    // With the `use`, each runs.
+    let output = printed(
+        r#"
+use std::{collections, mem, time};
+use std::cmp::Reverse;
+use std::marker::PhantomData;
+struct S<T> { p: PhantomData<T> }
+fn main() {
+    let (mut a, mut b) = (1, 2);
+    mem::swap(&mut a, &mut b);
+    let m: collections::HashMap<i32, i32> = collections::HashMap::new();
+    let _s: S<i32> = S { p: PhantomData };
+    println!("{a} {b} {:?} {:?} {}", time::Duration::from_secs(1), m, Reverse(1) < Reverse(0));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 1 1s {} true\n");
+}
+
+#[test]
+fn a_non_prelude_std_trait_s_method_is_callable_only_where_it_is_in_scope() {
+    // `io::Write`'s `write_all` on a `Vec<u8>` with no `use` of it:
+    // rustc's E0599 and its help (#1427).
+    let report =
+        refused("fn main() { let mut v: Vec<u8> = Vec::new(); v.write_all(b\"hi\").unwrap(); }\n");
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `write_all` found for struct `Vec<u8>` in the current \
+             scope"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "  = help: items from traits can only be used if the trait is in scope\n\
+             help: trait `Write` which provides `write_all` is implemented but not in scope; \
+             perhaps you want to import it\n  |\n1 + use std::io::Write;\n"
+        ),
+        "{report}"
+    );
+    // `write!` into a `String` with only `io::Write` in scope is the same
+    // E0599 as with none: a `String` has `fmt::Write`'s (#1428).
+    let report = refused(
+        "use std::io::Write;\nfn main() { let mut s = String::new(); write!(s, \"x\").unwrap(); }\n",
+    );
+    assert!(
+        report.starts_with("error[E0599]: cannot write into `String`"),
+        "{report}"
+    );
+    assert!(report.contains("1 + use std::fmt::Write;"), "{report}");
+    // In scope by its `use`, or by `io`'s prelude glob, each runs.
+    for scope in ["use std::io::Write;", "use std::io::prelude::*;"] {
+        let program = format!(
+            "{scope}\nfn main() {{\n    let mut v: Vec<u8> = Vec::new();\n    \
+             v.write_all(b\"ab\").unwrap();\n    write!(v, \"c\").unwrap();\n    \
+             println!(\"{{:?}}\", v);\n}}\nmain();\n"
+        );
+        assert_eq!(printed(&program), "[97, 98, 99]\n", "{scope}");
+    }
+}
+
+#[test]
+fn a_mod_s_path_attribute_names_its_file() {
+    // `#[path]` from the root, from a file that isn't a `mod.rs` (its own
+    // directory), and inside an inline module (that module's directory); a
+    // module in a file `#[path]` names owns that file's directory (#605).
+    let output = printed_package(
+        "path-attribute",
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"paths\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+            ),
+            (
+                "src/main.rs",
+                "// rawr\n#[path = \"other/thing.rs\"]\nmod thing;\nmod parity;\nmod outer {\n    \
+                 #[path = \"deep.rs\"]\n    pub mod deep;\n}\nfn main() {\n    \
+                 println!(\"{} {} {} {}\", thing::f(), thing::kid::g(), parity::emulated::h(), \
+                 outer::deep::d());\n}\n",
+            ),
+            ("src/other/thing.rs", "// rawr\npub mod kid;\npub fn f() -> i32 { 1 }\n"),
+            ("src/other/kid.rs", "// rawr\npub fn g() -> i32 { 2 }\n"),
+            ("src/parity.rs", "// rawr\n#[path = \"parity_impl.rs\"]\npub mod emulated;\n"),
+            ("src/parity_impl.rs", "// rawr\npub fn h() -> i32 { 3 }\n"),
+            ("src/outer/deep.rs", "// rawr\npub fn d() -> i32 { 4 }\n"),
+        ],
+    );
+    assert_eq!(output, "1 2 3 4\n");
+}
+
+#[test]
+fn a_kept_view_of_a_range_of_elements_reaches_them() {
+    // A `&mut [T]` kept from `as_mut_slice()`, `make_contiguous()` or
+    // `&mut v[a..]`, in a local or a struct's field, changes the
+    // collection, its `first_mut` and `last_mut` included, as rustc's build
+    // runs it (#800, D1113).
+    let output = printed(
+        r#"
+use std::collections::VecDeque;
+struct W<'a> {
+    s: &'a mut [i32],
+}
+fn main() {
+    let mut v = vec![3, 1, 2];
+    let s = v.as_mut_slice();
+    s.sort();
+    s[0] = 10;
+    println!("{:?}", v);
+    let mut d: VecDeque<i32> = VecDeque::new();
+    d.push_back(3);
+    d.push_front(5);
+    d.push_back(1);
+    let c = d.make_contiguous();
+    c.sort();
+    println!("{:?}", d);
+    let mut w = vec![3, 1, 2, 5];
+    let s = &mut w[1..];
+    s.reverse();
+    s[0] += 100;
+    s.sort();
+    println!("{:?} {}", s, s.len());
+    let t = &mut s[1..];
+    t[0] = 9;
+    if let Some(x) = s.first_mut() {
+        *x = 7;
+    }
+    if let Some(x) = s.last_mut() {
+        *x += 1;
+    }
+    w.push(4);
+    println!("{:?}", w);
+    let mut x = vec![1, 2, 3];
+    let held = W { s: &mut x[1..] };
+    held.s[0] = 7;
+    println!("{:?}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[10, 2, 3]\n[1, 3, 5]\n[1, 2, 105] 3\n[3, 7, 9, 106, 4]\n[1, 7, 3]\n"
+    );
+}
+
+#[test]
+fn split_at_mut_and_chunks_mut_views_reach_their_collection() {
+    // Each half `split_at_mut` gives and each chunk of `chunks_mut` is a
+    // view of the collection's own elements: two halves are used side by
+    // side, from closures and from scoped threads, with no data race, as
+    // rustc's build runs them (D1113).
+    let output = printed(
+        r#"
+fn halves(s: &mut [i32]) {
+    let (a, b) = s.split_at_mut(1);
+    a[0] = b[0] + b[1];
+    for c in b.chunks_mut(1) {
+        c[0] *= 2;
+    }
+}
+fn main() {
+    let mut v = vec![1, 2, 3, 4, 5];
+    let (a, b) = v.split_at_mut(2);
+    a[0] = 10;
+    b[0] += a[1];
+    std::mem::swap(&mut a[1], &mut b[2]);
+    println!("{:?} {:?}", a, b);
+    println!("{:?}", v);
+    for c in v.chunks_mut(2) {
+        c[0] *= 10;
+        c.reverse();
+    }
+    println!("{:?}", v);
+    let mut u = vec![1, 2, 3];
+    halves(&mut u);
+    println!("{:?}", u);
+    let mut w = vec![3, 1, 2, 5, 4];
+    let (a, b) = w.split_at_mut(2);
+    a.sort_by_key(|x| b[0] - *x);
+    b.sort_by(|x, y| a[0].cmp(x).then(x.cmp(y)));
+    println!("{:?}", w);
+    let mut t = vec![1, 2, 3, 4, 5];
+    let (a, b) = t.split_at_mut(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| a.reverse());
+        scope.spawn(|| b.sort_by(|x, y| y.cmp(x)));
+    });
+    println!("{:?}", t);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[10, 5] [5, 4, 2]\n[10, 5, 5, 4, 2]\n[5, 100, 4, 50, 20]\n[5, 4, 6]\n[3, 1, 4, 5, \
+         2]\n[2, 1, 5, 4, 3]\n"
+    );
+}
+
+#[test]
+fn a_kept_iter_mut_reaches_each_element() {
+    // A kept `iter_mut()` used other than by `next()`: a local walked by a
+    // `for`, `zip`, `rev`, `enumerate`, `filter`, `for_each`, collected into
+    // a `Vec<&mut T>`, passed to a function, and two of its items held at
+    // once, as rustc's build runs them (#806, D1113).
+    let output = printed(
+        r#"
+fn bump<'a>(it: impl Iterator<Item = &'a mut i32>) {
+    for x in it {
+        *x += 1;
+    }
+}
+struct S {
+    v: Vec<i32>,
+}
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let it = v.iter_mut();
+    for x in it {
+        *x *= 2;
+    }
+    let mut w = vec![1, 2, 3];
+    let a = vec![10, 20, 30];
+    for (x, y) in w.iter_mut().zip(a.iter()) {
+        *x += y;
+    }
+    let mut u = vec![1, 2, 3];
+    let refs: Vec<&mut i32> = u.iter_mut().collect();
+    for r in refs {
+        *r += 1;
+    }
+    let mut q = vec![1, 2, 3];
+    q.iter_mut().rev().for_each(|x| *x -= 1);
+    println!("{:?} {:?} {:?} {:?}", v, w, u, q);
+    let mut e = vec![1, 2, 3];
+    let mut it = e.iter_mut().enumerate();
+    let (i, x) = it.next().unwrap();
+    *x = 100 + i as i32;
+    for (i, x) in it {
+        *x += i as i32 * 10;
+    }
+    println!("{:?}", e);
+    let mut p = vec![1, 2, 3];
+    bump(p.iter_mut());
+    let mut it = p.iter_mut();
+    it.next();
+    let rest: Vec<&mut i32> = it.collect();
+    for r in rest {
+        *r *= 10;
+    }
+    println!("{:?}", p);
+    let mut n = vec![1, 2, 3];
+    let mut it = n.iter_mut();
+    let a = it.next().unwrap();
+    let b = it.next().unwrap();
+    *a += 10;
+    *b += 20;
+    std::mem::swap(a, b);
+    *it.next().unwrap() += 5;
+    println!("{:?}", n);
+    let mut f = vec![1, 2, 3, 4];
+    let evens: Vec<&mut i32> = f.iter_mut().filter(|x| **x % 2 == 0).collect();
+    for e in evens {
+        *e = 0;
+    }
+    let mut s = S { v: vec![1, 2, 3] };
+    let refs: Vec<&mut i32> = s.v.iter_mut().rev().collect();
+    *refs.into_iter().next().unwrap() = 9;
+    println!("{:?} {:?}", f, s.v);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[2, 4, 6] [11, 22, 33] [2, 3, 4] [0, 1, 2]\n[100, 12, 23]\n[2, 30, 40]\n[22, 11, \
+         8]\n[1, 0, 3, 0] [1, 2, 9]\n"
+    );
+}
+
+#[test]
+fn a_kept_view_holds_its_collection_borrowed() {
+    // While a kept `iter_mut()`, a `split_at_mut` half, a chunk, a range's
+    // view or the references collected from them live, the collection is
+    // borrowed mutably: rustc's E0499 and E0502 (#805).
+    let refused_with = |body: &str, report: &str| {
+        let refusal = refused(&format!(
+            "fn main() {{\n    let mut v = vec![1, 2, 3];\n{body}}}\nmain();\n"
+        ));
+        assert!(refusal.starts_with(report), "{body}: {refusal}");
+    };
+    let twice = "error[E0499]: cannot borrow `v` as mutable more than once at a time";
+    let shared =
+        "error[E0502]: cannot borrow `v` as immutable because it is also borrowed as mutable";
+    refused_with(
+        "    let mut it = v.iter_mut();\n    v.len();\n    it.next();\n",
+        shared,
+    );
+    refused_with(
+        "    let (a, _b) = v.split_at_mut(1);\n    let c = &mut v;\n    a[0] = 1;\n    \
+         c.push(1);\n",
+        twice,
+    );
+    refused_with(
+        "    let s = v.as_mut_slice();\n    v.push(4);\n    s[0] = 1;\n",
+        twice,
+    );
+    refused_with(
+        "    let mut refs: Vec<&mut i32> = v.iter_mut().collect();\n    println!(\"{}\", \
+         v.len());\n    *refs[0] = 1;\n",
+        shared,
+    );
+    refused_with(
+        "    let mut a = v.iter_mut();\n    let mut b = v.iter_mut();\n    a.next();\n    \
+         b.next();\n",
+        twice,
+    );
+    refused_with(
+        "    for c in v.chunks_mut(2) {\n        v.push(c[0]);\n    }\n",
+        twice,
+    );
+    refused_with(
+        "    let s = &mut v[1..];\n    println!(\"{}\", v[0]);\n    s[0] = 1;\n",
+        shared,
+    );
+}
+
+#[test]
+fn a_view_out_of_its_range_panics_as_rustc() {
+    // std's panics for a view's bounds, where rustc's build places them.
+    for (body, at, message) in [
+        (
+            "    let (a, b) = v.split_at_mut(5);\n    a[0] = b[0];\n",
+            "3:20",
+            "mid > len",
+        ),
+        (
+            "    let s = &mut v[1..9];\n    s[0] = 1;\n",
+            "3:19",
+            "range end index 9 out of range for slice of length 3",
+        ),
+        (
+            "    let s = &mut v[1..];\n    s[5] = 1;\n",
+            "4:5",
+            "index out of bounds: the len is 2 but the index is 5",
+        ),
+        (
+            "    for c in v.chunks_mut(0) {\n        c[0] = 1;\n    }\n",
+            "3:16",
+            "chunk size must be non-zero",
+        ),
+    ] {
+        let source = format!("fn main() {{\n    let mut v = vec![1, 2, 3];\n{body}}}\n");
+        assert_eq!(
+            panicked(&source),
+            format!("thread 'main' panicked at main.rs:{at}:\n{message}"),
+            "{body}"
         );
     }
 }

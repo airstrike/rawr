@@ -592,6 +592,25 @@ impl<'a> Parser<'a> {
                     })
             })
         };
+        // A form of std's that takes its input by reference, as `Path::new(s:
+        // &S)` does: a borrowed string is its `&str`, and another borrow is
+        // itself.
+        let std = items
+            .first()
+            .is_some_and(|item| item.path().starts_with(crate::std_facade::ROOT));
+        let borrowed = |index: usize| {
+            std && items.iter().any(|item| {
+                item.signature()
+                    .parameters()
+                    .get(index)
+                    .is_some_and(|parameter| {
+                        matches!(
+                            parameter.shape(),
+                            crate::host::type_ref::Shape::Reference { .. }
+                        )
+                    })
+            })
+        };
         // A facade takes `&str`, slices and borrowed facade values, such as
         // iced's `&Theme`, as their owned types. Its `f64` and `i64` inputs stand
         // for iced's `f32` and `u16`/`u32` (`impl Into<Pixels>`, `Padding`):
@@ -599,6 +618,14 @@ impl<'a> Parser<'a> {
         // is passed as that.
         for (index, argument) in arguments.iter_mut().enumerate() {
             match self.inference.resolve(&argument.ty) {
+                Ty::Reference {
+                    mutable: false,
+                    target,
+                } if borrowed(index) => {
+                    if target.is_text() {
+                        argument.ty = Ty::Str;
+                    }
+                }
                 Ty::Reference {
                     mutable: false,
                     target,

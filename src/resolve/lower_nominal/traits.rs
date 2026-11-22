@@ -1188,10 +1188,13 @@ impl<'a> Parser<'a> {
             {
                 true
             }
-            Ty::Param(..) | Ty::Projection(..) => self
-                .bound_traits(ty)
-                .iter()
-                .any(|bound| bound == trait_name),
+            // A bound or one of its supertraits: `E: Error` is `Display`.
+            Ty::Param(..) | Ty::Projection(..) => self.bound_traits(ty).iter().any(|bound| {
+                bound == trait_name
+                    || supertraits(&self.models, bound)
+                        .iter()
+                        .any(|parent| parent == trait_name)
+            }),
             // Rust's own `Display` impls.
             Ty::Int(_)
             | Ty::Float(_)
@@ -1633,6 +1636,53 @@ impl<'a> Parser<'a> {
                         chain: crate::resolve::Chain::default(),
                     });
                 }
+            }
+            // `impl Show<Opaque> for A` needs `Opaque: Debug` for `trait
+            // Show<T> where T: Debug`, at the trait path the header writes.
+            for (generic, argument) in declared.generics.iter().zip(impl_arguments.iter()) {
+                let ty = Ty::from_resolved(argument);
+                let missing = bound_kinds(generic.bounds)
+                    .find(|kind| !self.type_provides(&ty, *kind))
+                    .and_then(|kind| {
+                        let (_, bound) = generic
+                            .written
+                            .iter()
+                            .find(|(written, _)| *written == kind)?;
+                        Some((ImmutableString::from(kind.name()), *bound))
+                    })
+                    .or_else(|| {
+                        generic
+                            .traits
+                            .iter()
+                            .find(|bound| !self.type_implements(&ty, &bound.text))
+                            .map(|bound| (bound.text.clone(), bound.span))
+                    });
+                let Some((capability, bound)) = missing else {
+                    continue;
+                };
+                let header = impl_arguments.last().map_or(trait_name.span, |last| {
+                    let mut end = last.span().end();
+                    end.advance();
+                    span(trait_name.span.start(), end)
+                });
+                let place = crate::resolve::Bound {
+                    bound,
+                    callee: None,
+                    argument: header,
+                };
+                return Err(Error::MissingCapability {
+                    owner: ty.name(&self.models),
+                    capability,
+                    operation: header,
+                    derive: matches!(ty, Ty::Script(..)),
+                    declared: self.declared_name(&ty),
+                    required_by: Some(crate::resolve::Required {
+                        item: trait_name.text.clone(),
+                        place: Some(Box::new(place)),
+                    }),
+                    formatted: None,
+                    chain: crate::resolve::Chain::default(),
+                });
             }
         }
         let owner = Ty::from_resolved(&implementation.owner);

@@ -17,50 +17,16 @@ impl Parser<'_> {
             && matches!(ahead.next(), Some((Token::Identifier(name), _)) if name.as_str() == formatter.as_str())
     }
 
-    /// Whether `std::fmt::Write` may be in scope at `at`, as rustc asks of
-    /// a trait before its method is called: a `use` of it or a glob of
-    /// `std::fmt`, in this module or in a block that holds `at`. A `use` of
-    /// a path outside std that ends in `Write`, or a glob of one, may reach
-    /// it through a re-export, so it counts.
-    fn fmt_write_in_scope(&self, at: Position) -> bool {
-        let Some(imports) = self.models.lexical.get(&self.models.context) else {
-            return true;
-        };
-        let std = |path: &[ImmutableString]| {
-            path.first()
-                .is_some_and(|root| crate::std_table::is_root(root))
-        };
-        imports
-            .iter()
-            .filter(|used| used.visible_at(at))
-            .any(|used| {
-                if let crate::item::UseTree::Glob { prefix, .. } = &used.tree {
-                    let path = prefix
-                        .segments
-                        .iter()
-                        .map(|segment| segment.name.text.clone())
-                        .collect::<Vec<_>>();
-                    return match &path[..] {
-                        [root, module] if crate::std_table::is_root(root) => module == "fmt",
-                        path => !std(path),
-                    };
-                }
-                // With `std::io::Write` in scope rustc says the method's
-                // bounds are not met, which this check doesn't word.
-                used.bindings().iter().any(|(_, path)| match &path[..] {
-                    [.., last] if last != "Write" => false,
-                    [root, module, _] if crate::std_table::is_root(root) => {
-                        module == "fmt" || module == "io"
-                    }
-                    path => !std(path),
-                })
-            })
-    }
-
-    /// rustc's E0599 for `write!` into `target` where no `Write` trait is in
-    /// scope: `None` where `std::fmt::Write` is.
+    /// rustc's E0599 for `write!` into `target` where no `Write` trait it
+    /// implements is in scope (`std_trait_in_scope`): `None` where one is. A
+    /// `String` has only `std::fmt::Write`'s `write_fmt`, so `std::io::Write`
+    /// in scope is the same E0599 (#1428).
     fn unscoped_write(&self, owner: &Ty, target: Span) -> Option<Error> {
-        (!self.fmt_write_in_scope(target.start())).then(|| Error::UnscopedWrite {
+        let at = target.start();
+        let scoped = self.std_trait_in_scope("core::fmt::Write", at)
+            || !matches!(owner, Ty::String)
+                && self.std_trait_in_scope("core::io::write::Write", at);
+        (!scoped).then(|| Error::UnscopedWrite {
             owner: owner.name(&self.models),
             at: target,
             placement: self.models.use_placement(),

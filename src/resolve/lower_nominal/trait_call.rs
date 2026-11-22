@@ -1057,6 +1057,9 @@ impl<'a> Parser<'a> {
         let receiver_ty = match (by_reference, self.inference.resolve(&receiver.ty)) {
             (true, ty) if lent => ty,
             (true, Ty::Reference { target, .. }) => *target,
+            // A `&str` is `&` of `str`, which an impl's header reads as
+            // `Ty::Str`.
+            (true, Ty::Str) => Ty::Str,
             (true, ty) => {
                 return Err(Error::TypeMismatch {
                     expected: format!("&{}", self_ty.as_ref().unwrap_or(&ty).name(&self.models))

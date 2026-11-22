@@ -321,7 +321,8 @@ impl fmt::Display for ParseErrorType {
                     f,
                     "Duplicate item '{name}'; first declared at {previous_declaration}"
                 ),
-                crate::resolve::Error::DuplicateImport { name, .. } => {
+                crate::resolve::Error::DuplicateImport { name, .. }
+                | crate::resolve::Error::Redefined { name, .. } => {
                     write!(f, "the name `{name}` is defined multiple times")
                 }
                 crate::resolve::Error::UnknownType { name, path, .. } => {
@@ -414,6 +415,9 @@ impl fmt::Display for ParseErrorType {
                     write!(f, "{}", crate::resolve::NotFound::Macro(name))
                 }
                 crate::resolve::Error::Unimplemented { message, .. } => f.write_str(message),
+                crate::resolve::Error::UnsharedStatic { ty, .. } => {
+                    write!(f, "{}", crate::resolve::Unsatisfied(ty, "Sync"))
+                }
                 crate::resolve::Error::WrongKind {
                     expected,
                     found,
@@ -423,8 +427,8 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::BorrowConflict { message, code, .. } => {
                     write!(f, "{message} ({code})")
                 }
-                crate::resolve::Error::Outlives(report) => {
-                    write!(f, "{} ({})", report.message(), report.code())
+                crate::resolve::Error::Outlives(reports) => {
+                    write!(f, "{} ({})", reports.first().message(), reports.first().code())
                 }
                 crate::resolve::Error::ImmutableBorrow { message, .. } => {
                     write!(f, "{message} (E0596)")
@@ -453,6 +457,11 @@ impl fmt::Display for ParseErrorType {
                 | crate::resolve::Error::Unboxed {
                     expected, actual, ..
                 } => write!(f, "mismatched types: expected `{expected}`, found `{actual}`"),
+                crate::resolve::Error::ArgumentMismatch(mismatch) => write!(
+                    f,
+                    "mismatched types: expected `{}`, found `{}`",
+                    mismatch.expected, mismatch.actual
+                ),
                 crate::resolve::Error::IfWithoutElse { .. } => {
                     f.write_str(crate::resolve::IF_WITHOUT_ELSE)
                 }

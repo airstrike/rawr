@@ -72,6 +72,11 @@ struct Temporary {
     ends: Option<Point>,
 }
 
+/// The temporaries of a scope taken out of the scopes being read, which
+/// end where [`Recorder::end_temporaries`] is told, on each path that
+/// leaves it (an `if let`'s consequent and alternative).
+pub(crate) struct Taken(Vec<Temporary>);
+
 /// How a temporary scope ends ([`Recorder::close_temporaries`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScopeEnd {
@@ -96,6 +101,9 @@ pub(crate) struct Recorder {
     /// The loans and the holders' loans each expression's value is, by its
     /// span, at the positions of its type: `&v`, `r`, `if c { &a } else { &b }`.
     origins: BTreeMap<Span, Held>,
+    /// The branches each `if`'s or `match`'s value is one of, by its span,
+    /// each by its value's span.
+    eithers: BTreeMap<Span, Vec<Span>>,
     /// The holders used, the places a call borrowed, and the closures that
     /// captured, so far: the borrows a value may have been made from, for
     /// [`ValueStart`].
@@ -223,6 +231,7 @@ impl Default for Recorder {
             locals: BTreeMap::new(),
             mentions: BTreeMap::new(),
             origins: BTreeMap::new(),
+            eithers: BTreeMap::new(),
             borrowed: 0,
             loops: Vec::new(),
             outer_loops: Vec::new(),
@@ -524,6 +533,16 @@ impl Recorder {
     /// through any position, more than the check finds.
     pub(crate) fn give_back(&mut self, held: &[(Path, Origin)], span: Span) {
         if self.constant {
+            return;
+        }
+        // An `if`'s or a `match`'s value is the branch's it is, as rustc
+        // marks it.
+        if let Some(parts) = self.eithers.get(&span).cloned() {
+            for part in parts {
+                if let Some(held) = self.origins.get(&part).cloned() {
+                    self.give_back(&held, part);
+                }
+            }
             return;
         }
         let local = self.hidden("<return>", span);
@@ -1234,17 +1253,58 @@ impl Recorder {
     }
 
     /// The value spanning `whole` is one of the values spanning `parts`, as
-    /// an `if`'s or a `match`'s is one of its branches'.
-    pub(crate) fn either(&mut self, whole: Span, parts: &[Span]) {
+    /// an `if`'s or a `match`'s is one of its branches', each made where
+    /// its branch ends (at its block). As rustc's MIR assigns the result
+    /// in each branch, a hidden local takes each branch's borrows there:
+    /// a loan of one branch is then not live through another, nor through
+    /// a loop's back edge into it.
+    pub(crate) fn either(&mut self, whole: Span, parts: &[(Span, Block)]) {
         // A branch that diverges, or holds nothing that borrows, adds none.
-        let followed: Vec<&Held> = parts
+        let followed: Vec<(Held, Block)> = parts
             .iter()
-            .filter_map(|part| self.origins.get(part))
+            .filter_map(|(part, end)| Some((self.origins.get(part)?.clone(), *end)))
             .collect();
-        if !followed.is_empty() {
-            let origins = followed.into_iter().flatten().copied().collect();
-            self.origins.insert(whole, origins);
+        if followed.is_empty() {
+            return;
         }
+        let chosen = self.hidden("branch value", whole);
+        let mut paths: Vec<Path> = Vec::new();
+        for (held, end) in followed {
+            self.push_in(end, Fact::Def(chosen));
+            for (path, origin) in held {
+                let from = self.source(origin);
+                let at = self.push_in(end, Fact::Use(self.origin_local(origin)));
+                self.body.flows.push(Flow {
+                    from,
+                    into: chosen,
+                    path,
+                    at,
+                });
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+        let origins = paths
+            .into_iter()
+            .map(|path| (path, Origin::Local(chosen, path)))
+            .collect();
+        self.origins.insert(whole, origins);
+        // A returned value of the `if` or `match` is marked at its
+        // branches, as rustc marks it.
+        self.eithers
+            .insert(whole, parts.iter().map(|(part, _)| *part).collect());
+    }
+
+    /// `fact` at the end of `block`, one control has left: a branch's end.
+    fn push_in(&mut self, block: Block, fact: Fact) -> Point {
+        let facts = &mut self.body.blocks[block.0 as usize].facts;
+        let point = Point {
+            block,
+            index: facts.len() as u32,
+        };
+        facts.push(fact);
+        point
     }
 
     // Control flow.
@@ -1694,6 +1754,18 @@ impl Recorder {
         self.temporary_scopes.push(Vec::new());
     }
 
+    /// Where the temporaries of the scope opened last are made that a `let`
+    /// closing it extends to its block's end.
+    pub(crate) fn extended(&self) -> Vec<Span> {
+        self.temporary_scopes
+            .last()
+            .into_iter()
+            .flatten()
+            .filter(|temporary| temporary.extendable && !self.pinned.contains(&temporary.local))
+            .map(|temporary| temporary.span)
+            .collect()
+    }
+
     /// The temporary scope opened last ends here, as `end` says. A loan of
     /// one of its temporaries still live is rustc's E0716.
     pub(crate) fn close_temporaries(&mut self, end: ScopeEnd) {
@@ -1724,6 +1796,23 @@ impl Recorder {
                 }
                 _ => self.temporary_dead(temporary),
             }
+        }
+    }
+
+    /// The temporary scope opened last, taken out to end on each path that
+    /// leaves it.
+    pub(crate) fn take_temporaries(&mut self) -> Taken {
+        Taken(self.temporary_scopes.pop().unwrap_or_default())
+    }
+
+    /// The temporaries `taken` drop and end here, on one path that leaves
+    /// their scope.
+    pub(crate) fn end_temporaries(&mut self, taken: &Taken) {
+        for &temporary in taken.0.iter().rev() {
+            self.temporary_dead(Temporary {
+                ends: None,
+                ..temporary
+            });
         }
     }
 

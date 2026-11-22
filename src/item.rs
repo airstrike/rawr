@@ -1189,6 +1189,9 @@ pub struct Function {
     /// `const NAME: T = value;`, lowered as a zero-argument function whose
     /// body span covers `value`; uses evaluate it, as Rust inlines it.
     pub(crate) constant: bool,
+    /// `static NAME: T = value;`: a `constant` that is one place for the
+    /// program's life, which no use moves out of and every thread shares.
+    pub(crate) static_item: bool,
     /// `async fn`: the declared output is the future's, and the body runs
     /// as an `async move` block.
     pub(crate) asynchronous: bool,

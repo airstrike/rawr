@@ -56,6 +56,7 @@ pub(super) const HELD: [Held; 2] = [
             capability::Kind::Clone,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     }),
 ];

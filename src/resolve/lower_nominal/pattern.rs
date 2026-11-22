@@ -843,6 +843,7 @@ impl<'a> Parser<'a> {
             self.require_irrefutable(syntax, &resolved.coverage, &written_ty, site)?;
         }
         let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
+        let stored = self.holds_stored(&subject) || self.stored_temporary(&subject);
         let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
         // A value made for the statement drops at its end, or before
         // `else`; a local's moved parts are left `()` in it.
@@ -923,6 +924,7 @@ impl<'a> Parser<'a> {
         if let Some(place) = &place {
             self.bind_parts(place);
         }
+        self.bind_stored(stored, &bindings);
         // The moves out of what was matched, then the rest of a value made
         // for it drops, before the bindings are declared.
         if self.drops() {
@@ -1026,7 +1028,13 @@ impl<'a> Parser<'a> {
         // `let Wrapper(x) = w;` of a one-variant enum, `let Some(x) = o;`
         // or `let [a, ..] = slice;`: matched as `let .. else` is, after the
         // coverage check finds it irrefutable, or refused as rustc's E0005.
-        if syntax.may_refute() || self.matches_unsized_slice(&syntax, &value.ty) {
+        // So is a value holding stored `&mut`s (`let (a, b) =
+        // v.split_at_mut(1);`), whose `&mut` bindings reach their places.
+        if syntax.may_refute()
+            || self.matches_unsized_slice(&syntax, &value.ty)
+            || self.holds_stored(&value)
+            || self.stored_temporary(&value)
+        {
             let end = self.position();
             self.terminate(start, Continuation::Let)?;
             let origin = self.let_origin(annotated, &value);
@@ -2858,12 +2866,11 @@ impl<'a> Parser<'a> {
                 path: true,
                 imports: self.imports(head, super::Wanted::Type),
             },
-            [(head, head_span), ..] if self.unresolved_root(head) => Error::UnknownType {
-                name: head.clone(),
-                reference: Span::new(head_span.start(), text_end(head_span.start(), head)),
-                path: true,
-                imports: Box::default(),
-            },
+            [(head, _), ..] if self.unresolved_root(head) => {
+                let mut path = syntax.owner.to_vec();
+                path.push((syntax.variant.clone(), syntax.variant_span));
+                self.unresolved_root_error(&path)
+            }
             _ => Error::UnknownType {
                 name: owner.clone(),
                 reference: syntax.owner_span,

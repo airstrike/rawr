@@ -13,10 +13,11 @@ use super::wide::{integer_text, wide_value, Wide};
 #[cfg(feature = "rust-import")]
 use super::without_references;
 use super::{
-    cast_value, cell, char_method, collect_try, compare, counted, cow, drops, error_object,
-    instantiate, int_method, keyed_query, origin, parse_text, places, sequence, slice_value,
-    str_change, str_method, str_pieces, thread, time_method, vec_method, Models, Nominal,
-    ParsedExpr, CHAR_METHODS, COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX, SLICE_CHUNKS,
+    any_object, cast_value, cell, char_method, collect_try, compare, counted, cow, drops,
+    error_object, instantiate, int_method, keyed_query, origin, parse_text, places, sequence,
+    slice_value, str_change, str_method, str_pieces, thread, time_method, vec_method, Models,
+    Nominal, ParsedExpr, CHAR_METHODS, COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX,
+    SLICE_CHUNKS,
 };
 use crate::func::{FnCallArgs, NativeCallContext, RawrFunc};
 use crate::resolve::{intrinsic, item, type_ref};
@@ -276,10 +277,16 @@ pub(super) enum PreludeOp {
     CellNew,
     /// `Cell::new(value)`.
     PlainCellNew,
-    /// A `Box<dyn Error>` of its `Display` and `Debug` text, and one of
-    /// those texts (`error_object.rs`).
+    /// A `dyn Error` of an error, its type, its `Display` and `Debug` text
+    /// and its `source`; one of those texts; and its `source`
+    /// (`error_object.rs`).
     ErrorNew,
     ErrorText,
+    ErrorSource,
+    /// A `dyn Any` of a value and its type, and a downcast of a `dyn Any`
+    /// or a `dyn Error` (`any_object.rs`).
+    AnyNew,
+    Downcast,
     /// A `parse` error, whose kind its target's kind code gives, boxed as
     /// `dyn Error` by `?`.
     ErrorParse,
@@ -356,6 +363,10 @@ pub(super) enum PreludeOp {
     SliceGet,
     /// `v.split_at(mid)` of an array or a string: the pair of its halves.
     SplitAt,
+    /// What a stored `&mut` of an array or of a range of its elements
+    /// gives (D1113): `view(reference, code, argument)`, by
+    /// `eval::view`'s codes, with Rust's panics.
+    View,
     /// A `char` method of `CHAR_METHODS`: `char(c, code, argument)`.
     CharMethod,
     /// `char::from_digit(n, radix)`, or `char::from_u32(n)` with radix `-1`.
@@ -441,7 +452,8 @@ pub(super) enum PreludeOp {
     #[cfg(feature = "rust-import")]
     NativeCoerce,
     /// A static declared in a body, of a native type (D862): its place,
-    /// or before its block writes it, its slot: `value(key)`.
+    /// or before its block writes it, its slot. A static the interpreter
+    /// holds: the value its first read kept. `value(key)`.
     StaticValue,
     /// Whether the static `key` has no value yet: `reserved(key)`.
     StaticReserved,
@@ -449,6 +461,10 @@ pub(super) enum PreludeOp {
     /// type's layout, `[size, pointer offsets..]` or `()` when the import
     /// driver gave none (D865): `settle(key, value, layout)`.
     StaticSettle,
+    /// Keep the static `key`'s value, one the interpreter holds, made at
+    /// its first read, and give the value every read shares (#2519):
+    /// `keep(key, value)`.
+    StaticKeep,
 }
 
 impl PreludeOp {
@@ -516,6 +532,9 @@ impl PreludeOp {
             Self::PlainCellNew => "cell.new_plain",
             Self::ErrorNew => "error.new",
             Self::ErrorText => "error.text",
+            Self::ErrorSource => "error.source",
+            Self::AnyNew => "any.new",
+            Self::Downcast => "any.downcast",
             Self::ErrorParse => "error.parse",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
@@ -556,6 +575,7 @@ impl PreludeOp {
             Self::SliceGetRange => "slice.get-range",
             Self::SliceGet => "slice.get",
             Self::SplitAt => "slice.split-at",
+            Self::View => "slice.view",
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
             Self::IntErrorKind => "error.int-kind",
@@ -588,6 +608,7 @@ impl PreludeOp {
             Self::StaticValue => "static.value",
             Self::StaticReserved => "static.reserved",
             Self::StaticSettle => "static.settle",
+            Self::StaticKeep => "static.keep",
         }
     }
 
@@ -672,7 +693,8 @@ impl PreludeOp {
             | Self::CountedUnwrapOrClone
             | Self::WeakUpgrade
             | Self::WeakStrong
-            | Self::WeakWeakCount => vec![TypeId::of::<Dynamic>()],
+            | Self::WeakWeakCount
+            | Self::ErrorSource => vec![TypeId::of::<Dynamic>()],
             Self::CountedPtrEq | Self::WeakPtrEq => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
@@ -681,8 +703,8 @@ impl PreludeOp {
             | Self::CellBorrow
             | Self::CellSet
             | Self::CellReplace
-            | Self::ErrorNew
             | Self::ErrorText
+            | Self::AnyNew
             | Self::ReferentStore => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
@@ -691,6 +713,12 @@ impl PreludeOp {
                 TypeId::of::<INT>(),
                 TypeId::of::<Dynamic>(),
             ],
+            Self::Downcast => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<INT>(),
+            ],
+            Self::ErrorNew => vec![TypeId::of::<Dynamic>(); 5],
             Self::CellUpdate => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
@@ -794,6 +822,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
             ],
             Self::IntMethod => vec![
                 TypeId::of::<crate::INT>(),
@@ -809,6 +838,11 @@ impl PreludeOp {
             Self::SliceGet | Self::SplitAt => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()]
             }
+            Self::View => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
+            ],
             Self::CharFrom => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
             Self::IntErrorKind => vec![TypeId::of::<ImmutableString>()],
             Self::CaseMapping => vec![TypeId::of::<char>(), TypeId::of::<bool>()],
@@ -873,6 +907,7 @@ impl PreludeOp {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()]
             }
             Self::StaticValue | Self::StaticReserved => vec![TypeId::of::<ImmutableString>()],
+            Self::StaticKeep => vec![TypeId::of::<ImmutableString>(), TypeId::of::<Dynamic>()],
             Self::StaticSettle => vec![
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<Dynamic>(),
@@ -975,6 +1010,10 @@ impl PreludeOp {
                 let layout = static_layout(args[2]);
                 crate::place::statics::slot(&key).settle(args[1].take(), layout)?;
                 return Ok(Dynamic::UNIT);
+            }
+            Self::StaticKeep => {
+                let key = args[0].clone_cast::<ImmutableString>();
+                return crate::place::statics::slot(&key).keep(args[1].take());
             }
             // An `Rc` or `Arc` coerced to a trait object's gives its value,
             // which native code puts behind its own pointer (#1304).
@@ -1224,6 +1263,10 @@ impl PreludeOp {
             Self::Slice | Self::SliceGetRange | Self::SplitAt => {
                 return slice_value(self, args);
             }
+            Self::View => {
+                let code = args[1].as_int().unwrap_or(-1);
+                return crate::Engine::view(args[0], code, args[2]).or_else(panic);
+            }
             Self::VecMethod => return vec_method(context, args),
             Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
             Self::Memory => {
@@ -1313,7 +1356,7 @@ impl PreludeOp {
             Self::StrMethod => {
                 let text = args[0].clone_cast::<ImmutableString>();
                 let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
-                return str_method(&text, code, &args[2].clone(), &args[3].clone());
+                return str_method(&text, code, [&*args[2], &*args[3], &*args[4]]);
             }
             Self::SetAlgebra | Self::KeyedRange => {
                 return keyed_query(self, args, &Keys::new(&comparison, shape, flags, false))
@@ -1381,7 +1424,10 @@ impl PreludeOp {
             | Self::CellRelease
             | Self::CellReplace
             | Self::CellClone => return cell::invoke(self, args),
-            Self::ErrorNew | Self::ErrorText => return error_object::invoke(self, args),
+            Self::ErrorNew | Self::ErrorText | Self::ErrorSource => {
+                return error_object::invoke(self, args);
+            }
+            Self::AnyNew | Self::Downcast => return any_object::invoke(self, args),
             Self::ErrorParse => {
                 return Ok(error_object::parsed(
                     &args[0].clone_cast::<ImmutableString>(),
@@ -2505,13 +2551,13 @@ impl ExecutableOp {
             Self::Struct { item, .. } => item
                 .fields
                 .iter()
-                .map(|field| Ty::from_resolved(&field.ty).type_id(models))
+                .map(|field| stored_type_id(&Ty::from_resolved(&field.ty), models))
                 .map(place_operand)
                 .collect(),
             Self::Enum { item, variant, .. } => item.variants[*variant]
                 .payload
                 .iter()
-                .map(|ty| Ty::from_resolved(ty).type_id(models))
+                .map(|ty| stored_type_id(&Ty::from_resolved(ty), models))
                 .map(place_operand)
                 .collect(),
             Self::Clone { definition } | Self::Debug { definition } => {
@@ -2988,4 +3034,13 @@ fn static_layout(layout: &Dynamic) -> Option<(usize, Box<[usize]>)> {
     let size = words.next()??;
     let offsets = words.collect::<Option<Box<[usize]>>>()?;
     Some((size, offsets))
+}
+
+/// The runtime type of a part of type `ty` a value is built of: a `&mut`
+/// is a reference to its place (`stored.rs`), or a crate's own value.
+fn stored_type_id(ty: &Ty, models: &Models) -> TypeId {
+    match ty {
+        Ty::Reference { mutable: true, .. } => TypeId::of::<Dynamic>(),
+        ty => ty.type_id(models),
+    }
 }

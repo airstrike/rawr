@@ -645,15 +645,30 @@ impl<'a> Resolver<'a> {
                 }
                 for (name, path) in use_paths(use_item) {
                     let address = context.address(&name.text);
+                    // rustc's E0255, in the declaration's namespace; the
+                    // import binds there what the declaration is.
                     if let Some(previous) = self.tables.declaration(&address) {
+                        let (namespace, kind) = match previous.target {
+                            Target::Module => ("type", "module"),
+                            Target::Trait(_) => ("type", "trait"),
+                            Target::Item(_) => ("value", "value"),
+                            _ => ("type", "type"),
+                        };
+                        let import = super::Import {
+                            written: use_item.written(&name),
+                            rename: use_item.rename(&name),
+                            kind,
+                        };
                         return Err(Failure {
                             primary: context.source,
                             secondary: Some(previous.source),
-                            error: Error::DuplicateItem {
-                                name: name.text,
-                                declaration: name.span,
-                                previous_declaration: previous.span,
-                            },
+                            error: Error::duplicate(
+                                name.text,
+                                namespace,
+                                import,
+                                (previous.span, None),
+                                previous.source == context.source,
+                            ),
                         });
                     }
                     if let Some(previous) = self.tables.export_at(
@@ -845,8 +860,9 @@ impl<'a> Resolver<'a> {
     /// The qualified paths `unit`'s bodies call or name, by where they are.
     fn unit_qualified_calls(&self, unit: &Unit) -> Result<ResolvedQualifiedCalls, Failure> {
         let mut resolved = ResolvedQualifiedCalls::default();
-        for parsed in unit.parsed.items() {
-            for call in qualified_calls(parsed) {
+        let mut statements = None;
+        for body in unit_bodies(&unit.parsed, &mut statements) {
+            for call in qualified_calls(body) {
                 let scoped = self.in_blocks(&unit.context, &call.path, call.path_span);
                 let path = scoped.as_deref().unwrap_or(&call.path);
                 if !self.is_script_path(&unit.context, path) {
@@ -968,8 +984,9 @@ impl<'a> Resolver<'a> {
     /// are.
     fn unit_pattern_owners(&self, unit: &Unit) -> Result<PatternOwners, Failure> {
         let mut resolved = BTreeMap::new();
-        for parsed in unit.parsed.items() {
-            for (path, owner) in qualified_pattern_owners(parsed) {
+        let mut statements = None;
+        for body in unit_bodies(&unit.parsed, &mut statements) {
+            for (path, owner) in qualified_pattern_owners(body) {
                 let scoped = self.in_blocks(&unit.context, &path, owner);
                 let path = scoped.as_deref().unwrap_or(&path);
                 if !self.is_script_path(&unit.context, path) {
@@ -2418,10 +2435,10 @@ impl<'a> Resolver<'a> {
                         secondary: Some(previous_source),
                         error: Error::duplicate(
                             name.text.clone(),
-                            name.span,
                             side.noun(),
                             written(side),
                             (previous_span, imported),
+                            previous_source == context.source,
                         ),
                     });
                 }
@@ -4296,7 +4313,8 @@ fn path_head(tokens: &[crate::item::BodyToken], index: usize) -> Option<Immutabl
     }
 }
 
-fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
+/// The paths of more than one segment `body` calls or names.
+fn qualified_calls(body: &crate::item::BodySyntax) -> Vec<QualifiedCall> {
     fn collect(syntax: &crate::item::BodySyntax, output: &mut Vec<QualifiedCall>) {
         let tokens = syntax.tokens();
         let mut index = 0;
@@ -4350,24 +4368,13 @@ fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
     }
 
     let mut output = Vec::new();
-    match parsed {
-        crate::item::Parsed::Function(function) => collect(&function.body_syntax, &mut output),
-        crate::item::Parsed::Impl(crate::item::Impl { functions, .. })
-        | crate::item::Parsed::Trait(crate::item::Trait { functions, .. }) => {
-            for function in functions {
-                collect(&function.body_syntax, &mut output);
-            }
-        }
-        crate::item::Parsed::Module(_)
-        | crate::item::Parsed::Use(_)
-        | crate::item::Parsed::Struct(_)
-        | crate::item::Parsed::Enum(_)
-        | crate::item::Parsed::TypeAlias(_) => {}
-    }
+    collect(body, &mut output);
     output
 }
 
-fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[ImmutableString]>, Span)> {
+/// The paths `body`'s patterns name a type through a module by, each with
+/// its owner's span.
+fn qualified_pattern_owners(body: &crate::item::BodySyntax) -> Vec<(Box<[ImmutableString]>, Span)> {
     fn collect_paths(
         tokens: &[crate::item::BodyToken],
         output: &mut Vec<(Box<[ImmutableString]>, Span)>,
@@ -4462,21 +4469,34 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
     }
 
     let mut output = Vec::new();
-    match parsed {
-        crate::item::Parsed::Function(function) => collect(&function.body_syntax, &mut output),
-        crate::item::Parsed::Impl(crate::item::Impl { functions, .. })
-        | crate::item::Parsed::Trait(crate::item::Trait { functions, .. }) => {
-            for function in functions {
-                collect(&function.body_syntax, &mut output);
-            }
-        }
-        crate::item::Parsed::Module(_)
-        | crate::item::Parsed::Use(_)
-        | crate::item::Parsed::Struct(_)
-        | crate::item::Parsed::Enum(_)
-        | crate::item::Parsed::TypeAlias(_) => {}
-    }
+    collect(body, &mut output);
     output
+}
+
+/// The bodies of `unit`, whose paths it resolves: its items' functions',
+/// and its statements' (#1141), lexed into `statements`.
+fn unit_bodies<'a>(
+    unit: &'a crate::parse::Unit,
+    statements: &'a mut Option<crate::item::BodySyntax>,
+) -> Vec<&'a crate::item::BodySyntax> {
+    let (items, first, script) = unit.parts();
+    *statements = first.map(|_| crate::parser::statement_syntax(script));
+    let mut bodies = items
+        .iter()
+        .flat_map(|parsed| match parsed {
+            crate::item::Parsed::Function(function) => std::slice::from_ref(function),
+            crate::item::Parsed::Impl(crate::item::Impl { functions, .. })
+            | crate::item::Parsed::Trait(crate::item::Trait { functions, .. }) => functions,
+            crate::item::Parsed::Module(_)
+            | crate::item::Parsed::Use(_)
+            | crate::item::Parsed::Struct(_)
+            | crate::item::Parsed::Enum(_)
+            | crate::item::Parsed::TypeAlias(_) => &[],
+        })
+        .map(|function| &function.body_syntax)
+        .collect::<Vec<_>>();
+    bodies.extend(statements.as_ref());
+    bodies
 }
 
 /// The path rustc suggests naming the item at `address` by from

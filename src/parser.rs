@@ -3534,6 +3534,24 @@ impl Engine {
 /// starts, when there is one. The statements are typed Rust, which the
 /// checker reads when it lowers them; here it is enough to know where the
 /// first one starts.
+/// The tokens of a unit's statements, `script` (its source with the items
+/// blanked), as a body's are read, so the resolver reads the paths among
+/// them as it reads a body's (#1141).
+pub(crate) fn statement_syntax(script: &str) -> crate::item::BodySyntax {
+    let engine = Engine::new_raw();
+    let inputs = [script];
+    let (stream, control) = engine.lex_raw(&inputs, None);
+    control.borrow_mut().rust = true;
+    let mut tokens = Vec::new();
+    for (token, position) in stream {
+        if matches!(token, Token::EOF) {
+            break;
+        }
+        tokens.push(item::body_token(token, position));
+    }
+    crate::item::BodySyntax::new(tokens)
+}
+
 pub(crate) fn first_statement(script: &str) -> Option<Position> {
     let engine = Engine::new_raw();
     let inputs = [script];

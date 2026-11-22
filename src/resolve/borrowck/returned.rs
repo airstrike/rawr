@@ -8,16 +8,19 @@ use super::{
     region, signature, Body, Conflict, Flow, Local, Names, Origin, Path, Projection, Reborrow,
 };
 use crate::resolve::outlives;
+use crate::{Position, Span};
 
-/// A parameter's borrow that the function returns at a position of its
+/// Each parameter's borrow that the function returns at a position of its
 /// output whose lifetime it does not relate to as the output's type
 /// requires (T170): rustc's E0621 for a parameter whose lifetime is elided
 /// where the output's is named, and its "lifetime may not live long enough"
-/// otherwise.
+/// otherwise. rustc reports one error for each lifetime that must outlive
+/// another: of those it must outlive, the first the signature declares.
 pub(super) fn parameter(body: &Body) -> Option<Conflict> {
     let own = body.own.as_ref()?;
     let (flows, reborrows, placed) = without_reborrows(body);
     let mut walker = region::Walker::over(&flows, body.locals.len());
+    let mut reports: Vec<Reported<'_>> = Vec::new();
     for &returned in &body.returned {
         let value = body.locals[returned.0 as usize].declaration;
         let unsaid = || {
@@ -34,22 +37,68 @@ pub(super) fn parameter(body: &Body) -> Option<Conflict> {
                 into: returned,
                 output: &own.output,
             };
-            let broken = parameter
-                .held(&mut walker, &unsaid)
-                .or_else(|| parameter.through(&mut walker, &placed, &unsaid))
-                .or_else(|| parameter.reborrowed(&mut walker, &reborrows, &unsaid));
-            if let Some((lifetime, required)) = broken {
+            let mut broken = parameter.held(&mut walker, &unsaid);
+            if broken.is_empty() {
+                broken.extend(
+                    parameter
+                        .through(&mut walker, &placed, &unsaid)
+                        .or_else(|| parameter.reborrowed(&mut walker, &reborrows, &unsaid)),
+                );
+            }
+            for (lifetime, required) in broken {
                 let broken = Broken {
                     parameter: *local,
                     receiver: *receiver,
                     lifetime,
                     required,
                 };
-                return Some(broken.conflict(body, &own.names, value, outlives::Cause::Return));
+                let (longer, shorter) = broken.relates();
+                let order = own.names.order(shorter);
+                let earlier = reports
+                    .iter()
+                    .position(|reported| reported.longer == longer);
+                if earlier.is_some_and(|earlier| reports[earlier].order <= order) {
+                    continue;
+                }
+                let entry = Reported {
+                    report: broken.report(body, own, value, outlives::Cause::Return),
+                    longer,
+                    order,
+                    borrow: body.locals[local.0 as usize].declaration,
+                };
+                match earlier {
+                    Some(earlier) => reports[earlier] = entry,
+                    None => reports.push(entry),
+                }
             }
         }
     }
-    None
+    let borrow = reports.first()?.borrow;
+    let reports = outlives::Reports::of(
+        reports
+            .into_iter()
+            .map(|reported| reported.report)
+            .collect(),
+    )?;
+    Some(Conflict {
+        code: reports.first().code(),
+        message: reports.first().message(),
+        access: reports.first().returned(),
+        borrow,
+        report: Some(Box::new(reports)),
+    })
+}
+
+/// A report of a lifetime that must outlive another, which rustc reports
+/// once for each such lifetime.
+struct Reported<'a> {
+    report: outlives::Report,
+    /// The lifetime that must outlive the other.
+    longer: &'a signature::Lifetime,
+    /// Where the other is among the function's lifetimes ([`Names::order`]).
+    order: (u8, Position, usize),
+    /// The parameter's declaration.
+    borrow: Span,
 }
 
 /// A parameter's borrow that the function stores through another
@@ -90,6 +139,8 @@ pub(super) fn stored(body: &Body) -> Option<Conflict> {
             };
             let broken = parameter
                 .held(&mut walker, &unsaid)
+                .into_iter()
+                .next()
                 .or_else(|| parameter.through(&mut walker, &placed, &unsaid))
                 .or_else(|| parameter.reborrowed(&mut walker, &reborrows, &unsaid));
             let Some((lifetime, mut required)) = broken else {
@@ -110,7 +161,15 @@ pub(super) fn stored(body: &Body) -> Option<Conflict> {
                 lifetime,
                 required,
             };
-            return Some(broken.conflict(body, &own.names, store.span, store.cause));
+            let report = broken.report(body, own, store.span, store.cause);
+            let reports = outlives::Reports::of(vec![report])?;
+            return Some(Conflict {
+                code: reports.first().code(),
+                message: reports.first().message(),
+                access: store.span,
+                borrow: body.locals[local.0 as usize].declaration,
+                report: Some(Box::new(reports)),
+            });
         }
     }
     None
@@ -125,17 +184,27 @@ struct Broken<'a> {
     required: signature::Required<'a>,
 }
 
-impl Broken<'_> {
-    /// rustc's report of it, at `value`.
-    fn conflict(
+impl<'a> Broken<'a> {
+    /// The lifetime that must outlive the other, and the other.
+    fn relates(&self) -> (&'a signature::Lifetime, &'a signature::Lifetime) {
+        match self.required.direction {
+            signature::Direction::Input => (self.lifetime, self.required.output),
+            signature::Direction::Output => (self.required.output, self.lifetime),
+        }
+    }
+
+    /// rustc's report of it, at `value`, of the function whose own
+    /// signature is `own`.
+    fn report(
         &self,
         body: &Body,
-        names: &Names,
-        value: crate::Span,
+        own: &super::OwnSignature,
+        value: Span,
         cause: outlives::Cause,
-    ) -> Conflict {
+    ) -> outlives::Report {
+        let names = &own.names;
         let info = &body.locals[self.parameter.0 as usize];
-        let report = match (self.lifetime, self.required.output) {
+        match (self.lifetime, self.required.output) {
             (signature::Lifetime::Elided(number), signature::Lifetime::Named(output))
                 if !self.receiver
                     && let Some(reference) = names.elided.get(number - 1) =>
@@ -148,10 +217,7 @@ impl Broken<'_> {
                 }
             }
             _ => {
-                let (longer, shorter) = match self.required.direction {
-                    signature::Direction::Input => (self.lifetime, self.required.output),
-                    signature::Direction::Output => (self.required.output, self.lifetime),
-                };
+                let (longer, shorter) = self.relates();
                 outlives::Report::NotLongEnough {
                     returned: value,
                     cause,
@@ -165,20 +231,32 @@ impl Broken<'_> {
                             .find(|(of, _)| of == invariance)
                             .map(|(_, variance)| variance.clone())
                     }),
+                    named: names.named(longer, shorter, &own.parameters),
                 }
             }
-        };
-        Conflict {
-            code: report.code(),
-            message: report.message(),
-            access: value,
-            borrow: info.declaration,
-            report: Some(Box::new(report)),
         }
     }
 }
 
 impl Names {
+    /// Where rustc's region check reaches `lifetime` among the function's
+    /// own: `'static`, then each named one where it is declared, then each
+    /// elided one in order.
+    fn order(&self, lifetime: &signature::Lifetime) -> (u8, Position, usize) {
+        match lifetime {
+            signature::Lifetime::Static => (0, Position::NONE, 0),
+            signature::Lifetime::Named(name) => {
+                let declared = self
+                    .declared
+                    .iter()
+                    .find(|(declared, _)| declared == name)
+                    .map_or(Position::NONE, |(_, at)| at.start());
+                (1, declared, 0)
+            }
+            signature::Lifetime::Elided(number) => (2, Position::NONE, *number),
+        }
+    }
+
     /// The lifetime as rustc's report names it.
     fn region(&self, lifetime: &signature::Lifetime) -> outlives::Region {
         match lifetime {
@@ -195,11 +273,96 @@ impl Names {
                 }
             }
             signature::Lifetime::Elided(number) => match self.elided.get(number - 1) {
-                Some(reference) => outlives::Region::Anonymous(*reference),
+                Some(reference) => outlives::Region::Anonymous(*reference, 0),
                 None => outlives::Region::Static,
             },
             signature::Lifetime::Static => outlives::Region::Static,
         }
+    }
+}
+
+impl Names {
+    /// rustc's suggestion of one named lifetime for `longer` and
+    /// `shorter`, where each is the function's own and in its inputs: it
+    /// is written at each lifetime the output elides, or else at
+    /// `shorter`'s, then at `longer`'s, each with those elided below it.
+    /// `None` where one of them is not a reference's.
+    fn named(
+        &self,
+        longer: &signature::Lifetime,
+        shorter: &signature::Lifetime,
+        inputs: &[(Local, signature::Parameter, bool)],
+    ) -> Option<Box<outlives::Named>> {
+        use outlives::Place;
+        let naming = &self.naming;
+        let places = |numbers: std::ops::Range<usize>| -> Option<Vec<Place>> {
+            let references = self.elided.get(numbers.clone())?;
+            naming
+                .elisions
+                .get(numbers)?
+                .iter()
+                .zip(references)
+                .map(|(elision, reference)| {
+                    elision.reference.then_some(match elision.placeholder {
+                        Some(placeholder) => Place::Over(placeholder),
+                        None => Place::After(reference.ampersand),
+                    })
+                })
+                .collect()
+        };
+        let input = |lifetime: &signature::Lifetime| match lifetime {
+            signature::Lifetime::Elided(number) => {
+                let below = naming.elisions.get(number - 1)?.below;
+                places(number - 1..number + below)
+            }
+            // The function's own, which an input's type writes: the
+            // receiver's type is `Self`'s, whose lifetimes it doesn't.
+            signature::Lifetime::Named(_)
+                if !matches!(
+                    self.region(lifetime),
+                    outlives::Region::Named { function: true, .. }
+                ) =>
+            {
+                None
+            }
+            signature::Lifetime::Named(_) => inputs
+                .iter()
+                .any(|(_, parameter, receiver)| {
+                    parameter.regions.iter().any(|(path, written)| {
+                        written.as_ref() == Some(lifetime) && (!receiver || *path == Path::OWN)
+                    })
+                })
+                .then(Vec::new),
+            signature::Lifetime::Static => None,
+        };
+        let longer = input(longer)?;
+        let shorter = input(shorter)?;
+        let mut written = places(naming.input_elided..naming.elisions.len())?;
+        if written.is_empty() {
+            written = shorter;
+        }
+        for place in longer {
+            if !written.contains(&place) {
+                written.push(place);
+            }
+        }
+        if written.is_empty() {
+            return None;
+        }
+        let introduced = naming.first.is_none();
+        if introduced {
+            let at = naming.introduced?;
+            written.push(Place::Parameter {
+                at: at.at,
+                listed: at.listed,
+            });
+        }
+        Some(Box::new(outlives::Named {
+            lifetime: naming.first.clone().unwrap_or_else(|| "a".into()),
+            introduced,
+            implemented: naming.implemented,
+            places: written,
+        }))
     }
 }
 
@@ -213,33 +376,33 @@ struct Returned<'a> {
 }
 
 impl<'a> Returned<'a> {
-    /// The parameter's lifetime, and the output's, where the returned value
-    /// holds the one at a position of the output that needs the other.
+    /// Each of the parameter's lifetimes, and the output's, where the
+    /// returned value holds the one at a position of the output that needs
+    /// the other.
     fn held(
         &self,
         walker: &mut region::Walker<'_>,
         unsaid: &dyn Fn(),
-    ) -> Option<(&'a signature::Lifetime, signature::Required<'a>)> {
-        use signature::Relation;
-        self.regions.iter().find_map(|(from, lifetime)| {
+    ) -> Vec<(&'a signature::Lifetime, signature::Required<'a>)> {
+        let mut held = Vec::new();
+        for (from, lifetime) in self.regions {
             let reached = region::reach_into(walker, self.local, *from, self.into);
             let Some(lifetime) = lifetime else {
                 if !reached.is_empty() {
                     unsaid();
                 }
-                return None;
+                continue;
             };
-            reached
-                .into_iter()
-                .find_map(|at| match self.output.relate(lifetime, at) {
-                    Relation::Holds => None,
-                    Relation::Broken(required) => Some((lifetime, required)),
-                    Relation::Unsaid => {
-                        unsaid();
-                        None
+            for at in reached {
+                match self.output.broken(lifetime, at) {
+                    Some(broken) => {
+                        held.extend(broken.into_iter().map(|required| (lifetime, required)))
                     }
-                })
-        })
+                    None => unsaid(),
+                }
+            }
+        }
+        held
     }
 
     /// As [`Returned::held`], through a reborrow of what the parameter

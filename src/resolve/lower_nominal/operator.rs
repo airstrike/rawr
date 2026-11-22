@@ -719,6 +719,21 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        // `|a, b| a + b`: neither operand's type is known yet. rustc's
+        // obligation waits for the call that gives them; the arithmetic is
+        // checked at the kind they settle on (`finish_witnesses`).
+        if output.is_none()
+            && let (Ty::Infer(_), Ty::Infer(_)) = (
+                self.inference.resolve(&lhs.ty),
+                self.inference.resolve(&rhs.ty),
+            )
+        {
+            self.unify_type(&lhs.ty, &rhs.ty);
+            let ty = self.inference.resolve(&lhs.ty);
+            let at = lhs.span;
+            let value = self.binary(lhs, symbol, rhs, ty.clone());
+            return Ok(self.settled_arithmetic(value, symbol, at));
+        }
         let ty = self.operand_type(&lhs, &mut rhs, allowed)?;
         // An `i128` or a `u128` past `i64` is boxed: its operators are
         // `INT_METHODS`'.
@@ -847,22 +862,36 @@ impl<'a> Parser<'a> {
             }
             _ => return value,
         };
-        let verb = match symbol {
-            "+" => "add",
-            "-" => "subtract",
-            "*" => "multiply",
-            "/" => "divide",
-            "%" => "calculate the remainder",
-            "pow" => "exponentiate",
-            _ => "negate",
-        };
         let source = std::mem::take(&mut value.source);
         value.source = self.prelude_op(
             PreludeOp::Narrow,
             [
                 source,
                 code.into(),
-                format!("{:?}", format!("attempt to {verb} with overflow")).into(),
+                format!("{:?}", format!("attempt to {} with overflow", verb(symbol))).into(),
+            ],
+        );
+        value.source.cover(value.span);
+        value
+    }
+
+    /// Arithmetic of operands whose type inference has not settled, checked
+    /// as `checked_arithmetic` checks it once it has: a placeholder for the
+    /// kind's code, which `finish_witnesses` writes.
+    fn settled_arithmetic(&mut self, mut value: ParsedExpr, symbol: &str, at: Span) -> ParsedExpr {
+        let placeholder = format!("__rawr_operand_kind_{:08}", self.pending_operands.len());
+        self.pending_operands.push(PendingOperands {
+            placeholder: placeholder.clone(),
+            ty: value.ty.clone(),
+            at,
+        });
+        let source = std::mem::take(&mut value.source);
+        value.source = self.prelude_op(
+            PreludeOp::Narrow,
+            [
+                source,
+                placeholder.into(),
+                format!("{:?}", format!("attempt to {} with overflow", verb(symbol))).into(),
             ],
         );
         value.source.cover(value.span);
@@ -1404,6 +1433,29 @@ impl<'a> Parser<'a> {
             ty => ty,
         };
         Ok(Some(self.operator_expr(source, ty, expression)))
+    }
+}
+
+/// Arithmetic whose operands' type inference had not settled
+/// (`Lowering::pending_operands`): its placeholder, written over with the
+/// kind's code once it has, and the left operand, where a type other than
+/// a number is a mismatch.
+pub(super) struct PendingOperands {
+    pub(super) placeholder: String,
+    pub(super) ty: Ty,
+    pub(super) at: Span,
+}
+
+/// What debug Rust's overflow panic says `symbol` attempted.
+fn verb(symbol: &str) -> &'static str {
+    match symbol {
+        "+" => "add",
+        "-" => "subtract",
+        "*" => "multiply",
+        "/" => "divide",
+        "%" => "calculate the remainder",
+        "pow" => "exponentiate",
+        _ => "negate",
     }
 }
 

@@ -91,8 +91,9 @@ impl<'a> Parser<'a> {
 
     /// The postfix operations after the primary `value`.
     pub(super) fn parse_postfix_of(&mut self, value: ParsedExpr) -> Result<ParsedExpr, Error> {
-        self.parse_postfix_steps(value)
-            .map_err(|error| self.std_no_item(self.inherent_not_yet(error)))
+        self.parse_postfix_steps(value).map_err(|error| {
+            self.std_no_item(self.unscoped_std_method(self.inherent_not_yet(error)))
+        })
     }
 
     /// A member a type of Rawr's std lacks, as rustc's E0599 names it: by
@@ -107,9 +108,27 @@ impl<'a> Parser<'a> {
         else {
             return error;
         };
-        let Some(form) = crate::std_facade::held_forms(owner).first().copied() else {
+        let forms = crate::std_facade::held_forms(owner);
+        let Some(form) = forms.first().copied() else {
             return error;
         };
+        // A stable function std declares on a type the held one stands
+        // for, as `Path::strip_prefix` of a `PathBuf`, which the facade
+        // doesn't bind yet.
+        for form in &forms {
+            let declared = crate::std_table::path(form, crate::std_table::Namespace::Type)
+                .and_then(|path| crate::std_table::item(&format!("{}::{member}", path.definition)));
+            if let Some(item) = declared
+                && item.kind == "assoc-fn"
+                && item.stability == crate::std_table::Stability::Stable
+            {
+                let name = form.rsplit("::").next().unwrap_or(form);
+                return Error::NotYet {
+                    path: format!("{name}::{member}").into(),
+                    reference: *reference,
+                };
+            }
+        }
         let kind = match crate::std_table::path(form, crate::std_table::Namespace::Type) {
             Some(path) if path.kind == "enum" => "enum",
             Some(path) if path.kind == "struct" => "struct",
@@ -129,6 +148,7 @@ impl<'a> Parser<'a> {
                 definition: None,
             }),
             similar: None,
+            unsatisfied: None,
         }
     }
 
@@ -173,6 +193,8 @@ impl<'a> Parser<'a> {
         let mut called: Option<(borrows::CallReceiver, ImmutableString)> = None;
         // Whether `value` is a method call's value, which is no place of a
         // local's even where the lowering keeps it as one (`v.last_mut()`).
+        // Whether the last step read a field or an element.
+        let mut projected = false;
         loop {
             if let Some(boxed) = rebox.take() {
                 value.ty = boxed;
@@ -182,11 +204,25 @@ impl<'a> Parser<'a> {
                 self.finish_method_call(&receiver, &member, &value);
                 from_call = true;
             }
+            // A `&mut` a value stores, read from its field or element and
+            // used: the place it refers to; a new one assigned keeps the
+            // field (`stored.rs`).
+            if std::mem::take(&mut projected)
+                && !matches!(self.peek(), Token::Equals)
+                && matches!(
+                    self.inference.resolve(&value.ty),
+                    Ty::Reference { mutable: true, .. }
+                )
+                && value.lvalue.is_some()
+            {
+                value = self.through_stored(value);
+            }
             // The second field of `t.0.1`, which reads as one number.
             let pending = self.pending_member.take();
             if pending.is_none() && matches!(self.peek(), Token::LeftBracket) {
                 let base = (value.span, value.ty.clone());
                 value = self.parse_index(value)?;
+                projected = true;
                 self.flow().index_end(value.span.start());
                 self.part_of(
                     (base.0, &base.1),
@@ -327,6 +363,7 @@ impl<'a> Parser<'a> {
                     &value,
                     crate::resolve::borrowck::Projection::Field(member.clone()),
                 );
+                projected = true;
             }
             // An `Rc`'s, `Arc`'s or `Weak`'s own method; any other member of
             // an `Rc` or `Arc` is its value's, through std's `Deref`.
@@ -366,6 +403,19 @@ impl<'a> Parser<'a> {
                 && self.is_thread_builder(&value.ty)
             {
                 value = self.parse_builder_spawn(value, member_span)?;
+                continue;
+            }
+            // `Box<dyn Any>::downcast` and `Box<dyn Error>::downcast`, the
+            // box's own (`any_object.rs`).
+            let receiver = self.inference.resolve(&value.ty);
+            if member.as_str() == "downcast"
+                && let Ty::Boxed(object) = &receiver
+                && (self.std_any(object, false) || self.std_error(object, false))
+            {
+                value = match self.parse_downcast(value, &receiver, &member, member_span)? {
+                    Ok(downcast) => downcast,
+                    Err(value) => value,
+                };
                 continue;
             }
             // `Box<T>` auto-derefs for method calls and fields, as in Rust.
@@ -855,11 +905,33 @@ impl<'a> Parser<'a> {
                     continue;
                 }
             }
-            // std's `dyn Error`: its text and its `source`.
+            // std's `dyn Error`: its text, its `source` and its downcasts.
             if self.std_error(&builtin, true)
-                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && matches!(
+                    self.peek(),
+                    Token::LeftParen | Token::Unit | Token::DoubleColon
+                )
             {
-                value = self.parse_error_member(value, member, member_span)?;
+                value = self.parse_error_member(value, &builtin, member, member_span)?;
+                continue;
+            }
+            // std's `dyn Any`: its downcasts.
+            if self.std_any(&builtin, true)
+                && matches!(
+                    self.peek(),
+                    Token::LeftParen | Token::Unit | Token::DoubleColon
+                )
+            {
+                value = match self.parse_downcast(value, &builtin, &member, member_span)? {
+                    Ok(downcast) => downcast,
+                    Err(_) => {
+                        return Err(Error::UnknownMember {
+                            owner: builtin.name(&self.models),
+                            member,
+                            reference: member_span,
+                        });
+                    }
+                };
                 continue;
             }
             // A trait object has only its trait's methods, dispatched by
@@ -1006,6 +1078,7 @@ impl<'a> Parser<'a> {
                             definition: None,
                         }),
                         similar: None,
+                        unsatisfied: None,
                     });
                 }
                 if member.as_str() != "clone" || !arguments.is_empty() {
@@ -1328,9 +1401,9 @@ impl<'a> Parser<'a> {
                 );
                 // A member of what can't be moved out of or assigned to, as
                 // an `Arc`'s value, can't be either.
-                if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
-                    self.unmovable
-                        .insert(span(value.span.start(), end), unmovable);
+                if let Some(unmovable) = self.unmovable.get(&value.span) {
+                    let part = unmovable.member(&member);
+                    self.unmovable.insert(span(value.span.start(), end), part);
                 }
                 value = self.operator_expr(
                     source,
@@ -1517,7 +1590,8 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if builtin.is_text()
-                || matches!(&builtin, Ty::Reference { target, .. } if target.is_text())
+                || matches!(&builtin, Ty::Reference { target, .. }
+                    if target.is_text() || **target == Ty::UnsizedStr)
                 || member == "to_string"
                     && matches!(
                         without_references(&number),
@@ -1677,6 +1751,7 @@ impl<'a> Parser<'a> {
                                     Some(args.len()),
                                 ),
                                 member,
+                                unsatisfied: None,
                             }));
                     }
                 };
@@ -1806,8 +1881,9 @@ impl<'a> Parser<'a> {
             let expression_span = span(value.span.start(), member_span.end());
             // A field of what can't be moved out of, as an `Rc`'s value,
             // can't be either (rustc's E0507).
-            if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
-                self.unmovable.insert(expression_span, unmovable);
+            if let Some(unmovable) = self.unmovable.get(&value.span) {
+                let part = unmovable.member(&member);
+                self.unmovable.insert(expression_span, part);
             }
             self.part_of(
                 (value.span, &value.ty),
@@ -1994,6 +2070,7 @@ impl<'a> Parser<'a> {
                 Some(&value.ty),
                 span(member_span.start(), end),
             )?;
+            self.impl_bounds_met(&definition, &substitution, &value.ty, member_span)?;
             self.require_arguments(
                 &definition,
                 &mut args,
@@ -2068,6 +2145,9 @@ impl<'a> Parser<'a> {
                 let lent = method_lent(&definition);
                 self.mutable_arguments(&args, lent.iter().copied())?;
                 self.lend_mutable(&mut args, &lent)?;
+                let kept = method_kept(&definition);
+                self.mutable_arguments(&args, kept.iter().copied())?;
+                self.lend_kept(&mut args, &kept)?;
                 let mut source =
                     origin::Fragment::plain(format!("{}.{method}(", places::RECEIVER_PLACE));
                 source.push(arguments);
@@ -2154,6 +2234,9 @@ impl<'a> Parser<'a> {
             self.mutable_arguments(&args, lent.iter().copied())?;
             self.move_copied_in(&mut args, &copied);
             self.lend_mutable(&mut args, &lent)?;
+            let kept = method_kept(&definition);
+            self.mutable_arguments(&args, kept.iter().copied())?;
+            self.lend_kept(&mut args, &kept)?;
             let arguments = origin::Fragment::join(
                 args.iter()
                     .map(ParsedExpr::rendered_source)
@@ -2286,7 +2369,7 @@ impl<'a> Parser<'a> {
         if let Some(place) = self.indexed_place(&value)? {
             return Ok(place);
         }
-        self.next();
+        let (_, open) = self.next();
         let outer = std::mem::replace(&mut self.no_struct, false);
         let index = self.parse_range_or_expr();
         self.no_struct = outer;
@@ -2295,7 +2378,7 @@ impl<'a> Parser<'a> {
         let index = match index {
             Ok(index) => index,
             Err((low, high, inclusive)) => {
-                return self.parse_slice(value, low, high, inclusive, end);
+                return self.parse_slice(value, [low, high], inclusive, [open, end]);
             }
         };
         self.index_into(value, index, end)
@@ -2393,7 +2476,10 @@ impl<'a> Parser<'a> {
         match open {
             Some(inclusive) => {
                 self.next();
-                let high = if matches!(self.peek(), Token::RightBracket | Token::RightParen) {
+                let high = if matches!(
+                    self.peek(),
+                    Token::RightBracket | Token::RightParen | Token::Comma
+                ) {
                     Ok(None)
                 } else {
                     self.parse_expr().map(Some)
@@ -2598,6 +2684,7 @@ impl<'a> Parser<'a> {
                 Unplaced {
                     moved: (code, message),
                     assigned: None,
+                    of_static: None,
                 },
             );
         }
@@ -2611,10 +2698,9 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_slice(
         &mut self,
         value: ParsedExpr,
-        low: Option<ParsedExpr>,
-        high: Option<ParsedExpr>,
+        [low, high]: [Option<ParsedExpr>; 2],
         inclusive: bool,
-        end: Position,
+        [open, end]: [Position; 2],
     ) -> Result<ParsedExpr, Error> {
         let mut peeled = self.inference.resolve(&value.ty);
         while let Ty::Reference { target, .. } = peeled {
@@ -2679,6 +2765,7 @@ impl<'a> Parser<'a> {
                 low: low.clone(),
                 high: high.clone(),
                 inclusive,
+                open,
             }))
         });
         let source = self.prelude_op(
@@ -3471,6 +3558,37 @@ impl<'a> Parser<'a> {
                 };
                 (source, Ty::Tuple(Box::new([half.clone(), half])))
             }
+            // `split_at_mut(mid)`: the views of the two halves, each the
+            // reference to its elements (`view.rs`), with std's panic.
+            ("split_at_mut", [mid]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), mid)?;
+                let source =
+                    self.view_call(&value, crate::eval::view::SPLIT, mid.rendered_source())?;
+                let half = Ty::Reference {
+                    mutable: true,
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                };
+                (source, Ty::Tuple(Box::new([half.clone(), half])))
+            }
+            // `chunks_mut(size)`: an iterator over the views of each chunk.
+            ("chunks_mut", [size]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), size)?;
+                let chunks =
+                    self.view_call(&value, crate::eval::view::CHUNKS, size.rendered_source())?;
+                let item = Ty::Reference {
+                    mutable: true,
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                };
+                let chunks = self.operator_expr(
+                    chunks,
+                    Ty::Array {
+                        element: Box::new(item.clone()),
+                        kind: sequence::Kind::Vec,
+                    },
+                    expression,
+                );
+                return Ok(self.array_iterator(&chunks, item, end));
+            }
             ("contains", [argument]) => {
                 let expected = Ty::Reference {
                     mutable: false,
@@ -3557,6 +3675,7 @@ impl<'a> Parser<'a> {
         let mut parsed = self.operator_expr(source, ty, expression);
         if whole.is_some() {
             parsed.lvalue = whole;
+            self.viewed_whole = Some(expression);
         }
         Ok(parsed)
     }
@@ -4026,6 +4145,29 @@ impl<'a> Parser<'a> {
         let Some(output) = self.return_ty.clone() else {
             return Err(self.unsupported("`?` outside a function or closure"));
         };
+        // `s.parse()?` whose target only the expected type of the whole
+        // expression gives, as `let n: i32 = s.parse()?;`: rustc infers the
+        // target from it, which settles the error the `?` converts by the
+        // body's error type's `From`. Into any other error type the parse's
+        // error is the body's, which settles it (rustc's E0271).
+        if let Ty::Result(_, error) = self.inference.resolve(&early)
+            && matches!(*error, Ty::Infer(_))
+            && let Ty::Result(_, returned) = self.inference.resolve(&output)
+            && owner_id(&returned).is_some()
+            && self
+                .pending_parses
+                .iter()
+                .any(|(_, pending, ..)| self.inference.resolve(pending) == *error)
+            && let Some(expected) = self.branch_expectation()
+        {
+            let checkpoint = self.inference.checkpoint();
+            if self.unify_type(&expected, &element) {
+                self.inference.commit(checkpoint);
+                self.settle_parses()?;
+            } else {
+                self.inference.rollback(checkpoint);
+            }
+        }
         // `?` in a body returning `Result<_, Box<dyn Error>>` boxes an
         // error, a `&str` or a `String` as `dyn Error`, as its `From` impls do.
         if let (Ty::Result(_, error), Ty::Result(_, returned)) = (

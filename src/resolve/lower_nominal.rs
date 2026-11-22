@@ -1,6 +1,7 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
 mod annotated;
+mod any_object;
 mod assignee;
 mod attributes;
 mod binding;
@@ -14,6 +15,7 @@ mod call;
 mod callable_object;
 mod cargo_env;
 pub(crate) mod cell;
+mod chosen;
 mod closure;
 mod coerce;
 mod collect;
@@ -90,6 +92,8 @@ mod statement;
 mod std_impl;
 mod std_item;
 mod std_method;
+mod std_scope;
+mod stored;
 mod surface;
 pub(crate) mod thread;
 mod time;
@@ -179,6 +183,7 @@ pub(crate) use disk::Disk;
 pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_block_names, inherit_names, method_copied};
+use dispatch::{function_copied, function_kept, method_kept};
 use dispatch::{kind_into_dispatcher_name, lent_parameters, method_lent};
 /// The generated function that runs a value's `Drop` and its parts'.
 #[cfg(feature = "rust-import")]
@@ -565,12 +570,23 @@ struct Parser<'a> {
     chain_link: Option<usize>,
     /// A closure being read changes `self`.
     self_changed: std::cell::Cell<bool>,
-    /// The statement being read makes a closure that changes `self`: it
-    /// binds the closure's `self` before it and writes it back after it.
-    lend_self: bool,
     /// The expression depth at which `&mut place` is read: a direct
     /// argument for a function's `&mut` parameter (`this_parameter`).
     mutable_borrow: Option<usize>,
+    /// The tails of the block-like value being read that may choose a
+    /// `&mut` (`chosen.rs`).
+    chosen: Option<chosen::Chosen>,
+    /// Where the binding of the `for` being read is declared, when its
+    /// items are stored `&mut`s, each a `&mut` local reaching its place
+    /// through the reference (`stored.rs`).
+    stored_items: Option<Span>,
+    /// The `v.as_mut_slice()` just read, whose value is the place `v`: a
+    /// `let` keeps it as a `&mut` of that place, as `let s = &mut v;`.
+    viewed_whole: Option<Span>,
+    /// Whether the closure about to be read is given stored `&mut`s, an
+    /// iterator's items (`stored.rs`): each `&mut` parameter is a `&mut`
+    /// local reaching its place through the reference, not a copy.
+    stored_inputs: bool,
     /// Where the operand of the `&` being read starts: a crate struct's
     /// field read there, as all of the operand, is lent, not taken
     /// (`read_imported_field`).
@@ -868,6 +884,10 @@ struct Parser<'a> {
     /// settled: each placeholder, written over with the kind's code once
     /// it has (`i32` when nothing binds it, as in Rust).
     pending_int_kinds: Vec<(String, Ty)>,
+    /// Arithmetic whose operands' type inference had not settled (`|a, b|
+    /// a + b`, before the call gives `a` and `b`), as rustc's obligation
+    /// waits for it.
+    pending_operands: Vec<operator::PendingOperands>,
     /// Integer literals past `i64` whose kind inference had not settled:
     /// each must fit the kind it settles on.
     pending_wide_literals: Vec<PendingWide>,
@@ -1069,8 +1089,11 @@ impl<'a> Parser<'a> {
             closure_blocks: BTreeMap::new(),
             chain_link: None,
             self_changed: std::cell::Cell::new(false),
-            lend_self: false,
             mutable_borrow: None,
+            chosen: None,
+            stored_items: None,
+            viewed_whole: None,
+            stored_inputs: false,
             lent_field: None,
             lent_mut_field: None,
             bound_iterators: BTreeMap::new(),
@@ -1162,6 +1185,7 @@ impl<'a> Parser<'a> {
             template_params: std::cell::RefCell::new(Box::default()),
             witnessed_ops: BTreeMap::new(),
             pending_int_kinds: Vec::new(),
+            pending_operands: Vec::new(),
             pending_wide_literals: Vec::new(),
             pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
@@ -1287,6 +1311,7 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        parser.bind_kept(definition.parameters(), &method_kept(definition));
 
         if let Some(name) = formatter {
             parser.bind_formatter(name);
@@ -1395,15 +1420,10 @@ impl<'a> Parser<'a> {
         }
 
         let receiver = this_parameter(definition);
-        parser.copy_out = copied_parameters(
-            &definition.parameters,
-            receiver,
-            definition.formatter.as_ref(),
-            definition.body.asynchronous,
-        )
-        .into_iter()
-        .map(|index| definition.parameters[index].name.text.clone())
-        .collect();
+        parser.copy_out = function_copied(definition)
+            .into_iter()
+            .map(|index| definition.parameters[index].name.text.clone())
+            .collect();
         for (index, parameter) in definition.parameters.iter().enumerate() {
             let ty = Ty::from_resolved(&parameter.ty);
             // The `&mut` parameter is `this`, the caller's place.
@@ -1444,6 +1464,7 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        parser.bind_kept(&definition.parameters, &function_kept(definition));
         if let Some(name) = definition.formatter.clone() {
             parser.bind_formatter(name);
         }

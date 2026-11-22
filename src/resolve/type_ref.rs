@@ -282,6 +282,9 @@ pub(crate) enum Argument {
 /// which at runtime is the value itself.
 pub(crate) const DYN_PREFIX: &str = "dyn ";
 
+/// The builtin name of the unsized `str` a `&mut str` borrows.
+pub(crate) const UNSIZED_STR: &str = "str";
+
 /// The builtin path name of a return type's `impl Trait` of an imported
 /// trait, until its function's body reveals the hidden type it stands for
 /// (`lower_nominal::reveal`): `opaque freya::prelude::IntoElement`. No Rust
@@ -426,6 +429,35 @@ pub(super) fn resolve(
                 )]),
                 span,
             }))
+        }
+        // `&mut str`: a mutable borrow of the unsized `str`, which no
+        // `String` path stands for, as a `&str`'s does.
+        item::type_ref::Type::Reference {
+            mutable: true,
+            lifetime,
+            target,
+            span,
+        } if matches!(&*target, item::type_ref::Type::Path(path)
+            if path.segments.len() == 1
+                && path.segments[0].name.text == "str"
+                && path.segments[0].arguments.is_empty()
+                && !types.contains_key("str")) =>
+        {
+            let written = match &*target {
+                item::type_ref::Type::Path(path) => path.span,
+                _ => span,
+            };
+            Ok(Type::Reference {
+                mutable: true,
+                lifetime: lifetime.map(|lifetime| lifetime.span),
+                target: Box::new(Type::Path(Path {
+                    name: UNSIZED_STR.into(),
+                    target: Target::Builtin,
+                    arguments: Box::new([]),
+                    span: written,
+                })),
+                span,
+            })
         }
         item::type_ref::Type::Reference {
             mutable,

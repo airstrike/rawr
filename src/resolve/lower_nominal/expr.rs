@@ -351,7 +351,12 @@ impl<'a> Parser<'a> {
                 // place where it is inlined (`indexed_place`).
                 let index_mut = self.place_output
                     || matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
-                if !index_mut && self.mutable_borrow != Some(self.expression_stack.len()) {
+                // A tail of a value that chooses a `&mut` gives where its
+                // place is (`chosen.rs`).
+                if !index_mut
+                    && self.mutable_borrow != Some(self.expression_stack.len())
+                    && !self.borrow_chosen(start)
+                {
                     return self.drained_iterator(start);
                 }
                 self.next();
@@ -455,7 +460,11 @@ impl<'a> Parser<'a> {
         }
         if matches!(self.peek(), Token::Multiply) {
             let start = self.next().1;
-            let operand = self.parse_operand()?;
+            let mut operand = self.parse_operand()?;
+            // `*s.a = 1` of a `&mut` a value stores (`stored.rs`).
+            if self.stored_holder(&operand) {
+                operand = self.through_stored(operand);
+            }
             // `*r` reads what the holder `r` refers to: its use's place.
             let reference = matches!(self.inference.resolve(&operand.ty), Ty::Reference { .. });
             self.flow().deref(operand.span.start(), start, reference);
@@ -529,6 +538,12 @@ impl<'a> Parser<'a> {
                     nested.ty = (*target).clone();
                     Some(Lvalue::Nested(nested))
                 }
+                // `*s` of a `String` place is the `str` it holds there,
+                // which `&mut *s` lends as a `&mut str`.
+                (Ty::String, Some(Lvalue::Binding { binding, .. })) => Some(Lvalue::Binding {
+                    binding,
+                    ty: (*target).clone(),
+                }),
                 // `*b` of a local `Box`: the box's own place, which a use
                 // by value moves, with drop glue in the crate.
                 (Ty::Boxed(_), Some(Lvalue::Binding { binding, .. })) if self.drops() => {
@@ -570,6 +585,7 @@ impl<'a> Parser<'a> {
                     Unplaced {
                         moved: ("E0507", format!("cannot move out of {behind}")),
                         assigned,
+                        of_static: None,
                     },
                 );
             }
@@ -868,6 +884,12 @@ impl<'a> Parser<'a> {
                 {
                     return self.qualified_scalar_call(&path, position);
                 }
+                // `<str as Trait>`: `str` as an impl's header reads it, so
+                // the receiver `"hi"` is `&Self`.
+                let self_ty = match self.inference.resolve(&self_ty) {
+                    Ty::UnsizedStr => Ty::Str,
+                    self_ty => self_ty,
+                };
                 if !through_crate
                     && !self.ufcs_trait(&trait_name)
                     && let Some(std_name) = crate::resolve::std_trait::anywhere(&trait_name)
@@ -990,6 +1012,8 @@ impl<'a> Parser<'a> {
             }
         }
         let block = block?;
+        // The block's value is its tail's, with the borrows it holds.
+        self.flow().same_origins(block.syntax, block.value.span);
         if matches!(self.inference.resolve(&block.value.ty), Ty::FnItem { .. }) {
             self.closure_blocks
                 .insert(block.syntax, block.value.prelude.clone());
@@ -1015,7 +1039,11 @@ impl<'a> Parser<'a> {
             left_out = true;
         }
         let deref = matches!(self.peek(), Token::Multiply);
-        let mut value = self.parse_expr()?;
+        // The tuple's expected type, which says whether a `&mut` member is
+        // reborrowed or moved (`move_unless_reborrowed`).
+        let expectation = self.block_expectation();
+        // `(&mut a, &mut b)`: a tuple stores each `&mut` (`stored.rs`).
+        let mut value = self.parse_borrowable(Self::parse_expr)?;
         // `(x += 1)`: an assignment is an expression of type `()`, and
         // parentheses take any expression.
         if assignment_token(&self.peek()) {
@@ -1055,6 +1083,7 @@ impl<'a> Parser<'a> {
             self.keep_pipeline(&before, &value);
             return Ok(value);
         }
+        self.store_borrow(&mut value)?;
         let mut members = vec![value];
         while matches!(self.peek(), Token::Comma) {
             self.next();
@@ -1062,11 +1091,16 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::RightParen) {
                 break;
             }
-            members.push(self.parse_expr()?);
+            members.push(self.parse_stored(Self::parse_expr)?);
         }
         let end = self.expect(Token::RightParen, "')' after a tuple")?;
-        for member in &mut members {
+        let expected = match expectation.map(|ty| self.inference.resolve(&ty)) {
+            Some(Ty::Tuple(expected)) if expected.len() == members.len() => expected,
+            _ => Box::default(),
+        };
+        for (index, member) in members.iter_mut().enumerate() {
             self.move_local(member)?;
+            self.move_unless_reborrowed(member, expected.get(index));
         }
         Ok(self.tuple_of(open, end, members))
     }
@@ -1590,9 +1624,16 @@ impl<'a> Parser<'a> {
             let (arguments, end) = self.parse_call_arguments("`Box` arguments")?;
             let [argument] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|_| unknown())?;
             let call = span(name_span.start(), end);
+            // `Box::from(text)` is std's `From<&str>` and `From<String>`,
+            // which `.into()` of the text is (a `Box<dyn Error>` among
+            // them); `Box::from(value)` of anything else is its
+            // `From<T> for Box<T>`, a box of it as `Box::new` makes.
+            if member.as_str() == "from" && self.inference.resolve(&argument.ty).is_text() {
+                return self.parse_into(argument, end);
+            }
             // `Box::pin(value)` too: its `Pin<Box<T>>` is the `Box` it pins
             // at runtime, as a `Pin` is.
-            if !matches!(member.as_str(), "new" | "pin") {
+            if !matches!(member.as_str(), "new" | "pin" | "from") {
                 return Err(unknown());
             }
             let ty = Ty::Boxed(Box::new(self.inference.resolve(&argument.ty)));
@@ -1601,6 +1642,15 @@ impl<'a> Parser<'a> {
             if self.needs_drop(&ty, call)? {
                 self.move_local(&mut argument)?;
             }
+            // The `Box` holds what its value does.
+            self.compose(
+                call,
+                &ty,
+                &[(
+                    &argument,
+                    borrows::Slot::At(borrowck::Path::of(&[borrowck::Step::Arg(0)])),
+                )],
+            );
             let source = argument.rendered_source();
             return Ok(self.operator_expr(source, ty, call));
         }
@@ -1732,13 +1782,19 @@ impl<'a> Parser<'a> {
             return self.parse_struct(name, name_span);
         }
         // `S` of `struct S;`, `W(x)` of `struct W(T);`, `W` uncalled, and
-        // `S::<A>` of a generic one.
+        // `S::<A>` or `W::<A>(x)` of a generic one.
         if !self.bindings.contains_key(name.as_str())
             && let Some(model) = self.named_model(&name)
             && (!matches!(self.peek(), Token::DoubleColon)
                 || matches!(self.peek_second(), Token::LessThan)
-                    && matches!(&model, Nominal::Struct { item, .. }
-                        if item.form == crate::item::StructForm::Unit))
+                    && match &model {
+                        Nominal::Struct { item, .. } => match item.form {
+                            crate::item::StructForm::Unit => true,
+                            crate::item::StructForm::Tuple => self.turbofish_ends_path(),
+                            _ => false,
+                        },
+                        Nominal::Enum { .. } => false,
+                    })
             && let Some(value) = {
                 self.private_constructor(&model, super::construct::Constructor::Call, name_span)?;
                 self.parse_struct_value(model, name_span)?

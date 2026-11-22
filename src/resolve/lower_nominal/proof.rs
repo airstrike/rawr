@@ -617,9 +617,11 @@ impl<'a> Parser<'a> {
 
             // A trait object has only its trait's methods: a std trait's
             // object has the capability its trait or a supertrait is
-            // (`dyn Debug`, `dyn Error`'s `Debug`).
+            // (`dyn Debug`, `dyn Error`'s `Debug`), and std's `impl Debug
+            // for dyn Any`.
             dynamic @ Ty::Dyn(..) => {
-                capability == capability::Kind::Debug && self.std_error(&dynamic, false)
+                capability == capability::Kind::Debug
+                    && (self.std_error(&dynamic, false) || self.std_any(&dynamic, false))
                     || self.type_implements(&dynamic, capability.name())
             }
             // std's `Poll<T>` derives what it is from `T`, its `Copy`,

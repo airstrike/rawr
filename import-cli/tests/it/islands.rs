@@ -2553,9 +2553,10 @@ fn saves_of_private_items_a_child_module_names_swap_in_place() {
 
 /// A private struct's new derives, new field and removal swap in place
 /// while no value of it lives: nothing the running program holds depends
-/// on it (#1746). A static of a script type holds no value either, as each
-/// read is its initializer (D862), so a struct only a static and the row
-/// read takes its new field and its removal in place too. No save
+/// on it (#1746). A static whose initializer changed, or that was removed,
+/// is a new static, whose old value no check counts (D862, #2519), so a
+/// struct only a static and the row read takes its new field and its
+/// removal in place too. No save
 /// prepares again or restarts the program.
 #[test]
 fn a_private_struct_nothing_holds_swaps_its_derives_fields_and_removal() {

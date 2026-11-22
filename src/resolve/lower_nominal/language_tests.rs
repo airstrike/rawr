@@ -2288,11 +2288,22 @@ fn language_generic_structs_enums_and_impls() {
          pub fn run() -> i64 { if Pair { a: Plain { v: 1 } } == Pair { a: Plain { v: 1 } } { 1 } else { 0 } } run()",
     );
     let _ = derive;
-    let bound = rejected(
-        "struct Pair<T> { a: T } impl<T: Clone> Pair<T> { fn get(&self) -> T { self.a.clone() } } \
-         struct Plain { v: i64 } pub fn run() -> i64 { let p = Pair { a: Plain { v: 1 } }; p.get().v } run()",
+    // An inherent method whose impl bound the receiver misses is rustc's
+    // E0599, with the unmet bound in its labels and note (#2504).
+    let source = "struct Pair<T> { a: T } impl<T: Clone> Pair<T> { fn get(&self) -> T { self.a.clone() } } \
+         struct Plain { v: i64 } pub fn run() -> i64 { let p = Pair { a: Plain { v: 1 } }; p.get().v } run()";
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("Rust rejects this program");
+    let evidence =
+        crate::diagnostic::Source::new("main.rs", source).expect("a test source has an identity");
+    let bound = crate::diagnostic::render(
+        &crate::diagnostic::Report::from_parse(evidence, &error)
+            .expect("the error is in the source"),
     );
-    assert!(bound.contains("Clone"), "{bound}");
+    assert!(bound.contains("error[E0599]"), "{bound}");
+    assert!(bound.contains("`Plain: Clone`"), "{bound}");
 }
 
 #[test]
@@ -6434,16 +6445,17 @@ fn language_closures_capturing_self() {
         run()
     "#);
     assert_eq!(value, ((4 + 6) * 1000 + 40 * 100 + 9 + 18) * 10 + 10);
-    rejected(
-        r#"
+    // A closure kept in a local changes `self` where it is, as rustc's
+    // capture of `self.n` does (#189).
+    let value = run(r#"
         struct Counter { n: i64 }
         impl Counter {
             fn bump(&mut self) { let mut add = || self.n += 1; add(); }
         }
         pub fn run() -> i64 { let mut c = Counter { n: 0 }; c.bump(); c.n }
         run()
-    "#,
-    );
+    "#);
+    assert_eq!(value, 1);
 }
 
 #[test]

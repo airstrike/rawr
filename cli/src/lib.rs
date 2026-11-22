@@ -766,10 +766,11 @@ pub fn on_base(
 pub fn run_once(loaded: base::Loaded) -> ExitCode {
     let panic = loaded.graph.entry_package().panic();
     match base::run(loaded) {
-        Ok(None) => ExitCode::SUCCESS,
-        Ok(Some(error)) => {
-            program_stderr(&format!("{error}\n"));
-            ExitCode::FAILURE
+        Ok(ended) => {
+            if let Some(report) = ended.report() {
+                program_stderr(&format!("{report}\n"));
+            }
+            ExitCode::from(ended.status())
         }
         Err(base::Failed::Compile(report)) => failure(&report),
         Err(base::Failed::Panic(report)) => {

@@ -150,7 +150,13 @@ impl<'a> Reader<'a> {
             "alloc::borrow::Cow" => {
                 let owned =
                     solve::associated("alloc::borrow::ToOwned", arguments.first()?, "Owned")?;
-                return self.host(&owned);
+                // A `Cow<str>` is std's own, as a program's is.
+                return match self.host(&owned)? {
+                    owned if matches!(owned.shape(), Shape::Builtin(Builtin::String)) => {
+                        Some(Type::builtin(Builtin::Text))
+                    }
+                    owned => Some(owned),
+                };
             }
             _ => {}
         }
