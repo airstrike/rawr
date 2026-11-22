@@ -9836,3 +9836,37 @@ main();
     );
     assert!(report.contains("1 + use std::io::BufRead;"), "{report}");
 }
+
+#[test]
+fn an_operator_on_a_std_type_needs_no_trait_in_scope() {
+    // `+`, `+=`, `-`, `==`, `<` and `[]` call their traits' methods with
+    // no `use` of `Add`, `AddAssign`, `PartialEq` or `Index`, as in Rust;
+    // only method syntax asks for its trait (#1427).
+    let output = printed(
+        r#"
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+fn main() {
+    let mut t: SystemTime = UNIX_EPOCH + Duration::from_secs(90);
+    t += Duration::from_secs(10);
+    t -= Duration::from_secs(40);
+    println!("{:?} {}", t.duration_since(UNIX_EPOCH).unwrap(), t == UNIX_EPOCH + Duration::from_secs(60));
+    let now = Instant::now();
+    let mut later = now + Duration::from_millis(5);
+    later += Duration::from_millis(5);
+    println!("{:?} {} {}", later - now, later > now, later == now);
+    let mut d = Duration::from_secs(1) * 3;
+    d += Duration::from_secs(2);
+    d -= Duration::from_millis(500);
+    println!("{:?} {} {:?}", d, d == Duration::from_millis(4500), d / 2);
+    let mut s = String::from("ab") + "c";
+    s += "d";
+    println!("{} {} {}", s, s == "abcd", &s[1..3]);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "60s true\n10ms true false\n4.5s true 2.25s\nabcd true bc\n"
+    );
+}

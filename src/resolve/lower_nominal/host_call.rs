@@ -1158,12 +1158,6 @@ impl<'a> Parser<'a> {
         };
         let path = format!("{}::{member}", definition.path());
         let (member, path) = self.exported_member(&definition, member, path, member_span)?;
-        // `stdout().flush()` needs `io::Write` in scope (#1427).
-        if let Some(error) =
-            self.unscoped_facade_method(&definition.path(), &resolved, &member, member_span.start())
-        {
-            return Err(error);
-        }
         // Distinct imported candidates at one path: which one Rust selects
         // depends on this call's receiver and lexical scope, which a
         // proof-backed application settles (D650).

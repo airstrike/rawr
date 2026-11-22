@@ -55,6 +55,23 @@ impl Parser<'_> {
             })
     }
 
+    /// rustc's E0599 for the method call `.member(..)` the program writes
+    /// at `member_span` on a value of `receiver`, a std type the facade
+    /// holds, when its trait is out of scope (`unscoped_facade_method`).
+    /// Only method syntax asks it: an operator, an index, `?` or a `for`
+    /// loop calls its trait's method with the trait out of scope, as in
+    /// Rust.
+    pub(super) fn unscoped_written_method(
+        &self,
+        receiver: &Ty,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Option<Error> {
+        let resolved = self.inference.resolve(receiver);
+        let definition = without_references(&resolved).host_alias()?;
+        self.unscoped_facade_method(&definition.path(), &resolved, member, member_span.start())
+    }
+
     /// rustc's E0599 for the method `member` at `at` of `receiver`, a value
     /// of the std type the facade holds at `facade` (`rawr_std::io::Cursor`),
     /// when std gives the type the method only through traits none of
