@@ -1700,8 +1700,31 @@ impl<'a> Parser<'a> {
             for _ in 0..=consumed {
                 self.next();
             }
+            // `Rc::<str>::from(text)`: the pointer's target, written.
+            let element = if matches!(self.peek(), Token::LessThan) {
+                self.next();
+                let at = self.position();
+                let [element] =
+                    <[Ty; 1]>::try_from(self.parse_turbofish_types()?).map_err(|types| {
+                        Error::InvalidTypeArguments {
+                            ty: name.clone(),
+                            expected: 1,
+                            actual: types.len(),
+                            reference: Span::new(at, at),
+                        }
+                    })?;
+                self.expect(Token::DoubleColon, "'::' after the pointer's type argument")?;
+                Some(element)
+            } else {
+                None
+            };
             let (member, member_span) = self.expect_member_name()?;
-            return self.parse_counted_path(counter, weak, member, name_span, member_span);
+            let path = counted::Path {
+                counter,
+                weak,
+                element,
+            };
+            return self.parse_counted_path(path, member, name_span, member_span);
         }
         // `Box::new(value)`: the value itself at runtime.
         if matches!(self.peek(), Token::DoubleColon)

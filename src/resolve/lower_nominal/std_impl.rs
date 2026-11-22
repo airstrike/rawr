@@ -16,6 +16,10 @@ use crate::std_table::{self, Written};
 pub(super) struct Substitution {
     types: BTreeMap<&'static str, Ty>,
     lengths: BTreeMap<&'static str, sequence::Length>,
+    /// The parameters at a declaration's defaulted allocator, as `A` of
+    /// `Vec<T, A>`, which rawr's types leave the default's: `Global`,
+    /// which every bound on it holds of (`A: Clone`).
+    allocators: Vec<&'static str>,
 }
 
 /// An impl the solver selected.
@@ -401,6 +405,9 @@ fn try_impl(
         }
     }
     for (subject, bounds) in line.wheres() {
+        if substitution.allocators.contains(&subject.trim()) {
+            continue;
+        }
         let Some(subject) = instantiate(
             solver,
             &std_table::written(subject),
@@ -655,13 +662,20 @@ fn bind(
             };
             // Rawr's `Vec<T>` binds a declaration's `Vec<T, A>`: the
             // allocator is the default's, which binds nothing.
-            given == definition
-                && arguments
-                    .iter()
-                    .zip(given_arguments)
-                    .all(|(argument, given)| {
-                        bind(solver, argument, &given, parameters, substitution)
-                    })
+            if given != definition {
+                return false;
+            }
+            for argument in arguments.iter().skip(given_arguments.len()) {
+                if let Written::Path { path, .. } = argument
+                    && parameters.contains(path)
+                {
+                    substitution.allocators.push(path);
+                }
+            }
+            arguments
+                .iter()
+                .zip(given_arguments)
+                .all(|(argument, given)| bind(solver, argument, &given, parameters, substitution))
         }
         Written::Other(_) => false,
     }
@@ -846,6 +860,7 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
     };
     // One runtime form: a literal of a kind still to be inferred takes the
     // kind the impl names.
+    // A `str` is the text a `&str`, a `String` and a `Box<str>` hold.
     let same = |a: &Ty, b: &Ty| {
         a == b
             || matches!(
@@ -853,6 +868,7 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
                 (Ty::Int(_), Ty::Int(_)) | (Ty::Float(_), Ty::Float(_))
             )
             || matches!(a, Ty::Array { .. }) && sequence(b)
+            || *a == Ty::UnsizedStr && (text_value(b) || *b == Ty::Boxed(Box::new(Ty::UnsizedStr)))
     };
     match (target, source) {
         _ if target == source => Some(None),

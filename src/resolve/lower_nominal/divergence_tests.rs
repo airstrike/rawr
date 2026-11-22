@@ -11742,3 +11742,43 @@ fn a_thread_local_call_std_has_no_rule_for_is_rustcs_error() {
         );
     }
 }
+
+/// Text's `.into()` takes its target from the use site, through std's
+/// `From` impls into `&str`, `PathBuf`, `Box<str>`, `Rc<str>` and
+/// `Arc<str>`: a `let`'s annotation, a field, an argument and a return
+/// (#732, #820). `Box<str>` in a signature or a field is a pointer to the
+/// unsized `str`, `Rc::<str>::from` and `Arc::from` take the target their
+/// turbofish or their `let` gives, and `Arc<[i32]>` is `From<Vec<i32>>`
+/// through the default allocator. The output is rustc's build of the same
+/// program.
+#[test]
+fn text_into_takes_its_pointer_target_from_the_use_site() {
+    let source = r#"
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
+struct Named { name: Box<str> }
+fn shared(text: Arc<str>) -> usize { text.len() }
+fn boxed() -> Box<str> { "made".into() }
+fn main() {
+    let b: Box<str> = "box".into();
+    let r: Rc<str> = "rc".into();
+    let a: Arc<str> = String::from("arc").into();
+    let s: &str = "str".into();
+    let p: PathBuf = "path".into();
+    println!("{b} {r} {a} {s} {} {}", p.display(), b.len());
+    let named = Named { name: "field".into() };
+    println!("{} {} {}", named.name, shared("arg".into()), boxed());
+    let from = Rc::<str>::from("from");
+    let hinted: Arc<str> = Arc::from("hinted");
+    let slice = Arc::<[i32]>::from(vec![1, 2]);
+    let names: Vec<Arc<str>> = vec!["x".into(), a.clone()];
+    println!("{from} {hinted} {slice:?} {names:?} {}", Arc::strong_count(&a));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "box rc arc str path 3\nfield 3 made\nfrom hinted [1, 2] [\"x\", \"arc\"] 2\n"
+    );
+}
