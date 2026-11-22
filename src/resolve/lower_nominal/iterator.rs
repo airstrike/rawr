@@ -2277,12 +2277,15 @@ impl Parser<'_> {
                 let (zero, one) = match total {
                     Ty::Int(_) => ("0", "1"),
                     Ty::Float(_) => ("0.0", "1.0"),
-                    other => {
-                        return Err(Error::TypeMismatch {
+                    // A template's `T: Sum` items sum in its instances,
+                    // at `T`'s type (D1115).
+                    ref other => {
+                        self.gap(Error::TypeMismatch {
                             expected: "i64 or f64 items to sum".into(),
                             actual: other.name(&self.models),
                             expression,
-                        })
+                        })?;
+                        ("0", "1")
                     }
                 };
                 let acc = self.temporary("total");

@@ -60,6 +60,7 @@ impl<'a> Parser<'a> {
             closures: self.take_lifted(),
             declared: self.declared_locals(),
             hidden: self.hidden(),
+            instances: std::mem::take(&mut self.instance_uses),
         })
     }
 
@@ -101,6 +102,7 @@ impl<'a> Parser<'a> {
                 closures: self.take_lifted(),
                 declared: self.declared_locals(),
                 hidden: self.hidden(),
+                instances: std::mem::take(&mut self.instance_uses),
             });
         }
         if definition.asynchronous() {
@@ -151,6 +153,7 @@ impl<'a> Parser<'a> {
                 closures: self.take_lifted(),
                 declared: self.declared_locals(),
                 hidden: self.hidden(),
+                instances: std::mem::take(&mut self.instance_uses),
             });
         }
         self.expect(Token::LeftBrace, "'{' to start a method body")?;
@@ -237,6 +240,7 @@ impl<'a> Parser<'a> {
             closures: self.take_lifted(),
             declared: self.declared_locals(),
             hidden: self.hidden(),
+            instances: std::mem::take(&mut self.instance_uses),
         })
     }
 
@@ -639,6 +643,7 @@ impl<'a> Parser<'a> {
             closures: self.take_lifted(),
             declared: self.declared_locals(),
             hidden: self.hidden(),
+            instances: std::mem::take(&mut self.instance_uses),
         })
     }
 

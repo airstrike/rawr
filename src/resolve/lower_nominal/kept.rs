@@ -788,7 +788,7 @@ impl<'e> Session<'e> {
     ) -> Option<Key<'p>> {
         let interface = self.interface.as_ref()?;
         let mut written = Written(Sha256::new());
-        written.0.update(b"rawr.lowering.source/v5");
+        written.0.update(b"rawr.lowering.source/v6");
         written.0.update(interface.of(source));
         // A level's `Debug` can't fail to write.
         let _ = write!(written, "{:?}", self.level);
@@ -1388,6 +1388,7 @@ mod tests {
             closures: Vec::new(),
             declared: Vec::new(),
             hidden: Hidden::default(),
+            instances: crate::resolve::lower_nominal::instance::Uses::default(),
         }];
         Kept {
             key: [0; 32],

@@ -405,7 +405,6 @@ impl Definition {
     /// writes each type of its signature at that instantiation, and the
     /// instance has no generic parameters of its own. Its body reads them
     /// as those types (`resolve::Instances::types`).
-    #[cfg(feature = "rust-import")]
     pub(crate) fn instance(
         &self,
         id: Id,
@@ -467,10 +466,15 @@ impl Definition {
     /// The method's generated name: its path, after its owner's place among
     /// its module's block items of its name when a block declares it.
     pub(crate) fn symbol(&self) -> ImmutableString {
-        use crate::resolve::lower_nominal::PRIVATE_METHOD;
-        match self.key.block() {
-            Some(block) => format!("{PRIVATE_METHOD}{block}\0{}", self.key).into(),
-            None => format!("{PRIVATE_METHOD}{}", self.key).into(),
-        }
+        symbol(&self.key)
+    }
+}
+
+/// The generated name of the method keyed `key` (`Definition::symbol`).
+pub(crate) fn symbol(key: &item::Key) -> ImmutableString {
+    use crate::resolve::lower_nominal::PRIVATE_METHOD;
+    match key.block() {
+        Some(block) => format!("{PRIVATE_METHOD}{block}\0{key}").into(),
+        None => format!("{PRIVATE_METHOD}{key}").into(),
     }
 }

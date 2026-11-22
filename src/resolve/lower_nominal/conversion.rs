@@ -554,7 +554,6 @@ impl<'a> Parser<'a> {
     /// The `U` that `value`, an instance's parameter read by its name,
     /// converts into where its template bounds it by `Into<U>`
     /// (`Instances::conversions`).
-    #[cfg(feature = "rust-import")]
     pub(super) fn instance_into_target(&self, value: &ParsedExpr) -> Option<Ty> {
         if self.instance_conversions.is_empty() || !value.is_local() {
             return None;

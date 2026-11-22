@@ -1579,7 +1579,9 @@ impl<'a> Parser<'a> {
             if let Some(summary) = &summary {
                 self.kept_by_call(call, &kept, None, summary);
             }
-            name = function.generated;
+            name = self
+                .template_call(&function.key, &substitution, call, false)
+                .unwrap_or(function.generated);
             if function
                 .definition
                 .output
@@ -2201,7 +2203,7 @@ fn shared_generic(parameters: &[item::Parameter], index: usize) -> bool {
 }
 
 /// Whether `ty` names the type `name`.
-fn mentions(ty: &type_ref::Type, name: &str) -> bool {
+pub(super) fn mentions(ty: &type_ref::Type, name: &str) -> bool {
     match ty {
         type_ref::Type::Path(path) => {
             path.name == name

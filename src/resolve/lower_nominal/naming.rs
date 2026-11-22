@@ -8,6 +8,17 @@ use crate::{method, ImmutableString};
 pub(super) const SENTINEL: &str = "__rawr_nominal_op_";
 pub(super) const METHOD_SENTINEL: &str = "__rawr_nominal_method_";
 pub(super) const FUNCTION_SENTINEL: &str = "__rawr_nominal_function_";
+/// What a template's call is written with until its instance is known
+/// (D1115): as long as `FUNCTION_SENTINEL`, so the instance's name is
+/// written over it in place.
+pub(super) const INSTANCE_SENTINEL: &str = "__rawr_nominal_instance_";
+const _: () = assert!(INSTANCE_SENTINEL.len() == FUNCTION_SENTINEL.len());
+/// What a template method's call is written with until its instance is
+/// known, two shorter than `INSTANCE_SENTINEL` as `METHOD_SENTINEL` is
+/// than `FUNCTION_SENTINEL`.
+pub(super) const METHOD_INSTANCE_SENTINEL: &str = "__rawr_nominal_template_";
+const _: () =
+    assert!(METHOD_INSTANCE_SENTINEL.len() + DIGITS - 2 == METHOD_SENTINEL.len() + DIGITS);
 /// A rewrite's target for a script function's own name where the lowered
 /// text calls something else by it: the call reaches only the runtime's
 /// functions (`rewrite_call`).
@@ -38,6 +49,12 @@ pub(super) const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 /// program's methods are numbered (#1718).
 pub(super) fn method_name(definition: &method::Definition) -> String {
     stable(METHOD_SENTINEL, &definition.symbol())
+}
+
+/// A method's generated name, by its key, as `method_name` names its
+/// definition's.
+pub(super) fn method_key_name(key: &crate::item::Key) -> String {
+    stable(METHOD_SENTINEL, &method::symbol(key))
 }
 
 /// A function's generated name, by its key, as `method_name`.
@@ -251,15 +268,6 @@ pub(super) fn witness_placeholder(index: usize) -> String {
 /// runtime type.
 pub(super) fn trait_dispatcher_name(trait_name: &str, method: &str) -> String {
     format!("{DISPATCH_SENTINEL}{}__{method}", identifier(trait_name))
-}
-
-/// The generated function that runs `trait_name::method` for a value by
-/// its generic parameter's witness (`write_kind_dispatchers`).
-pub(super) fn kind_dispatcher_name(trait_name: &str, method: &str) -> String {
-    format!(
-        "{DISPATCH_SENTINEL}kind_{}__{method}",
-        identifier(trait_name)
-    )
 }
 
 /// A placeholder before the text of a pending `text.into()`, long enough
