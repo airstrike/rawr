@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.4 (2026-11-21)
+
+- A generic function's call takes its argument types from the let or return it is assigned to: `let b: P<&str> = f(&name)` coerces `&name` to `&str`. (#1419)
+- A `vec![..]` at the end of an if or match arm coerces its elements to the type the function returns, as `Vec<Box<dyn Trait>>`. (#1293)
+- Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)` takes the vec's element type. (#2463; part of #1048)
+- A `let` whose type nothing settles, as `let v = Vec::new();`, is rustc's E0282 "type annotations needed for `Vec<_>`". (#1257)
+
 ## 0.5.3 (2026-11-21)
 
 - `(*w).push(1)` on a type with `DerefMut` calls `deref_mut`, and `(*f(&mut v)).push(1)` changes `v`, where the change used to go to a copy and be lost. (#873)

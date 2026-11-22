@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,16 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.4",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"A generic function's call takes its argument types from the let or return it is assigned to: `let b: P<&str> = f(&name)` coerces `&name` to `&str`.","issues":[1419]},
+          {"text":"A `vec![..]` at the end of an if or match arm coerces its elements to the type the function returns, as `Vec<Box<dyn Trait>>`.","issues":[1293]},
+          {"text":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)` takes the vec's element type.","issues":[2463],"refs":[1048]},
+          {"text":"A `let` whose type nothing settles, as `let v = Vec::new();`, is rustc's E0282 \"type annotations needed for `Vec<_>`\".","issues":[1257]}
+        ]
+      },
       {
         "version": "0.5.3",
         "date": "2026-11-21",
@@ -4860,7 +4870,7 @@
     {"issue":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"closed","category":"Divergences from rustc","release":"0.4.63"},
     {"issue":1255,"title":"Formatter::pad in a Display impl is E0599 naming String","state":"closed","category":"Divergences from rustc","release":"0.4.63"},
     {"issue":1256,"title":"A non-exhaustive match is RAWR-RESOLVE-MATCH, not rustc's E0004","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"open","category":"Divergences from rustc"},
+    {"issue":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"closed","category":"Divergences from rustc","release":"0.5.4"},
     {"issue":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open","category":"Divergences from rustc"},
     {"issue":1259,"title":"A marked crate's default features are off in its marked code","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open","category":"Divergences from rustc"},
@@ -4896,7 +4906,7 @@
     {"issue":1290,"title":"A variant pattern with the wrong number of fields is RAWR-RESOLVE-MATCH, not rustc's E0023","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"open","category":"Divergences from rustc"},
+    {"issue":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"closed","category":"Divergences from rustc","release":"0.5.4"},
     {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1296,"title":"The facade build never panics on a type parameter an item doesn't declare; RAWR_VERBOSE names the item","state":"closed","category":"Health","release":"0.3.172"},
@@ -5022,7 +5032,7 @@
     {"issue":1416,"title":"`rawr mcp`'s `wait` advertises a client timeout it ignores and blocks with no event; honor it or…","state":"retired","category":"Health"},
     {"issue":1417,"title":"`rawr check` passes where the runner build fails: a check that also compiles the generated…","state":"open","category":"Health"},
     {"issue":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":1419,"title":"A generic filled through a `let`'s annotation takes the annotated type…","state":"open","category":"Divergences from rustc"},
+    {"issue":1419,"title":"A generic filled through a `let`'s annotation takes the annotated type…","state":"closed","category":"Divergences from rustc","release":"0.5.4"},
     {"issue":1420,"title":"A test checks that a generated runner compiles without warnings; rawr shows cargo's warnings…","state":"open","category":"Health"},
     {"issue":1421,"title":"Regression: a runner whose runtime is compiled in-project can't find crate `rawr` (E0463); every…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.172"},
     {"issue":1422,"title":"A fn's declared return type fixes a conversion's open argument through `.into()` and macros down…","state":"closed","category":"No glue (D593)","release":"0.3.172"},
@@ -6064,7 +6074,11 @@
     {"issue":2459,"title":"A check's phase line says when Cargo waits for a lock","state":"open","category":"Health"},
     {"issue":2460,"title":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so…","state":"closed","category":"Divergences from rustc","release":"0.5.3"},
     {"issue":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"open","category":"Divergences from rustc"},
-    {"issue":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2463,"title":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)`…","state":"closed","category":"Divergences from rustc","release":"0.5.4"},
+    {"issue":2464,"title":"`s.parse()` in a generic fn bounded `T: FromStr` is E0277 \"`T: FromStr` is not satisfied\"","state":"open","category":"Divergences from rustc"},
+    {"issue":2465,"title":"A program generic bounded `T: FromStr` called at `u8` is E0277 \"`u8: FromStr` is not satisfied\"","state":"open","category":"Divergences from rustc"},
+    {"issue":2466,"title":"crossing::an_opaque_output_two_crates_reach_is_one_type fails: missing runtime binding for an opaque explain method","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8660,9 +8674,9 @@
             {"number":1048,"title":"An integer literal is i64 where rustc infers usize from its use","state":"open"},
             {"number":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"open"},
             {"number":1178,"title":"impls of one trait for Vec<i64> and Vec<String> (or Foo<i32> and Foo<i64>) are a duplicate method","state":"open"},
-            {"number":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"open"},
-            {"number":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"open"},
-            {"number":1419,"title":"A generic filled through a `let`'s annotation takes the annotated type…","state":"open"},
+            {"number":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"closed"},
+            {"number":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"closed"},
+            {"number":1419,"title":"A generic filled through a `let`'s annotation takes the annotated type…","state":"closed"},
             {"number":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"open"},
             {"number":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open"},
             {"number":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open"},
@@ -8676,7 +8690,10 @@
             {"number":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"closed"},
             {"number":2460,"title":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so…","state":"closed"},
             {"number":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"open"},
-            {"number":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open"}
+            {"number":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open"},
+            {"number":2463,"title":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)`…","state":"closed"},
+            {"number":2464,"title":"`s.parse()` in a generic fn bounded `T: FromStr` is E0277 \"`T: FromStr` is not satisfied\"","state":"open"},
+            {"number":2465,"title":"A program generic bounded `T: FromStr` called at `u8` is E0277 \"`u8: FromStr` is not satisfied\"","state":"open"}
           ]
         },
         {
@@ -8832,7 +8849,8 @@
             {"number":2203,"title":"A generic type named through its module in a let annotation isn't read","state":"open"},
             {"number":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"open"},
             {"number":1168,"title":"A crate's tuple-struct constructor isn't callable from marked code","state":"open"},
-            {"number":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"closed"}
+            {"number":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"closed"},
+            {"number":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"open"}
           ]
         },
         {

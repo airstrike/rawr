@@ -8,6 +8,16 @@
   },
   "releases": [
     {
+      "version": "0.5.4",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A generic function's call takes its argument types from the let or return it is assigned to: `let b: P<&str> = f(&name)` coerces `&name` to `&str`.","issues":[1419]},
+        {"text":"A `vec![..]` at the end of an if or match arm coerces its elements to the type the function returns, as `Vec<Box<dyn Trait>>`.","issues":[1293]},
+        {"text":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)` takes the vec's element type.","issues":[2463],"refs":[1048]},
+        {"text":"A `let` whose type nothing settles, as `let v = Vec::new();`, is rustc's E0282 \"type annotations needed for `Vec<_>`\".","issues":[1257]}
+      ]
+    },
+    {
       "version": "0.5.3",
       "date": "2026-11-21",
       "entries": [
