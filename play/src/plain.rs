@@ -276,7 +276,7 @@ impl Parsed {
                             .unwrap()
                             .push(Stream::Stdout, &format!("{value:?}\n"));
                     }
-                    return Ok(None);
+                    return Ok(rawr::program::Termination::of(Dynamic::UNIT));
                 }
                 let returned = engine.call_fn_with_options::<Dynamic>(
                     CallFnOptions::new().eval_ast(false).rewind_scope(false),
@@ -285,10 +285,7 @@ impl Parsed {
                     "main",
                     (),
                 )?;
-                Ok(match returned.try_cast::<Result<Dynamic, Dynamic>>() {
-                    Some(Err(error)) => Some(format!("Error: {error:?}\n")),
-                    _ => None,
-                })
+                Ok(rawr::program::Termination::of(returned))
             });
         drop(engine);
         let mut output = Arc::try_unwrap(sink)
@@ -296,10 +293,11 @@ impl Parsed {
             .unwrap_or_else(|sink| sink.lock().unwrap().clone());
         output.note = note.map(str::to_owned);
         match ran {
-            Ok(None) => {}
-            Ok(Some(error)) => {
-                output.push(Stream::Stderr, &error);
-                output.status = 1;
+            Ok(ended) => {
+                if let Some(report) = ended.report() {
+                    output.push(Stream::Stderr, &format!("{report}\n"));
+                }
+                output.status = ended.status().into();
             }
             Err(error) => {
                 output.status = 1;

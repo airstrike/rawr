@@ -84,6 +84,8 @@ Modules are named by their symbols; line numbers drift.
 | `builtin_method` | builtin values' methods | `parse_string_method`, `parse_option_method`, `parse_result_method`, `vec_method`, `str_method`, `int_method` |
 | `time` | `Duration` and `Instant` | `parse_time_method`, `time_binary`, `time_method` |
 | `from_str` | `FromStr` and std's parse errors | `parse_str_parse`, `ParseError`, `parse_text` |
+| `error_object` | std's `dyn Error` | `ErrorObject`, `error_object`, `parse_error_member` |
+| `any_object` | std's `dyn Any` and the downcasts of it and of `dyn Error` | `any_object::Key`, `AnyObject`, `any_object`, `parse_downcast`, `downcast_key` |
 | `std_item` | std paths in bodies | `check_std_path`, `parse_mem_call`, `parse_size_of`, `std_alias` |
 | `names` | names in scope and their errors | `lexical_scope`, `unknown_variable`, `unknown_function` |
 | `emit` | emitting operations | `op_call`, `materialize`, `private_call`, `write_over` |

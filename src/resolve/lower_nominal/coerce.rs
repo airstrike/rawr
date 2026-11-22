@@ -661,6 +661,47 @@ impl<'a> Parser<'a> {
                     source: value.span,
                 });
             }
+            // std's `dyn Error` behind a reference is an error object, as a
+            // box of one is above (`error_object.rs`), and std's `dyn Any`
+            // behind a reference or a box is the value with its type
+            // (`any_object.rs`).
+            let object = Ty::Dyn(trait_name.clone(), bindings.clone());
+            if matches!(target, Ty::Reference { .. } | Ty::Counted(..))
+                && self.std_error(&object, false)
+            {
+                // An `Rc` or `Arc` of an error points at its error object,
+                // a pointer of its own whose counts start at the coercion.
+                let counted = matches!(target, Ty::Counted(..));
+                let error = if counted {
+                    self.counted_call(PreludeOp::CountedGet, value.rendered_source(), [])
+                } else {
+                    value.rendered_source()
+                };
+                let Some(mut converted) = self.error_object(&concrete, error, false, value.span)?
+                else {
+                    return Err(Error::MissingCapability {
+                        owner: concrete.name(&self.models),
+                        capability: "std::error::Error".into(),
+                        operation: value.span,
+                        derive: matches!(concrete, Ty::Script(..)),
+                        declared: self.declared_name(&concrete),
+                        required_by: None,
+                        formatted: None,
+                        chain: crate::resolve::Chain::default(),
+                    });
+                };
+                if counted {
+                    converted = self.prelude_op(PreludeOp::CountedNew, [converted]);
+                }
+                *value = self.operator_expr(converted, target, value.span);
+                return Ok(None);
+            }
+            if matches!(target, Ty::Reference { .. } | Ty::Boxed(_)) && self.std_any(&object, false)
+            {
+                let converted = self.any_object(&concrete, value.rendered_source());
+                *value = self.operator_expr(converted, target, value.span);
+                return Ok(None);
+            }
             let positional = dyn_arguments(&bindings);
             // A capability's std trait (`dyn Debug` of an `i32` or a
             // derive) holds by the capability.
@@ -928,7 +969,7 @@ impl<'a> Parser<'a> {
     /// The coercion target of the branching expression just parsed, when
     /// the expectation is the whole expression's: the token after it ends
     /// it, where `match .. {}.len()` goes on to a method.
-    fn branch_expectation(&mut self) -> Option<Ty> {
+    pub(super) fn branch_expectation(&mut self) -> Option<Ty> {
         let ended = matches!(
             self.peek(),
             Token::SemiColon | Token::Comma | Token::RightParen | Token::RightBrace | Token::EOF

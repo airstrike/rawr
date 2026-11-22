@@ -471,13 +471,13 @@ fn run_main(engine: &Engine) -> i32 {
     }
     match result {
         None => 0,
-        Some(Ok(value)) => match value.try_cast::<Result<Dynamic, Dynamic>>() {
-            Some(Err(error)) => {
-                eprint(&format!("Error: {error:?}\n"));
-                1
+        Some(Ok(value)) => {
+            let ended = crate::program::Termination::of(value);
+            if let Some(report) = ended.report() {
+                eprint(&format!("{report}\n"));
             }
-            _ => 0,
-        },
+            i32::from(ended.status())
+        }
         // A panic, as Rust's hook prints it.
         Some(Err(error)) => {
             eprint(&island::main_failure(&error));

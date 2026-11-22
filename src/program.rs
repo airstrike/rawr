@@ -13,6 +13,7 @@ mod path;
 pub mod schema;
 pub(crate) mod signatures;
 pub(crate) mod source;
+mod termination;
 
 pub use authority::Authority;
 pub use error::{Aspect, Error};
@@ -20,3 +21,4 @@ pub use executable::{Executable, Positions};
 pub use generation::GenerationId;
 pub(crate) use path::Path;
 pub use source::Source;
+pub use termination::Termination;

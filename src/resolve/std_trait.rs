@@ -440,6 +440,13 @@ const BODIES: &[(&str, &str, &str)] = &[
     }",
     ),
     (
+        "core::error::Error",
+        "source",
+        "fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }",
+    ),
+    (
         "core::iter::traits::iterator::Iterator",
         "by_ref",
         "fn by_ref(&mut self) -> &mut Self {
@@ -912,7 +919,12 @@ mod tests {
             declared("IndexMut"),
             "<Idx> : Set(0) Index |  | index_mut(&mut self Idx) -> &mut Self::Output"
         );
-        assert_eq!(declared("Error"), "<> : Set(2) Display |  | ");
+        // `Error::source`, std's provided function, which rawr runs from
+        // std's body.
+        assert_eq!(
+            declared("Error"),
+            "<> : Set(2) Display |  | source(&self ) -> Option<&dyn Error> provided"
+        );
         // `io::Write::write` names `io::Error`, which rawr has no
         // representation for yet: the impl's own signature says so.
         let host = host::Registry::new();

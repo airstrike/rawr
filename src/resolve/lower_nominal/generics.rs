@@ -45,9 +45,24 @@ impl<'a> Parser<'a> {
     /// The bounds of the item's type parameters `generics`, which its body
     /// knows them by.
     pub(super) fn read_generics(&mut self, generics: &[item::Generic]) {
+        // A trait bound's supertraits' capabilities bound the parameter
+        // too, as rustc elaborates them: `E: Error` is `Debug`.
+        let elaborated = |generic: &item::Generic| {
+            let implied = generic.traits.iter().filter_map(|name| {
+                self.models
+                    .traits
+                    .get(&name.text)
+                    .map(|(_, declared)| declared.supertraits.0)
+            });
+            capability::Set::from_explicit(
+                std::iter::once(generic.bounds)
+                    .chain(implied)
+                    .flat_map(capability::Set::iter),
+            )
+        };
         self.generics = generics
             .iter()
-            .map(|generic| (generic.name.text.clone(), generic.bounds))
+            .map(|generic| (generic.name.text.clone(), elaborated(generic)))
             .collect();
         self.generic_traits = generic_traits(generics);
         self.generic_trait_arguments = generic_trait_arguments(generics);

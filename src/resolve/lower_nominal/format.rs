@@ -2795,6 +2795,11 @@ impl<'a> Parser<'a> {
         if self.std_error(&ty, false) {
             return Ok(self.error_text(value, true));
         }
+        // std's `Debug` of a `dyn Any`, which its value writes
+        // (`any_object.rs`).
+        if self.std_any(&ty, false) {
+            return Ok(self.prelude_op(PreludeOp::GenericDebug, [value]));
+        }
         // A `Cow` writes what it derefs to.
         if let Ty::Cow(borrowed) = &ty {
             let payload = self.prelude_op(PreludeOp::CowValue, [value]);

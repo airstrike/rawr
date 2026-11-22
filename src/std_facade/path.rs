@@ -83,7 +83,7 @@ pub(super) fn path_like(value: &Dynamic) -> Result<PathBuf, Box<EvalAltResult>> 
 
 /// A `String`, an `OsString` or a `PathBuf` argument, as Rust's
 /// `AsRef<OsStr>`.
-fn os_like(value: &Dynamic) -> Result<OsString, Box<EvalAltResult>> {
+pub(super) fn os_like(value: &Dynamic) -> Result<OsString, Box<EvalAltResult>> {
     if let Some(text) = value.read_lock::<ImmutableString>() {
         return Ok(OsString::from(text.as_str()));
     }

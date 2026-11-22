@@ -1618,9 +1618,16 @@ impl<'a> Parser<'a> {
             let (arguments, end) = self.parse_call_arguments("`Box` arguments")?;
             let [argument] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|_| unknown())?;
             let call = span(name_span.start(), end);
+            // `Box::from(text)` is std's `From<&str>` and `From<String>`,
+            // which `.into()` of the text is (a `Box<dyn Error>` among
+            // them); `Box::from(value)` of anything else is its
+            // `From<T> for Box<T>`, a box of it as `Box::new` makes.
+            if member.as_str() == "from" && self.inference.resolve(&argument.ty).is_text() {
+                return self.parse_into(argument, end);
+            }
             // `Box::pin(value)` too: its `Pin<Box<T>>` is the `Box` it pins
             // at runtime, as a `Pin` is.
-            if !matches!(member.as_str(), "new" | "pin") {
+            if !matches!(member.as_str(), "new" | "pin" | "from") {
                 return Err(unknown());
             }
             let ty = Ty::Boxed(Box::new(self.inference.resolve(&argument.ty)));

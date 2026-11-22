@@ -177,9 +177,9 @@ pub enum Failed {
     Panic(diagnostic::Report),
 }
 
-/// Run a base program once. `Ok(Some(text))` is a `main` that returned
-/// `Err`: Rust's `Error: {err:?}`, for stderr and a failing exit.
-pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
+/// Run a base program once: how its `main`'s output ends the process, as
+/// std's `Termination` reports it (a script without `main` succeeds).
+pub fn run(loaded: Loaded) -> Result<rawr::program::Termination, Failed> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
     // The process exits when `main` returns, ending the threads the program
@@ -237,7 +237,7 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
         if !value.is_unit() {
             println!("{value:?}");
         }
-        return Ok(None);
+        return Ok(rawr::program::Termination::of(Dynamic::UNIT));
     };
     let returned = engine
         .call_fn_with_options::<Dynamic>(
@@ -248,10 +248,7 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
             (),
         )
         .map_err(runtime)?;
-    Ok(match returned.try_cast::<Result<Dynamic, Dynamic>>() {
-        Some(Err(error)) => Some(format!("Error: {error:?}")),
-        _ => None,
-    })
+    Ok(rawr::program::Termination::of(returned))
 }
 
 /// Locate a panic on any of the program's threads as [`located`] does.

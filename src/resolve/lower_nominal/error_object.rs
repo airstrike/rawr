@@ -1,21 +1,36 @@
 //! `Box<dyn std::error::Error>`: a trait object of std's `Error`, whose
 //! value is fixed once it is boxed. Rawr makes it where the error is
-//! converted, where its type is known: the error's `Display` and `Debug`
-//! text. So `{e}`, `{e:?}` and `e.to_string()` print what Rust prints, and
-//! a `main` that returns one prints `Error: ` and its `Debug` text, as a
-//! host prints `{error:?}`.
+//! converted, where its type is known: the error itself and its type
+//! (`any_object::Key`), its `Display` and `Debug` text, and its `source`,
+//! an error object too. So `{e}`, `{e:?}` and `e.to_string()` print what
+//! Rust prints, `e.source()` walks the chain its types' `source` gives,
+//! `e.downcast_ref::<T>()` gives the error back as its type, and a `main`
+//! that returns one prints `Error: ` and its `Debug` text, as a host prints
+//! `{error:?}`.
 //!
 //! The conversions are `?` in a function returning `Result<_,
 //! Box<dyn Error>>` (`From<E: Error>`, `From<&str>` and `From<String>`),
-//! `Box::new(e)` where a `Box<dyn Error>` is expected, and `.into()` there.
+//! `Box::new(e)` where a `Box<dyn Error>` is expected, `.into()` there, and
+//! `&e` where a `&dyn Error` is.
 
 use super::*;
 
-/// An error boxed as `dyn Error`: its `Display` and `Debug` text.
+/// An error as a `dyn Error`: the error, its type, its `Display` and
+/// `Debug` text and its `source`.
 #[derive(Clone)]
 pub struct ErrorObject {
     display: ImmutableString,
     debug: ImmutableString,
+    value: Dynamic,
+    ty: any_object::Key,
+    source: Option<Dynamic>,
+}
+
+impl ErrorObject {
+    /// The error and its type.
+    pub(super) const fn typed(&self) -> (&Dynamic, &any_object::Key) {
+        (&self.value, &self.ty)
+    }
 }
 
 impl std::fmt::Debug for ErrorObject {
@@ -24,33 +39,44 @@ impl std::fmt::Debug for ErrorObject {
     }
 }
 
-/// An error object of these texts. Its `Debug` text is what a host prints
-/// for `{error:?}` of a `main` that returned it.
-fn object(display: ImmutableString, debug: ImmutableString) -> Dynamic {
+/// `error` at runtime. Its `Debug` text is what a host prints for
+/// `{error:?}` of a `main` that returned it.
+fn object(error: ErrorObject) -> Dynamic {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(crate::host::debug::register::<ErrorObject>);
-    Dynamic::from(ErrorObject { display, debug })
+    Dynamic::from(error)
 }
 
-/// `ErrorNew(display, debug)` makes an error object; `ErrorText(error,
-/// code)` reads its `Display` text (`0`) or its `Debug` text (`1`).
+/// The error object `value` is.
+fn read(value: &Dynamic) -> Result<ErrorObject, Box<EvalAltResult>> {
+    value
+        .read_lock::<ErrorObject>()
+        .map(|error| error.clone())
+        .ok_or_else(|| invariant("a `dyn Error` is not one at runtime"))
+}
+
+/// `ErrorNew(display, debug, error, type, source)` makes an error object;
+/// `ErrorText(error, code)` reads its `Display` text (`0`) or its `Debug`
+/// text (`1`), and `ErrorSource(error)` its `source`.
 pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     match op {
-        PreludeOp::ErrorNew => Ok(object(
-            args[0].clone_cast::<ImmutableString>(),
-            args[1].clone_cast::<ImmutableString>(),
-        )),
+        PreludeOp::ErrorNew => Ok(object(ErrorObject {
+            display: args[0].clone_cast::<ImmutableString>(),
+            debug: args[1].clone_cast::<ImmutableString>(),
+            value: args[2].clone(),
+            ty: any_object::Key::new(args[3].clone_cast::<ImmutableString>()),
+            source: crate::option::read(args[4]).flatten(),
+        })),
         PreludeOp::ErrorText => {
-            let error = args[0]
-                .read_lock::<ErrorObject>()
-                .ok_or_else(|| invariant("a `dyn Error` is not one at runtime"))?;
+            let error = read(args[0])?;
             let text = if args[1].as_int().unwrap_or_default() == 0 {
-                error.display.clone()
+                error.display
             } else {
-                error.debug.clone()
+                error.debug
             };
             Ok(text.into())
         }
+        PreludeOp::ErrorSource => Ok(Dynamic::from(read(args[0])?.source)),
         _ => Err(invariant("not a `dyn Error` operation")),
     }
 }
@@ -69,7 +95,13 @@ pub(super) fn parsed(message: &str, code: INT) -> Dynamic {
         .iter()
         .find(|(text, _)| *text == message)
         .map_or(message, |(_, debug)| debug);
-    object(message.into(), debug.into())
+    object(ErrorObject {
+        display: message.into(),
+        debug: debug.into(),
+        value: Dynamic::from(ImmutableString::from(message)),
+        ty: any_object::Key::new(kind.name().into()),
+        source: None,
+    })
 }
 
 impl Parser<'_> {
@@ -99,11 +131,11 @@ impl Parser<'_> {
         self.prelude_op(PreludeOp::ErrorText, [value, code.into()])
     }
 
-    /// `value` of type `from` boxed as `dyn Error`, as `From` converts it:
-    /// an error type's (a crate type with `impl Error`, a std error such as
-    /// `ParseIntError`, or a box of one), or with `text` a `&str` or
-    /// `String`, whose `Debug` is the quoted text. `None` when `from` has
-    /// no such conversion.
+    /// `value` of type `from` as a `dyn Error`, as `From` and unsizing
+    /// convert it: an error type's (a crate type with `impl Error`, a std
+    /// error such as `ParseIntError`, or a box or a borrow of one), or with
+    /// `text` a `&str` or `String`, whose `Debug` is the quoted text. `None`
+    /// when `from` has no such conversion.
     pub(super) fn error_object(
         &mut self,
         from: &Ty,
@@ -112,7 +144,7 @@ impl Parser<'_> {
         span: Span,
     ) -> Result<Option<origin::Fragment>, Error> {
         let mut from = self.inference.resolve(from);
-        if let Ty::Boxed(inner) = &from {
+        while let Ty::Boxed(inner) | Ty::Reference { target: inner, .. } = &from {
             from = self.inference.resolve(inner);
         }
         if self.std_error(&from, false) {
@@ -134,19 +166,22 @@ impl Parser<'_> {
                         chain: crate::resolve::Chain::default(),
                     });
                 };
-                (display, self.debug_source(&from, local, span)?)
+                (display, self.debug_source(&from, local.clone(), span)?)
             }
             Ty::ParseError(error) => {
                 let error = *error;
                 (
                     self.parse_error_display(error, local.clone()),
-                    self.debug_source(&from, local, span)?,
+                    self.debug_source(&from, local.clone(), span)?,
                 )
             }
-            Ty::String | Ty::Str if text => (local.clone(), self.debug_source(&from, local, span)?),
-            // A crate's error, by the `std::error::Error` impl its crate
-            // writes or derives: its `Display` text through its own impl,
-            // which `Error` requires (#1451).
+            Ty::String | Ty::Str if text => (
+                local.clone(),
+                self.debug_source(&from, local.clone(), span)?,
+            ),
+            // A crate's or std's error, by the `std::error::Error` impl its
+            // crate writes or derives: its `Display` text through its own
+            // impl, which `Error` requires (#1451).
             Ty::Host { proof, .. }
                 if proof
                     .definition
@@ -154,14 +189,44 @@ impl Parser<'_> {
                     .contains(capability::Kind::Error) =>
             {
                 let display = self.prelude_op(PreludeOp::DisplayText, [local.clone()]);
-                (display, self.debug_source(&from, local, span)?)
+                (display, self.debug_source(&from, local.clone(), span)?)
+            }
+            // A generic error, `E: Error`: its texts by its type's impls,
+            // which its value dispatches to at runtime.
+            Ty::Param(..) | Ty::Projection(..) if self.type_implements(&from, "Error") => {
+                let Some(display) = self.display_text(&from, local.clone()) else {
+                    return Ok(None);
+                };
+                (display, self.debug_source(&from, local.clone(), span)?)
             }
             _ => return Ok(None),
         };
+        // Text boxes as std's private `StringError`, which no downcast
+        // names. A generic error's type, and so its `source`, is known
+        // only at runtime, where rawr doesn't read them yet.
+        let generic = matches!(from, Ty::Param(..) | Ty::Projection(..));
+        let ty = if from.is_text() || generic {
+            ImmutableString::new()
+        } else {
+            self.downcast_key(&from)
+        };
+        // Its `source`, by the program's own `Error::source`, else std's
+        // default: none.
+        let cause = match &from {
+            Ty::Script(id, _) => self
+                .models
+                .std_impl(*id, "Error", "source")
+                .map(|definition| Self::std_call(definition, local.clone(), &[])),
+            _ => None,
+        };
+        let cause = cause.unwrap_or_else(|| self.prelude_op(PreludeOp::None, []));
         let mut source = origin::Fragment::plain(format!("{{ let {held} = "));
         source.push(value);
         source.push_text("; ");
-        source.push(self.prelude_op(PreludeOp::ErrorNew, [display, debug]));
+        source.push(self.prelude_op(
+            PreludeOp::ErrorNew,
+            [display, debug, local, format!("{ty:?}").into(), cause],
+        ));
         source.push_text(" }");
         Ok(Some(source))
     }
@@ -262,14 +327,19 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// `e.to_string()`, `e.source()` and `e.description()` of a `dyn
-    /// Error`, after the member's name.
+    /// `e.to_string()`, `e.source()` and the downcasts of a `dyn Error`
+    /// (`any_object.rs`) of type `receiver`, after the member's name.
     pub(super) fn parse_error_member(
         &mut self,
         value: ParsedExpr,
+        receiver: &Ty,
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        let value = match self.parse_downcast(value, receiver, &member, member_span)? {
+            Ok(downcast) => return Ok(downcast),
+            Err(value) => value,
+        };
         let (arguments, end) = self.parse_call_arguments("`dyn Error` method arguments")?;
         let call = span(value.span.start(), end);
         if !arguments.is_empty() {
@@ -286,9 +356,8 @@ impl Parser<'_> {
                 let source = self.error_text(value.rendered_source(), false);
                 Ok(self.operator_expr(source, Ty::String, call))
             }
-            // Rawr's error objects keep no source: `Error::source`'s default.
             "source" => {
-                let source = self.prelude_op(PreludeOp::None, []);
+                let source = self.prelude_op(PreludeOp::ErrorSource, [value.rendered_source()]);
                 let ty = Ty::Option(Box::new(Ty::Reference {
                     mutable: false,
                     target: Box::new(Ty::Dyn("Error".into(), Box::default())),
@@ -308,8 +377,6 @@ impl Models {
     /// Whether the crate's `Error` trait is std's, which it implements by
     /// hand and boxes as `dyn Error`.
     pub(super) fn std_error_trait(&self) -> bool {
-        self.traits
-            .get("Error")
-            .is_some_and(|(_, declared)| declared.name.span == Span::NONE)
+        self.std_trait("Error")
     }
 }
