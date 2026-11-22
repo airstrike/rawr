@@ -3,9 +3,9 @@
   "updated": "2026-11-21",
   "version": "0.5.9",
   "examples": {
-    "running": 56,
+    "running": 55,
     "total": 56,
-    "note": "0.3 confirmed by the scheduled sweep of 2026-11-19 on 472462d01: all iced examples agree with cargo (integration not runnable headless on either), and rustlings matches: 132 of 132 solutions run and match, 95 of 95 exercises fail as rustc fails."
+    "note": "Sweep of 2026-11-21 on 995214d49: 54 of 56 iced examples agree with cargo; game_of_life is fixed since (0.5.1, #2455) and pokedex's frame differs (#2493). rustlings: 95 of 95 solutions run and match, 132 of 132 tests, 95 of 95 exercises fail as rustc fails."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -6144,7 +6144,8 @@
     {"issue":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open","category":"Divergences from rustc"},
     {"issue":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed","category":"Divergences from rustc","release":"0.5.9"},
     {"issue":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"open","category":"Divergences from rustc"},
-    {"issue":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open","category":"Divergences from rustc"}
+    {"issue":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open","category":"Divergences from rustc"},
+    {"issue":2493,"title":"iced's pokedex draws a different frame under rawr each night, where cargo's is the same","state":"open","category":"iced examples"}
   ],
   "groups": [
     {
@@ -6925,7 +6926,8 @@
             {"number":2197,"title":"The parity harness can't give iced's integration example a verdict on a runner with no GPU","state":"closed"},
             {"number":2200,"title":"A `&mut` destructuring of a captured reference in a closure is refused or loses its place","state":"closed"},
             {"number":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"closed"},
-            {"number":2213,"title":"An array whose length is a const parameter isn't supported","state":"closed"}
+            {"number":2213,"title":"An array whose length is a const parameter isn't supported","state":"closed"},
+            {"number":2493,"title":"iced's pokedex draws a different frame under rawr each night, where cargo's is the same","state":"open"}
           ],
           "milestone": "0.3"
         },
