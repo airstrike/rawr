@@ -4,7 +4,7 @@
 // ever reaches a server.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { onlyHere, Session, WEB_MODULE, type Example, type PlayData, type Universe, type Web } from "../src/play/session.ts";
+import { BLANK, onlyHere, Session, WEB_MODULE, type Example, type PlayData, type Universe, type Web } from "../src/play/session.ts";
 import type { Frame } from "../src/scripts/universe.ts";
 
 const EXAMPLES: Example[] = [
@@ -175,6 +175,19 @@ test("choosing an example writes its anchor, and an edit keeps it", async () => 
   page.session.pick("reset");
   assert.equal(page.session.state.code, "word count code", "Reset is the first example");
   await new Promise((done) => setTimeout(done, 10));
+});
+
+test("New puts an empty main in the editor and drops the example's anchor", async () => {
+  const ran: string[] = [];
+  const web: Partial<Web> = { run_text: (code: string) => (ran.push(code), JSON.stringify({ kind: "text", status: 0, output: [] })) };
+  const page = standIn({ code: "x", examples: EXAMPLES, web });
+  page.session.pick("traits");
+  page.session.blank();
+  assert.equal(page.session.state.code, BLANK);
+  assert.equal(page.session.state.mark, "");
+  assert.equal(page.addresses.at(-1), "/play");
+  await new Promise((done) => setTimeout(done, 10));
+  assert.equal(ran.at(-1), BLANK, "New runs the empty main");
 });
 
 test("an edit runs again after a pause", async () => {

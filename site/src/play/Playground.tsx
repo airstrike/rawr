@@ -233,6 +233,7 @@ export default function Playground() {
             )}
           </SelectContent>
         </Select>
+        <Button id="new" title="Start from an empty main" onClick={() => session?.blank()}>New</Button>
         <span className="order-3 hidden grow md:block" />
         <DebugIcon session={session} on={state.debugging} />
         <Button id="share" className="order-3" onClick={() => void session?.share()}>Share</Button>

@@ -149,6 +149,8 @@ export interface Deps {
 
 /** The latest snippet stays in this browser, as on the Rust Playground. */
 const DRAFT = "rawr-play-draft";
+/** What New puts in the editor. */
+export const BLANK = "fn main() {\n    \n}\n";
 
 export class Session {
   readonly data: PlayData;
@@ -256,6 +258,17 @@ export class Session {
     if (example.code !== this.state.code) this.deps.debugging?.debugger.clearBreakpoints();
     this.fill(example);
     this.set({ mark: example.slug });
+    this.save();
+    this.path = "/play";
+    this.remember();
+    this.go();
+  }
+
+  /** New: an empty `main` in place of the code, with no example picked. */
+  blank() {
+    this.deps.debugging?.debugger.clearBreakpoints();
+    this.fill({ code: BLANK });
+    this.set({ mark: "" });
     this.save();
     this.path = "/play";
     this.remember();
