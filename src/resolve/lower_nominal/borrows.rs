@@ -57,6 +57,13 @@ pub(super) struct CallReceiver {
     place: bool,
 }
 
+impl CallReceiver {
+    /// The receiver's type.
+    pub(super) const fn ty(&self) -> &Ty {
+        &self.ty
+    }
+}
+
 /// Whether a value of type `ty` is a reference, whose own loan is apart from
 /// what it refers to.
 pub(super) fn is_reference(ty: &Ty) -> bool {

@@ -354,7 +354,8 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             format!(
                 "the method `{member}` exists for {} `{}`, but its trait bounds were not \
                  satisfied",
-                receiver.kind, receiver.found
+                receiver.kind,
+                receiver.found.as_ref().unwrap_or(&receiver.declared)
             ),
         );
     }
@@ -736,6 +737,7 @@ fn resolution_report_with_sources(
         } => origin.label().into(),
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
         resolve::Error::ArgumentMismatch(_) => "arguments to this function are incorrect".into(),
+        resolve::Error::LetMismatch(_) => "expected due to this".into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
             format!("first assignment to `{binding}`").into()
         }
@@ -2081,6 +2083,9 @@ fn primary_label(
         resolve::Error::ArgumentMismatch(mismatch) => {
             Some(mismatch_label(&mismatch.expected, &mismatch.actual).into())
         }
+        resolve::Error::LetMismatch(mismatch) => {
+            Some(mismatch_label(&mismatch.expected, &mismatch.actual).into())
+        }
         resolve::Error::TypeMismatch {
             expected, actual, ..
         }
@@ -2165,7 +2170,7 @@ fn primary_label(
         } => Some(
             format!(
                 "method cannot be called on `{}` due to unsatisfied trait bounds",
-                receiver.found
+                receiver.found.as_ref().unwrap_or(&receiver.declared)
             )
             .into(),
         ),
@@ -2174,8 +2179,9 @@ fn primary_label(
         } => {
             let item = Missing::of(error, source, primary).map_or("method", |missing| missing.item);
             // rustc drops a method's label where it suggests a similar one.
+            let found = receiver.found.as_ref()?;
             (item != "method" || similar.is_none())
-                .then(|| format!("{item} not found in `{}`", receiver.found).into())
+                .then(|| format!("{item} not found in `{found}`").into())
         }
         resolve::Error::MovedValue {
             previous_iteration: true,
@@ -2198,6 +2204,16 @@ fn primary_label(
         } => Some(format!("`{name}` used here but it isn't initialized").into()),
         resolve::Error::Uninitialized { name, .. } => {
             Some(format!("`{name}` used here but it is possibly-uninitialized").into())
+        }
+        // rustc's E0609, at the field.
+        resolve::Error::NoField { .. } => Some("unknown field".into()),
+        resolve::Error::UnknownMember { member, .. }
+            if matches!(
+                member_kind(source, primary, &crate::tokenizer::raw_names(member)),
+                Some(Member::Field)
+            ) =>
+        {
+            Some("unknown field".into())
         }
         _ => None,
     }
@@ -2276,6 +2292,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 pattern,
                 ..
             } => code::std_path(owner.missing(field, *pattern).0),
+            resolve::Error::NoField { .. } => code::RESOLVE_NO_FIELD,
             _ => code::RESOLVE_UNKNOWN_MEMBER,
         },
         resolve::Category::NotInModule => code::RESOLVE_NOT_IN_MODULE,
@@ -2439,6 +2456,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownField { hint, .. } if let Some(note) = hint.note() => {
             builder.note(note)
         }
+        resolve::Error::NoField {
+            field, available, ..
+        } if let Some(note) = resolve::available_fields(field, available) => builder.note(note),
         // After the enum's note, when it has one (`sections`).
         // Each `#[non_exhaustive]` enum the first witness's `_` stands for
         // follows the type, as rustc notes it.
@@ -2487,6 +2507,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::PatternFields {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::LetMismatch(mismatch) if let Some(note) = mismatch.note() => {
+            builder.note(note)
+        }
         resolve::Error::PatternMismatch { types, .. } => match types.note() {
             Some(note) => builder.note(note),
             None => builder,
@@ -2816,6 +2839,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         | resolve::Error::NoItem { owner, member, .. } => {
             format!("unknown member `{owner}::{member}`")
         }
+        resolve::Error::NoField { owner, field, .. } => resolve::no_field(owner, field),
         resolve::Error::NotInModule { module, item, .. } => {
             format!("cannot find `{item}` in module `{module}`")
         }
@@ -2857,6 +2881,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::TypeMismatch { .. }
         | resolve::Error::ArgumentMismatch(_)
+        | resolve::Error::LetMismatch(_)
         | resolve::Error::OpaqueMismatch { .. }
         | resolve::Error::Unboxed { .. } => "mismatched types".into(),
         resolve::Error::IfWithoutElse { .. } => resolve::IF_WITHOUT_ELSE.into(),

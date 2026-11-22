@@ -357,15 +357,13 @@ fn a_type_of_several_paths_prints_by_one_of_them() {
         let error = symbolic_imported(&engine, &program)
             .expect_err("an i64 can't hold a Vector")
             .into_error();
-        let ParseErrorType::Resolution(crate::resolve::Error::TypeMismatch {
-            expected,
-            actual,
-            ..
-        }) = error.err_type()
+        // The `let`'s value against its written type.
+        let ParseErrorType::Resolution(crate::resolve::Error::LetMismatch(mismatch)) =
+            error.err_type()
         else {
             panic!("a type mismatch: {error}");
         };
-        (expected.to_string(), actual.to_string())
+        (mismatch.expected.to_string(), mismatch.actual.to_string())
     }
 
     // No `use` names the type: its shortest path.
@@ -429,11 +427,12 @@ fn a_type_behind_a_hidden_crate_segment_prints_by_a_public_path() {
             .expect_err("an i64 can't hold a Vector")
             .into_error();
         assert!(!error.to_string().contains("__rawr"), "{error}");
-        let ParseErrorType::Resolution(crate::resolve::Error::TypeMismatch { actual, .. }) =
+        let ParseErrorType::Resolution(crate::resolve::Error::LetMismatch(mismatch)) =
             error.err_type()
         else {
             panic!("a type mismatch: {error}");
         };
+        let actual = &mismatch.actual;
         let report = crate::diagnostic::Report::from_parse(
             crate::diagnostic::Source::new("main.rs", source).unwrap(),
             &error,

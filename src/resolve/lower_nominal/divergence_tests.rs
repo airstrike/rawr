@@ -10307,32 +10307,71 @@ main();
         output,
         "Some(1)\nSome(1)\nSome(2) None\n[4, 3, 2] [3, 2, 1] Some(4)\nSome(1) [1, 2, 3]\n"
     );
+    // Each refusal names the std struct of the chain's outermost adapter,
+    // with the struct's declared parameters, as rustc's E0599 does (#2617).
     let refusal = |body: &str| refused(&format!("fn main() {{\n{body}\n}}\nmain();\n"));
-    let report = refusal("let v = vec![1, 2, 3];\nlet mut it = v.iter();\nit.peek();");
-    assert!(
-        report.starts_with("error[E0599]: no method named `peek` found for "),
-        "{report}"
-    );
-    let report = refusal(
-        "let v = vec![1, 2, 3];\nlet mut it = v.iter().peekable().map(|x| x * 2);\nit.peek();",
-    );
-    assert!(
-        report.starts_with("error[E0599]: no method named `peek` found for "),
-        "{report}"
-    );
-    let report = refusal(
-        "let v = vec![1, 2, 3];\nlet mut b = v.iter().take_while(|x| **x < 3);\nb.next_back();",
-    );
-    assert!(
-        report.starts_with("error[E0599]: no method named `next_back` found for "),
-        "{report}"
-    );
+    for (body, header) in [
+        (
+            "let v = vec![1, 2, 3];\nlet mut it = v.iter();\nit.peek();",
+            "no method named `peek` found for struct `std::slice::Iter<'a, T>`",
+        ),
+        (
+            "let v = vec![1, 2, 3];\nlet mut it = v.iter().peekable().map(|x| x * 2);\nit.peek();",
+            "no method named `peek` found for struct `Map<I, F>`",
+        ),
+        (
+            "let v = vec![1, 2, 3];\nlet mut b = v.iter().take_while(|x| **x < 3);\nb.next_back();",
+            "no method named `next_back` found for struct `TakeWhile<I, P>`",
+        ),
+    ] {
+        let report = refusal(body);
+        assert!(
+            report.starts_with(&format!("error[E0599]: {header} in the current scope")),
+            "{report}"
+        );
+    }
     let report = refusal("let c: Vec<i32> = (0..).rev().take(2).collect();");
     assert!(
-        report.starts_with("error[E0277]: the trait bound `")
-            && report.contains(": DoubleEndedIterator` is not satisfied"),
+        report.starts_with(
+            "error[E0277]: the trait bound `std::ops::RangeFrom<{integer}>: DoubleEndedIterator` \
+             is not satisfied"
+        ),
         "{report}"
     );
+}
+
+#[test]
+fn a_method_an_iterator_lacks_names_its_std_struct() {
+    // rustc names the struct of the source or of the outermost adapter,
+    // by its trimmed path and declared parameters (#2617).
+    for (chain, owner) in [
+        ("\"ab\".chars()", "Chars<'a>"),
+        ("\"a b\".split_whitespace()", "SplitWhitespace<'a>"),
+        ("\"ab\".bytes()", "std::str::Bytes<'a>"),
+        ("v.clone().into_iter()", "std::vec::IntoIter<T, A>"),
+        ("v.iter_mut()", "std::slice::IterMut<'a, T>"),
+        ("v.iter().map(|x| x + 1)", "Map<I, F>"),
+        ("v.iter().filter(|x| **x > 1)", "Filter<I, P>"),
+        ("v.iter().zip(v.iter())", "Zip<A, B>"),
+        ("v.iter().chain(v.iter())", "std::iter::Chain<A, B>"),
+        ("v.iter().rev()", "Rev<T>"),
+        ("v.iter().enumerate().skip(1)", "Skip<I>"),
+        ("v.iter().peekable()", "Peekable<I>"),
+        ("v.iter().cloned()", "Cloned<I>"),
+        ("v.iter().flat_map(|x| vec![*x])", "FlatMap<I, U, F>"),
+        ("v.iter().step_by(2).take(1)", "std::iter::Take<I>"),
+    ] {
+        let report = refused(&format!(
+            "fn main() {{\n    let mut v = vec![1, 2, 3];\n    {chain}.nope();\n}}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with(&format!(
+                "error[E0599]: no method named `nope` found for struct `{owner}` in the current \
+                 scope"
+            )),
+            "{chain}: {report}"
+        );
+    }
 }
 
 #[test]

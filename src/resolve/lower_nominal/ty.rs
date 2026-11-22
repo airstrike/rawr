@@ -1489,12 +1489,14 @@ impl Ty {
             Self::Weak(_, target) => {
                 format!("{}<{}>", self.std_head(models), target.name(models)).into()
             }
-            // rustc names a std iterator by its struct: `Chars<'_>`.
-            Self::Iter(_, Some(std), _) => {
-                format!("{}<'_>", super::trimmed::std_name(std, models)).into()
-            }
-            Self::Iter(item, None, _) => {
-                format!("impl Iterator<Item = {}>", item.name(models)).into()
+            // rustc names a std iterator by its struct: `Chars<'_>`. One
+            // whose type arguments rawr doesn't keep, as `Map<I, F>`'s
+            // inner iterator and closure, by its items.
+            Self::Iter(item, std, _) => {
+                match std.and_then(|std| super::trimmed::elided(std, models)) {
+                    Some(name) => name.into(),
+                    None => format!("impl Iterator<Item = {}>", item.name(models)).into(),
+                }
             }
             Self::Reverse(inner) | Self::Cell(_, inner) => {
                 format!("{}<{}>", self.std_head(models), inner.name(models)).into()

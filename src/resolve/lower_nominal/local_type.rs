@@ -338,24 +338,32 @@ impl<'a> Parser<'a> {
                 if self.skip_lifetime() {
                     continue;
                 }
-                let (mut extra, extra_span) = self.expect_name("auto trait in a trait object")?;
+                let (mut extra, mut extra_span) =
+                    self.expect_name("auto trait in a trait object")?;
                 while matches!(self.peek(), Token::DoubleColon) {
                     self.next();
-                    extra = self.expect_name("auto trait in a trait object")?.0;
+                    (extra, extra_span) = self.expect_name("auto trait in a trait object")?;
                 }
                 if !matches!(
                     extra.as_str(),
                     "Send" | "Sync" | "Unpin" | "UnwindSafe" | "RefUnwindSafe"
                 ) {
-                    return Err(Error::UnsupportedNominalSyntax {
-                        construct: crate::resolve::Unsupported::said(
-                            "a second non-auto trait in a trait object is not supported",
-                        )
-                        .with_help(
-                            "only auto traits (`Send`, `Sync`, `Unpin`) can be added, as in Rust \
-                             (E0225)",
+                    return Err(Error::StdPath {
+                        code: "E0225",
+                        message: "only auto traits can be used as additional traits in a trait \
+                                  object"
+                            .into(),
+                        label: Some("additional non-auto trait".into()),
+                        note: Some(
+                            "auto-traits like `Send` and `Sync` are traits that have special \
+                             properties; for more information on them, visit \
+                             <https://doc.rust-lang.org/reference/special-types-and-traits.html#auto-traits>"
+                                .into(),
                         ),
-                        source: extra_span,
+                        reference: Span::new(
+                            extra_span.start(),
+                            text_end(extra_span.start(), &extra),
+                        ),
                     });
                 }
             }

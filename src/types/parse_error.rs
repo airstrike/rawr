@@ -378,6 +378,9 @@ impl fmt::Display for ParseErrorType {
                     pattern,
                     ..
                 } => f.write_str(&owner.missing(field, *pattern).1),
+                crate::resolve::Error::NoField { owner, field, .. } => {
+                    f.write_str(&crate::resolve::no_field(owner, field))
+                }
                 crate::resolve::Error::NotInModule { module, item, .. } => {
                     write!(f, "Cannot find '{item}' in module '{module}'")
                 }
@@ -467,6 +470,11 @@ impl fmt::Display for ParseErrorType {
                     expected, actual, ..
                 } => write!(f, "mismatched types: expected `{expected}`, found `{actual}`"),
                 crate::resolve::Error::ArgumentMismatch(mismatch) => write!(
+                    f,
+                    "mismatched types: expected `{}`, found `{}`",
+                    mismatch.expected, mismatch.actual
+                ),
+                crate::resolve::Error::LetMismatch(mismatch) => write!(
                     f,
                     "mismatched types: expected `{}`, found `{}`",
                     mismatch.expected, mismatch.actual

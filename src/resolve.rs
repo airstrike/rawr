@@ -29,19 +29,19 @@ pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
-    derivable, unscoped_method, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice,
-    CannotCompare, Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable,
-    RepeatedRest, SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative, Uninitialized,
-    Unsatisfied, ASYNC_MAIN, IF_WITHOUT_ELSE, INHABITED_REFERENCES, INVALID_ASSIGNEE,
-    RETURN_WITHOUT_VALUE,
+    available_fields, derivable, no_field, unscoped_method, ArgumentCount, ArgumentSignature,
+    ArrayLength, AssignTwice, CannotCompare, Described, NonExhaustive, NotFound, PatternFields,
+    Qualified, Refutable, RepeatedRest, SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative,
+    Uninitialized, Unsatisfied, ASYNC_MAIN, IF_WITHOUT_ELSE, INHABITED_REFERENCES,
+    INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     Annotation, ArgumentMismatch, Arguments, Arms, Assignment, Beyond, BinaryOperation,
     BindingSite, Bound, Boxing, Callee, Category, Chain, Cloning, Detail, Error, Expansion,
-    FieldHint, FieldOwner, Fields, Import, Imported, Instead, Lint, MacroScope, Missing,
-    MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness, OwningParameter, PatternOrigin,
-    PatternTypes, Placeholder, Private, Receiver, Referent, Required, Requirement, Shown, Similar,
-    Site, Uncovered, Unexpected, UnmetBound, UnmetBounds, Unresolved, Unsupported,
+    FieldHint, FieldOwner, Fields, Import, Imported, Instead, LetMismatch, Lint, MacroScope,
+    Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness, OwningParameter,
+    PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent, Required, Requirement,
+    Shown, Similar, Site, Uncovered, Unexpected, UnmetBound, UnmetBounds, Unresolved, Unsupported,
 };
 pub use imports::{Candidate, Direct, Imports};
 use std::collections::BTreeMap;
