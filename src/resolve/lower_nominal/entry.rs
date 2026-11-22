@@ -901,7 +901,8 @@ pub(super) fn lower_with_context(
     let mut unsupported = None;
     ast.for_each_fn_def_mut(|function| {
         if unsupported.is_none() {
-            unsupported = crate::eval::machine::lower(function).err();
+            unsupported =
+                crate::eval::machine::lower(function, crate::eval::machine::Frames::Resumed).err();
         }
     });
     if let Some(crate::eval::machine::Unsupported(what, position)) = unsupported {
