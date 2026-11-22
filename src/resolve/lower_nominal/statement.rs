@@ -134,6 +134,7 @@ impl<'a> Parser<'a> {
         let temporaries = self.close_temporaries();
         self.field_entries.truncate(pending);
         parsed?;
+        let temporaries = self.hand_tail(start, temporaries);
         self.statement_temporaries(start, &temporaries);
         self.statement_frames(start, opened, frames, false)?;
         self.settle_parses()

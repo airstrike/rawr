@@ -2247,6 +2247,7 @@ impl<'a> Parser<'a> {
             let outer_statics = self.block_statics.len();
             self.last_type = Ty::Unit;
             self.open_drops();
+            let (outer_tails, escapes) = self.open_tails();
             self.flow().open_block();
             let outer_locals: BTreeSet<Span> = self
                 .bindings
@@ -2312,7 +2313,9 @@ impl<'a> Parser<'a> {
                 }
                 None => (block_output, origin::Fragment::plain("()"), syntax),
             };
-            self.close_block_drops(&mut prelude, &mut source, tail)?;
+            let handed = self.close_tails(outer_tails);
+            let temporaries = self.escaped_tails(handed, escapes);
+            self.close_block_drops(&mut prelude, &mut source, tail, &temporaries)?;
             return Ok(Branch {
                 value: ParsedExpr {
                     prelude,
