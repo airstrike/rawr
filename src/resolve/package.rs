@@ -860,8 +860,9 @@ impl<'a> Resolver<'a> {
     /// The qualified paths `unit`'s bodies call or name, by where they are.
     fn unit_qualified_calls(&self, unit: &Unit) -> Result<ResolvedQualifiedCalls, Failure> {
         let mut resolved = ResolvedQualifiedCalls::default();
-        for parsed in unit.parsed.items() {
-            for call in qualified_calls(parsed) {
+        let mut statements = None;
+        for body in unit_bodies(&unit.parsed, &mut statements) {
+            for call in qualified_calls(body) {
                 let scoped = self.in_blocks(&unit.context, &call.path, call.path_span);
                 let path = scoped.as_deref().unwrap_or(&call.path);
                 if !self.is_script_path(&unit.context, path) {
@@ -983,8 +984,9 @@ impl<'a> Resolver<'a> {
     /// are.
     fn unit_pattern_owners(&self, unit: &Unit) -> Result<PatternOwners, Failure> {
         let mut resolved = BTreeMap::new();
-        for parsed in unit.parsed.items() {
-            for (path, owner) in qualified_pattern_owners(parsed) {
+        let mut statements = None;
+        for body in unit_bodies(&unit.parsed, &mut statements) {
+            for (path, owner) in qualified_pattern_owners(body) {
                 let scoped = self.in_blocks(&unit.context, &path, owner);
                 let path = scoped.as_deref().unwrap_or(&path);
                 if !self.is_script_path(&unit.context, path) {
@@ -4311,7 +4313,8 @@ fn path_head(tokens: &[crate::item::BodyToken], index: usize) -> Option<Immutabl
     }
 }
 
-fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
+/// The paths of more than one segment `body` calls or names.
+fn qualified_calls(body: &crate::item::BodySyntax) -> Vec<QualifiedCall> {
     fn collect(syntax: &crate::item::BodySyntax, output: &mut Vec<QualifiedCall>) {
         let tokens = syntax.tokens();
         let mut index = 0;
@@ -4365,24 +4368,13 @@ fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
     }
 
     let mut output = Vec::new();
-    match parsed {
-        crate::item::Parsed::Function(function) => collect(&function.body_syntax, &mut output),
-        crate::item::Parsed::Impl(crate::item::Impl { functions, .. })
-        | crate::item::Parsed::Trait(crate::item::Trait { functions, .. }) => {
-            for function in functions {
-                collect(&function.body_syntax, &mut output);
-            }
-        }
-        crate::item::Parsed::Module(_)
-        | crate::item::Parsed::Use(_)
-        | crate::item::Parsed::Struct(_)
-        | crate::item::Parsed::Enum(_)
-        | crate::item::Parsed::TypeAlias(_) => {}
-    }
+    collect(body, &mut output);
     output
 }
 
-fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[ImmutableString]>, Span)> {
+/// The paths `body`'s patterns name a type through a module by, each with
+/// its owner's span.
+fn qualified_pattern_owners(body: &crate::item::BodySyntax) -> Vec<(Box<[ImmutableString]>, Span)> {
     fn collect_paths(
         tokens: &[crate::item::BodyToken],
         output: &mut Vec<(Box<[ImmutableString]>, Span)>,
@@ -4477,21 +4469,34 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
     }
 
     let mut output = Vec::new();
-    match parsed {
-        crate::item::Parsed::Function(function) => collect(&function.body_syntax, &mut output),
-        crate::item::Parsed::Impl(crate::item::Impl { functions, .. })
-        | crate::item::Parsed::Trait(crate::item::Trait { functions, .. }) => {
-            for function in functions {
-                collect(&function.body_syntax, &mut output);
-            }
-        }
-        crate::item::Parsed::Module(_)
-        | crate::item::Parsed::Use(_)
-        | crate::item::Parsed::Struct(_)
-        | crate::item::Parsed::Enum(_)
-        | crate::item::Parsed::TypeAlias(_) => {}
-    }
+    collect(body, &mut output);
     output
+}
+
+/// The bodies of `unit`, whose paths it resolves: its items' functions',
+/// and its statements' (#1141), lexed into `statements`.
+fn unit_bodies<'a>(
+    unit: &'a crate::parse::Unit,
+    statements: &'a mut Option<crate::item::BodySyntax>,
+) -> Vec<&'a crate::item::BodySyntax> {
+    let (items, first, script) = unit.parts();
+    *statements = first.map(|_| crate::parser::statement_syntax(script));
+    let mut bodies = items
+        .iter()
+        .flat_map(|parsed| match parsed {
+            crate::item::Parsed::Function(function) => std::slice::from_ref(function),
+            crate::item::Parsed::Impl(crate::item::Impl { functions, .. })
+            | crate::item::Parsed::Trait(crate::item::Trait { functions, .. }) => functions,
+            crate::item::Parsed::Module(_)
+            | crate::item::Parsed::Use(_)
+            | crate::item::Parsed::Struct(_)
+            | crate::item::Parsed::Enum(_)
+            | crate::item::Parsed::TypeAlias(_) => &[],
+        })
+        .map(|function| &function.body_syntax)
+        .collect::<Vec<_>>();
+    bodies.extend(statements.as_ref());
+    bodies
 }
 
 /// The path rustc suggests naming the item at `address` by from

@@ -991,6 +991,9 @@ fn resolution_report_with_sources(
     for suggestion in binding_suggestions(error, &source)? {
         builder = builder.suggestion(suggestion);
     }
+    if let Some(suggestion) = direct_suggestion(error, &source)? {
+        builder = builder.suggestion(suggestion);
+    }
     if let Some(suggestion) = detail
         .map(|detail| private_suggestion(detail, &source, &secondary_source))
         .transpose()?
@@ -1430,6 +1433,27 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// rustc's help after the imports it offers for a path whose first
+/// segment names nothing (#808): "if you import `Duration`, refer to it
+/// directly", dropping the segments before it.
+fn direct_suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggestion>, Error> {
+    let resolve::Error::UnknownType { imports, .. } = error else {
+        return Ok(None);
+    };
+    let Some(direct) = imports
+        .direct
+        .as_ref()
+        .filter(|_| !imports.candidates.is_empty())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Suggestion::new(
+        format!("if you import `{}`, refer to it directly", direct.name),
+        Style::Verbose,
+        Edit::new(source.clone(), direct.prefix, "")?,
+    )))
 }
 
 /// rustc's suggestions for a binding assigned twice, in `source`: `mut`,

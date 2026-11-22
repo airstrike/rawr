@@ -41,7 +41,7 @@ pub use error::{
     Receiver, Referent, Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected,
     UnmetBound, UnmetBounds, Unresolved,
 };
-pub use imports::{Candidate, Imports};
+pub use imports::{Candidate, Direct, Imports};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {

@@ -92,6 +92,7 @@ mod statement;
 mod std_impl;
 mod std_item;
 mod std_method;
+mod std_scope;
 mod stored;
 mod surface;
 pub(crate) mod thread;

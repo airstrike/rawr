@@ -99,7 +99,8 @@ impl<'a> Parser<'a> {
                 let (header, noun) = match nominal {
                     Nominal::Struct { item, .. } => (&item.header, wanted.struct_noun(item.form)?),
                     Nominal::Enum { item, .. } => {
-                        (&item.header, (wanted == Wanted::Type).then_some("enum")?)
+                        let named = matches!(wanted, Wanted::Type | Wanted::Path);
+                        (&item.header, named.then_some("enum")?)
                     }
                 };
                 Some(Candidate {

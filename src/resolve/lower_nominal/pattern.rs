@@ -2860,12 +2860,11 @@ impl<'a> Parser<'a> {
                 path: true,
                 imports: self.imports(head, super::Wanted::Type),
             },
-            [(head, head_span), ..] if self.unresolved_root(head) => Error::UnknownType {
-                name: head.clone(),
-                reference: Span::new(head_span.start(), text_end(head_span.start(), head)),
-                path: true,
-                imports: Box::default(),
-            },
+            [(head, _), ..] if self.unresolved_root(head) => {
+                let mut path = syntax.owner.to_vec();
+                path.push((syntax.variant.clone(), syntax.variant_span));
+                self.unresolved_root_error(&path)
+            }
             _ => Error::UnknownType {
                 name: owner.clone(),
                 reference: syntax.owner_span,

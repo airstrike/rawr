@@ -71,6 +71,7 @@ Modules are named by their symbols; line numbers drift.
 | `path` | qualified paths | `parse_qualified_path`, `parse_owner_function`, `parse_imported_variant`, `parse_builtin_path` |
 | `trait_call` | trait method calls | `parse_std_trait_call`, `parse_typed_std_trait_call`, `parse_*trait*_call` |
 | `traits` | trait resolution | `select_impl`, `receiver_method`, `type_implements`, `check_associated_bounds` |
+| `std_scope` | std traits in scope at a method call | `std_trait_in_scope`, `unscoped_std_method` |
 | `generics` | generic instances and witnesses | `fresh_generics`, `finish_witnesses`, `bind_instance`, `instantiate` |
 | `operator` | operators and casts | `parse_binary`, `apply_binary`, `cast`, `operator_impl`, `index_impl` |
 | `compare` | comparisons | `equality`, `partial_ord_operator`, `parse_ord_method`, `compare_value`, `equal_value` |

@@ -6616,7 +6616,7 @@ fn parse_private_function(
     )?)))
 }
 
-fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
+pub(super) fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
     use crate::item::BodyTokenKind as Kind;
 
     let (kind, width) = match token {

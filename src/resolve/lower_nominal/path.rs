@@ -1195,18 +1195,15 @@ impl<'a> Parser<'a> {
                     member: member.clone(),
                     reference: member_span,
                 }
-            } else if let [(root, root_span), _, ..] = &segments[..]
+            } else if let [(root, _), _, ..] = &segments[..]
                 && self.unresolved_root(root)
             {
                 // rustc stops at the first segment it can't resolve: a
                 // crate the program doesn't depend on, as `tokio` in
                 // `tokio::task::spawn_local(..)` without tokio (#1149).
-                Error::UnknownType {
-                    name: root.clone(),
-                    reference: span(root_span.start(), text_end(root_span.start(), root)),
-                    path: true,
-                    imports: Box::default(),
-                }
+                let mut path = segments.clone();
+                path.push((member.clone(), member_span));
+                self.unresolved_root_error(&path)
             } else {
                 let imports = if owner.contains("::") {
                     Box::default()

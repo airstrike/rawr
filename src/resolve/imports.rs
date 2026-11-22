@@ -2,7 +2,7 @@
 //! nothing, which rustc suggests importing: the program's own, which the
 //! resolver finds, and std's, from the std table.
 
-use crate::{std_table, ImmutableString, Position};
+use crate::{std_table, ImmutableString, Position, Span};
 
 use super::Error;
 
@@ -15,6 +15,20 @@ pub struct Imports {
     pub candidates: Box<[Candidate]>,
     /// Where rustc puts the `use`.
     pub placement: Option<Position>,
+    /// The item a path names directly once it is imported, as rustc
+    /// suggests for `time::Duration::from_secs` (#808).
+    pub direct: Option<Direct>,
+}
+
+/// An item a path can name directly once a `use` imports it: rustc's "if
+/// you import `Duration`, refer to it directly".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Direct {
+    /// The item's name.
+    pub name: ImmutableString,
+    /// The path's segments before the item, with their `::`, which the
+    /// path drops.
+    pub prefix: Span,
 }
 
 /// An item a `use` could import: its path and what rustc calls it.
@@ -38,6 +52,8 @@ pub(crate) enum Wanted {
     Type,
     /// A trait, as a bound or an `impl` names it.
     Trait,
+    /// A path's segment that more segments follow: a module or a type.
+    Path,
 }
 
 impl Imports {
@@ -67,7 +83,15 @@ impl Imports {
         Box::new(Self {
             candidates: candidates.into_boxed_slice(),
             placement,
+            direct: None,
         })
+    }
+
+    /// These imports, after which the path names `direct` directly.
+    #[must_use]
+    pub(crate) fn with_direct(mut self: Box<Self>, direct: Direct) -> Box<Self> {
+        self.direct = Some(direct);
+        self
     }
 
     /// rustc's help over the `use`s: this item, one of these of a kind, or
@@ -95,7 +119,7 @@ impl Wanted {
     pub(crate) const fn struct_noun(self, form: crate::item::StructForm) -> Option<&'static str> {
         use crate::item::StructForm;
         match (self, form) {
-            (Self::Type, _) => Some("struct"),
+            (Self::Type | Self::Path, _) => Some("struct"),
             (Self::Value | Self::Call, StructForm::Unit) => Some("unit struct"),
             (Self::Value | Self::Call, StructForm::Tuple) => Some("tuple struct"),
             _ => None,
@@ -110,11 +134,12 @@ impl Wanted {
             (Self::Value | Self::Call, "tuple-struct") => Some("tuple struct"),
             (Self::Value | Self::Call, "unit-struct") => Some("unit struct"),
             (Self::Value, "const") => Some("constant"),
-            (Self::Type, "struct") => Some("struct"),
-            (Self::Type, "enum") => Some("enum"),
-            (Self::Type, "union") => Some("union"),
-            (Self::Type | Self::Trait, "trait") => Some("trait"),
-            (Self::Type, "type") => Some("type alias"),
+            (Self::Type | Self::Path, "struct") => Some("struct"),
+            (Self::Type | Self::Path, "enum") => Some("enum"),
+            (Self::Type | Self::Path, "union") => Some("union"),
+            (Self::Type | Self::Trait | Self::Path, "trait") => Some("trait"),
+            (Self::Type | Self::Path, "type") => Some("type alias"),
+            (Self::Path, "mod") => Some("module"),
             _ => None,
         }
     }
@@ -125,7 +150,7 @@ impl Wanted {
 pub(crate) fn std(name: &str, wanted: Wanted) -> impl Iterator<Item = Candidate> {
     let namespace = match wanted {
         Wanted::Value | Wanted::Call => std_table::Namespace::Value,
-        Wanted::Type | Wanted::Trait => std_table::Namespace::Type,
+        Wanted::Type | Wanted::Trait | Wanted::Path => std_table::Namespace::Type,
     };
     std_table::named(name, namespace)
         .into_iter()

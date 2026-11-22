@@ -89,6 +89,29 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Whether the next tokens are a turbofish `::<..>` that ends its path,
+    /// as `W::<i32>(1)` or `W::<i32>` does and `W::<i32>::new()` doesn't.
+    pub(super) fn turbofish_ends_path(&self) -> bool {
+        let mut ahead = self.input.clone();
+        if !matches!(ahead.next(), Some((Token::DoubleColon, _))) {
+            return false;
+        }
+        let mut depth = 0usize;
+        for (token, _) in ahead.by_ref() {
+            match token {
+                Token::LessThan => depth += 1,
+                Token::GreaterThan => depth = depth.saturating_sub(1),
+                Token::RightShift => depth = depth.saturating_sub(2),
+                Token::SemiColon | Token::EOF => return false,
+                _ => {}
+            }
+            if depth == 0 {
+                return !matches!(ahead.next(), Some((Token::DoubleColon, _)));
+            }
+        }
+        false
+    }
+
     /// A struct named as a value: `S` of `struct S;`, `W(a, b)` of a tuple
     /// struct, or `W` uncalled, the function from its fields to it, as
     /// Rust's tuple struct constructors are (`.map(W)`).
@@ -134,6 +157,16 @@ impl<'a> Parser<'a> {
             item: item.clone(),
         };
         let (struct_ty, substitution) = self.fresh_nominal(&model, expression);
+        // `W::<i32>(1)`: a generic tuple struct's arguments (#2215).
+        if matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::LessThan)
+        {
+            self.next();
+            self.next();
+            let written = self.parse_turbofish_types()?;
+            let written = Ty::Script(definition.id(), written.into_boxed_slice());
+            self.require_type(&written, &struct_ty, expression)?;
+        }
         let inputs: Box<[Ty]> = item
             .fields
             .iter()

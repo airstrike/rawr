@@ -1782,13 +1782,19 @@ impl<'a> Parser<'a> {
             return self.parse_struct(name, name_span);
         }
         // `S` of `struct S;`, `W(x)` of `struct W(T);`, `W` uncalled, and
-        // `S::<A>` of a generic one.
+        // `S::<A>` or `W::<A>(x)` of a generic one.
         if !self.bindings.contains_key(name.as_str())
             && let Some(model) = self.named_model(&name)
             && (!matches!(self.peek(), Token::DoubleColon)
                 || matches!(self.peek_second(), Token::LessThan)
-                    && matches!(&model, Nominal::Struct { item, .. }
-                        if item.form == crate::item::StructForm::Unit))
+                    && match &model {
+                        Nominal::Struct { item, .. } => match item.form {
+                            crate::item::StructForm::Unit => true,
+                            crate::item::StructForm::Tuple => self.turbofish_ends_path(),
+                            _ => false,
+                        },
+                        Nominal::Enum { .. } => false,
+                    })
             && let Some(value) = {
                 self.private_constructor(&model, super::construct::Constructor::Call, name_span)?;
                 self.parse_struct_value(model, name_span)?

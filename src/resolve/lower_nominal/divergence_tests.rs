@@ -7418,3 +7418,315 @@ main();
     );
     assert_eq!(output, "x z y 1 true \"w\"\nbad gone\n");
 }
+
+/// What the package of `files`, written under the build directory as
+/// `name`, prints when it runs.
+fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
+    use std::fs;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/graph-tests")
+        .join(format!("{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (path, text) in files {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let mut answers = crate::project::cargo::Answers::new();
+    let target = crate::project::Target::discover(&root, &mut answers).unwrap();
+    let graph = crate::package::Graph::load(&Engine::new(), &target, &mut answers)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let (ast, main) = engine
+        .compile_package(graph)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = crate::Scope::new();
+    let _: crate::Dynamic = engine
+        .eval_ast_with_scope::<crate::Dynamic>(&mut scope, &ast)
+        .unwrap();
+    let _: crate::Dynamic = engine
+        .call_fn_with_options::<crate::Dynamic>(
+            crate::CallFnOptions::new()
+                .eval_ast(false)
+                .rewind_scope(false),
+            &mut scope,
+            &ast,
+            main.expect("the package has a main"),
+            (),
+        )
+        .unwrap();
+    let _ = fs::remove_dir_all(&root);
+    lines.lock().unwrap().clone()
+}
+
+#[test]
+fn a_tuple_struct_s_constructor_takes_a_turbofish() {
+    // `W::<i32>(1)`, as rustc reads a generic tuple struct's constructor:
+    // called, uncalled, through a module, and an enum's variant (#2215).
+    let output = printed(
+        r#"
+#[derive(Debug)] struct W<T>(T);
+#[derive(Debug)] enum E<T> { V(T) }
+mod m { #[derive(Debug)] pub struct P<T>(pub T); }
+fn main() {
+    let w = W::<i32>(1);
+    let e = E::<u8>::V(2);
+    let p = m::P::<i8>(3);
+    let f = W::<u16>;
+    println!("{:?} {:?} {:?} {:?}", w, e, p, f(4));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "W(1) V(2) P(3) W(4)\n");
+    // The turbofish's type is the field's.
+    let report = refused("struct W<T>(T);\nfn main() { let w = W::<i32>(\"a\"); }\n");
+    assert!(
+        report.starts_with("error[E0308]: mismatched types"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_path_through_a_module_names_its_items_as_rustc_s_does() {
+    // A tuple struct's constructor, a variant pattern and a generic type
+    // in a `let` annotation through a module (#429, #572, #2203), and two
+    // functions' local items of one name (#1036).
+    let output = printed(
+        r#"
+mod canvas {
+    #[derive(Debug)] pub struct Degrees(pub f32);
+    pub mod inner { #[derive(Debug)] pub struct R(pub u8); }
+}
+mod bezier {
+    pub enum Curve<T> { Drawn(T), Empty }
+    pub mod k { pub enum E { A { x: i32 }, B } }
+    #[derive(Debug)] pub struct Pair<A, B>(pub A, pub B);
+}
+fn a() -> i32 { enum K { A } impl K { fn v(&self) -> i32 { 1 } } K::A.v() }
+fn b() -> i32 { enum K { B(i32) } impl K { fn v(&self) -> i32 { match self { K::B(n) => *n } } } K::B(5).v() }
+fn main() {
+    let v: Vec<canvas::inner::R> = vec![1, 2].into_iter().map(canvas::inner::R).collect();
+    println!("{:?} {:?}", canvas::Degrees(90.0), v);
+    let curve = bezier::Curve::Drawn(3);
+    let bezier::Curve::Drawn(n) = &curve else { return };
+    let e = bezier::k::E::A { x: 4 };
+    match e { bezier::k::E::A { x } => println!("{n} {x}"), bezier::k::E::B => {} }
+    let p: bezier::Pair<u8, Vec<bezier::Curve<i8>>> = bezier::Pair(1, vec![bezier::Curve::Empty]);
+    println!("{} {} {}", p.1.len(), a(), b());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Degrees(90.0) [R(1), R(2)]\n3 4\n1 1 5\n");
+}
+
+#[test]
+fn a_top_level_statement_names_an_inline_module_s_paths() {
+    // A script's statements resolve paths into its inline modules as a
+    // body does (#1141, #1348).
+    let output = printed(
+        r#"
+mod picks {
+    #[derive(Debug)] pub struct Count(pub i32);
+    pub fn twice(n: i32) -> i32 { n * 2 }
+    pub mod deep { pub fn f() -> i32 { 7 } }
+}
+println!("{:?} {} {}", picks::Count(2), picks::twice(3), picks::deep::f());
+let picks::Count(n) = picks::Count(5);
+println!("{n}");
+"#,
+    );
+    assert_eq!(output, "Count(2) 6 7\n5\n");
+}
+
+#[test]
+fn a_block_s_use_is_unseen_by_a_child_module_and_a_std_glob_shadows_the_prelude() {
+    // A body's `use` binds in its block alone, not for a child module's
+    // `use super::*;` (#1052).
+    let report = refused(
+        "mod outer {\n    pub fn f() -> usize { use std::collections::HashMap; \
+         let m: HashMap<i32, i32> = HashMap::new(); m.len() }\n    pub mod inner { use super::*; \
+         pub fn g() -> usize { let m: HashMap<i32, i32> = HashMap::new(); m.len() } }\n}\n\
+         fn main() { println!(\"{} {}\", outer::f(), outer::inner::g()); }\n",
+    );
+    assert!(
+        report.starts_with("error[E0425]: cannot find type `HashMap` in this scope"),
+        "{report}"
+    );
+    // `use std::fmt::*;` makes `Result` `fmt::Result`, and `use
+    // std::io::*;` makes it `io::Result` (#753).
+    let output = printed(
+        r#"
+mod text {
+    use std::fmt::*;
+    pub struct P;
+    impl Display for P { fn fmt(&self, f: &mut Formatter<'_>) -> Result { write!(f, "p") } }
+    pub fn g() -> Result { Ok(()) }
+}
+mod bytes {
+    use std::io::*;
+    pub fn g() -> Result<u8> { Ok(1) }
+}
+fn main() { println!("{} {:?} {:?}", text::P, text::g(), bytes::g()); }
+main();
+"#,
+    );
+    assert_eq!(output, "p Ok(()) Ok(1)\n");
+}
+
+#[test]
+fn a_std_item_or_module_with_no_use_is_rustc_s_error() {
+    // A bare std name no `use` brings in (#807).
+    for (program, error, help) in [
+        (
+            "fn main() { let r = Reverse(3); }\n",
+            "error[E0425]: cannot find function, tuple struct or tuple variant `Reverse` in this \
+             scope",
+            "help: consider importing this tuple struct\n  |\n1 + use std::cmp::Reverse;",
+        ),
+        (
+            "struct S<T> { p: PhantomData<T> }\nfn main() {}\n",
+            "error[E0425]: cannot find type `PhantomData` in this scope",
+            "help: consider importing this struct\n  |\n1 + use std::marker::PhantomData;",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(error), "{report}");
+        assert!(report.contains(help), "{report}");
+    }
+    // A module-relative std path with no `use` of its module, and the
+    // imports rustc offers: the module for a path of two segments, the
+    // item after it for a longer one, which the path then names directly
+    // (#808).
+    let report = refused("fn main() {\n    let d = time::Duration::from_secs(1);\n}\n");
+    assert!(
+        report.starts_with("error[E0433]: cannot find module or crate `time` in this scope"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "help: consider importing this struct\n  |\n1 + use std::time::Duration;\n  |\n\
+             help: if you import `Duration`, refer to it directly\n  |\n\
+             2 -     let d = time::Duration::from_secs(1);\n\
+             2 +     let d = Duration::from_secs(1);\n  |"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        "fn main() {\n    let m: collections::HashMap<i32, i32> = Default::default();\n}\n",
+    );
+    assert!(
+        report
+            .contains("help: consider importing this module\n  |\n1 + use std::collections;\n  |"),
+        "{report}"
+    );
+    let report =
+        refused("fn main() {\n    match 1.cmp(&2) { cmp::Ordering::Less => {} _ => {} }\n}\n");
+    assert!(
+        report.contains(
+            "help: consider importing one of these enums\n  |\n1 + use std::cmp::Ordering;\n  |\n\
+             1 + use std::sync::atomic::Ordering;\n"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        "fn main() {\n    let (mut a, mut b) = (1, 2);\n    mem::swap(&mut a, &mut b);\n}\n",
+    );
+    assert!(
+        report.starts_with("error[E0433]: cannot find module or crate `mem` in this scope"),
+        "{report}"
+    );
+    // With the `use`, each runs.
+    let output = printed(
+        r#"
+use std::{collections, mem, time};
+use std::cmp::Reverse;
+use std::marker::PhantomData;
+struct S<T> { p: PhantomData<T> }
+fn main() {
+    let (mut a, mut b) = (1, 2);
+    mem::swap(&mut a, &mut b);
+    let m: collections::HashMap<i32, i32> = collections::HashMap::new();
+    let _s: S<i32> = S { p: PhantomData };
+    println!("{a} {b} {:?} {:?} {}", time::Duration::from_secs(1), m, Reverse(1) < Reverse(0));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 1 1s {} true\n");
+}
+
+#[test]
+fn a_non_prelude_std_trait_s_method_is_callable_only_where_it_is_in_scope() {
+    // `io::Write`'s `write_all` on a `Vec<u8>` with no `use` of it:
+    // rustc's E0599 and its help (#1427).
+    let report =
+        refused("fn main() { let mut v: Vec<u8> = Vec::new(); v.write_all(b\"hi\").unwrap(); }\n");
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `write_all` found for struct `Vec<u8>` in the current \
+             scope"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "  = help: items from traits can only be used if the trait is in scope\n\
+             help: trait `Write` which provides `write_all` is implemented but not in scope; \
+             perhaps you want to import it\n  |\n1 + use std::io::Write;\n"
+        ),
+        "{report}"
+    );
+    // `write!` into a `String` with only `io::Write` in scope is the same
+    // E0599 as with none: a `String` has `fmt::Write`'s (#1428).
+    let report = refused(
+        "use std::io::Write;\nfn main() { let mut s = String::new(); write!(s, \"x\").unwrap(); }\n",
+    );
+    assert!(
+        report.starts_with("error[E0599]: cannot write into `String`"),
+        "{report}"
+    );
+    assert!(report.contains("1 + use std::fmt::Write;"), "{report}");
+    // In scope by its `use`, or by `io`'s prelude glob, each runs.
+    for scope in ["use std::io::Write;", "use std::io::prelude::*;"] {
+        let program = format!(
+            "{scope}\nfn main() {{\n    let mut v: Vec<u8> = Vec::new();\n    \
+             v.write_all(b\"ab\").unwrap();\n    write!(v, \"c\").unwrap();\n    \
+             println!(\"{{:?}}\", v);\n}}\nmain();\n"
+        );
+        assert_eq!(printed(&program), "[97, 98, 99]\n", "{scope}");
+    }
+}
+
+#[test]
+fn a_mod_s_path_attribute_names_its_file() {
+    // `#[path]` from the root, from a file that isn't a `mod.rs` (its own
+    // directory), and inside an inline module (that module's directory); a
+    // module in a file `#[path]` names owns that file's directory (#605).
+    let output = printed_package(
+        "path-attribute",
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"paths\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+            ),
+            (
+                "src/main.rs",
+                "// rawr\n#[path = \"other/thing.rs\"]\nmod thing;\nmod parity;\nmod outer {\n    \
+                 #[path = \"deep.rs\"]\n    pub mod deep;\n}\nfn main() {\n    \
+                 println!(\"{} {} {} {}\", thing::f(), thing::kid::g(), parity::emulated::h(), \
+                 outer::deep::d());\n}\n",
+            ),
+            ("src/other/thing.rs", "// rawr\npub mod kid;\npub fn f() -> i32 { 1 }\n"),
+            ("src/other/kid.rs", "// rawr\npub fn g() -> i32 { 2 }\n"),
+            ("src/parity.rs", "// rawr\n#[path = \"parity_impl.rs\"]\npub mod emulated;\n"),
+            ("src/parity_impl.rs", "// rawr\npub fn h() -> i32 { 3 }\n"),
+            ("src/outer/deep.rs", "// rawr\npub fn d() -> i32 { 4 }\n"),
+        ],
+    );
+    assert_eq!(output, "1 2 3 4\n");
+}
