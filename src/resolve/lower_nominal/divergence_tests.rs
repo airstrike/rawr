@@ -9260,3 +9260,65 @@ main();
          [1, 2] 2 12 [\"w\"] 1\n"
     );
 }
+
+#[test]
+fn a_buffered_reader_and_writer_over_a_file_run_as_stds() {
+    // std's `BufWriter` over a `File` writes what it buffers when it is
+    // flushed or dropped, and a `BufReader` reads a file's lines, as
+    // std's do (#2580). `read_line` is `BufRead`'s, so it needs its `use`.
+    let directory = std::env::temp_dir().join(format!("rawr-buffered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let source = format!(
+        r#"
+use std::fs::{{self, File}};
+use std::io::{{BufRead, BufReader, BufWriter, Cursor, Read, Write}};
+use std::path::PathBuf;
+fn main() {{
+    let dir = PathBuf::from({directory:?});
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("lines.txt");
+    {{
+        let mut out = BufWriter::new(File::create(&p).unwrap());
+        writeln!(out, "one").unwrap();
+        out.write_all(b"two\n").unwrap();
+        println!("{{}} {{}}", out.capacity(), fs::read_to_string(&p).unwrap().len());
+    }}
+    let mut out = BufWriter::with_capacity(4, fs::OpenOptions::new().append(true).open(&p).unwrap());
+    out.write_all(b"three\n").unwrap();
+    out.flush().unwrap();
+    drop(out);
+    for line in BufReader::new(File::open(&p).unwrap()).lines() {{
+        println!("{{}}", line.unwrap());
+    }}
+    let mut reader = BufReader::new(File::open(&p).unwrap());
+    let mut first = String::new();
+    let n = reader.read_line(&mut first).unwrap();
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).unwrap();
+    println!("{{n}} {{first:?}} {{rest:?}}");
+    let words: Vec<String> = BufReader::new(Cursor::new("x y\nz")).lines().map(|l| l.unwrap()).collect();
+    println!("{{:?}}", words);
+    fs::remove_dir_all(&dir).unwrap();
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    assert_eq!(
+        output,
+        "8192 0\none\ntwo\nthree\n4 \"one\\n\" \"two\\nthree\\n\"\n[\"x y\", \"z\"]\n"
+    );
+    let report = refused(
+        "use std::io::{BufReader, Cursor};\nfn main() {\n    let mut r = \
+         BufReader::new(Cursor::new(\"a\"));\n    let mut s = String::new();\n    \
+         r.read_line(&mut s).unwrap();\n}\nmain();\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `read_line` found for struct `BufReader<R>` in the \
+             current scope"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("1 + use std::io::BufRead;"), "{report}");
+}

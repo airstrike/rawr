@@ -95,7 +95,7 @@ fn cursor(value: &Dynamic) -> Result<Cursor<Dynamic>, Box<EvalAltResult>> {
 
 /// Run `read` on the bytes the cursor in `value` holds, from its position,
 /// which then moves past what it read: std's `Read` of a `T: AsRef<[u8]>`.
-fn reading<R>(
+pub(super) fn reading<R>(
     value: &mut Dynamic,
     read: impl FnOnce(&mut Cursor<&[u8]>) -> R,
 ) -> Result<R, Box<EvalAltResult>> {
@@ -128,7 +128,7 @@ fn count(value: usize) -> Dynamic {
 }
 
 /// The bytes `value` holds, as the program's `Vec<u8>`.
-fn bytes(value: &[u8]) -> Dynamic {
+pub(super) fn bytes(value: &[u8]) -> Dynamic {
     Dynamic::from(
         value
             .iter()
