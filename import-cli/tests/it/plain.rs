@@ -2030,6 +2030,30 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
     );
 }
 
+/// A dependency's call where an item goes whose rules match `#[cfg(..)]`
+/// attributes, and call themselves through `$crate` with a `#[cfg(..)]`
+/// on each call, expands to the items of the branch whose `cfg` holds
+/// (#2236). The output is `cargo run`'s.
+#[test]
+fn a_dependencys_cfg_macro_keeps_the_branch_whose_cfg_holds() {
+    const MACROS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-crate-macros"
+    );
+    let root = crate::support::fresh("plain-crate-macros");
+    copy(Path::new(MACROS), &root);
+
+    let run = rawr_import(&root, &["run"]);
+
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "unix\n");
+}
+
 /// A dependency's `macro_rules!` call where an item goes declares the
 /// items it expands to in its module or block, as rustc does (#2183): a
 /// struct, its inherent impl and an impl of the crate's trait through

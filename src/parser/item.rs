@@ -372,11 +372,14 @@ fn parse_items_in(
                     .next(input)
                     .expect("peeked attribute marker must exist");
 
-                if matches!(input.peek(), Some((Token::LeftBracket, _)))
-                    && let Some(item) =
-                        parse_item_after_attribute_marker(input, &tokenizer_control, position)?
-                {
-                    items.push(item);
+                if matches!(input.peek(), Some((Token::LeftBracket, _))) {
+                    parse_item_after_attribute_marker(
+                        input,
+                        &tokenizer_control,
+                        position,
+                        &mut items,
+                        &mut inner,
+                    )?;
                 }
             }
             // `private fn f()`: a name before `fn` is rustc's syntax error.
@@ -489,40 +492,17 @@ fn parse_items_in(
                     && matches!(input.peek(), Some((Token::Bang | Token::DoubleColon, _)))
                 {
                     let start = (Token::Identifier(name.clone()), *position);
-                    let Some(path) = call_path(input, start) else {
-                        stray = true;
-                        boundary = false;
-                        after_name = false;
-                        continue;
-                    };
-                    // The program's own macro, by its name or the crate's.
-                    let own = match path.as_slice() {
-                        [(Token::Identifier(name), _)] => super::item_macro::lookup(name.as_str()),
-                        [(Token::Identifier(first), _), _, (Token::Identifier(name), _)]
-                            if first.as_str() == "crate" =>
-                        {
-                            super::item_macro::lookup(name.as_str())
+                    match item_call(input, start, &mut items, &mut inner)? {
+                        Some(placed) => {
+                            stray |= !placed;
+                            boundary = true;
                         }
-                        _ => None,
-                    };
-                    match own {
-                        Some(rules) => {
-                            let (expanded, span) = expand_items(input, &rules, path)?;
-                            if let Some((expanded, masked)) = expanded {
-                                items.extend(expanded);
-                                inner.extend(masked);
-                                inner.push(span);
-                            } else {
-                                stray = true;
-                            }
+                        None => {
+                            stray = true;
+                            boundary = false;
                         }
-                        None => match crate_call(input, &path, true)? {
-                            Some(call) => CALLS.with_borrow_mut(|calls| calls.push(call)),
-                            None => stray = true,
-                        },
                     }
                     after_name = false;
-                    boundary = true;
                     continue;
                 }
                 stray |= depth == 0;
@@ -543,6 +523,52 @@ fn parse_items_in(
 
     resolve_const_lengths(&mut items)?;
     Ok((items.into_boxed_slice(), inner, stray))
+}
+
+/// The macro call where an item goes whose first name `first` is read:
+/// the items of the program's own macro go to `items`, with the spans
+/// they mask in `inner`, and a crate's macro's call is noted for its
+/// expansion. `None` when the tokens are no macro's path, and whether the
+/// call was placed otherwise: a call that begins an expression is not.
+fn item_call(
+    input: &mut TokenStream,
+    first: (Token, Position),
+    items: &mut Vec<crate::item::Parsed>,
+    inner: &mut Vec<Span>,
+) -> ParseResult<Option<bool>> {
+    let Some(path) = call_path(input, first) else {
+        return Ok(None);
+    };
+    // The program's own macro, by its name or the crate's.
+    let own = match path.as_slice() {
+        [(Token::Identifier(name), _)] => super::item_macro::lookup(name.as_str()),
+        [(Token::Identifier(first), _), _, (Token::Identifier(name), _)]
+            if first.as_str() == "crate" =>
+        {
+            super::item_macro::lookup(name.as_str())
+        }
+        _ => None,
+    };
+    let placed = match own {
+        Some(rules) => {
+            let (expanded, span) = expand_items(input, &rules, path)?;
+            let placed = expanded.is_some();
+            if let Some((expanded, masked)) = expanded {
+                items.extend(expanded);
+                inner.extend(masked);
+                inner.push(span);
+            }
+            placed
+        }
+        None => match crate_call(input, &path, true)? {
+            Some(call) => {
+                CALLS.with_borrow_mut(|calls| calls.push(call));
+                true
+            }
+            None => false,
+        },
+    };
+    Ok(Some(placed))
 }
 
 /// The path of a macro call whose first name `first` is read, through its
@@ -1153,11 +1179,18 @@ fn parse_item(
     parse_item_with_leading(input, tokenizer_control, attributes, visibility, start)
 }
 
+/// The item after the attribute whose `#` is at `hash`, into `items`. A
+/// macro call where an item goes takes its attributes, as rustc's does: a
+/// `cfg` that doesn't hold leaves the call out, and one that holds expands
+/// it, the expansion's items into `items` and the spans they mask into
+/// `inner`.
 fn parse_item_after_attribute_marker(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     hash: Position,
-) -> ParseResult<Option<crate::item::Parsed>> {
+    items: &mut Vec<crate::item::Parsed>,
+    inner: &mut Vec<Span>,
+) -> ParseResult<()> {
     let mut attributes = parse_attribute_after_marker(input, hash)?;
 
     while input
@@ -1169,13 +1202,35 @@ fn parse_item_after_attribute_marker(
 
     let visibility = parse_item_visibility(input)?;
 
-    parse_item_with_leading(
+    let call = visibility.is_none()
+        && !cfg_disabled(&attributes)
+        && matches!(
+            input.peek(),
+            Some((Token::Identifier(name), _)) if !matches!(
+                name.as_str(),
+                "unsafe" | "macro_rules" | "extern" | "trait" | "type"
+            )
+        );
+    if call {
+        let first = input.next().expect("peeked a name");
+        let position = first.1;
+        if item_call(input, first, items, inner)?.is_none() {
+            return Err(PERR::MissingToken(
+                "item".into(),
+                "after item attributes or visibility".into(),
+            )
+            .into_err(position));
+        }
+        return Ok(());
+    }
+    items.extend(parse_item_with_leading(
         input,
         tokenizer_control,
         attributes.into_boxed_slice(),
         visibility,
         hash,
-    )
+    )?);
+    Ok(())
 }
 
 fn parse_item_with_leading(

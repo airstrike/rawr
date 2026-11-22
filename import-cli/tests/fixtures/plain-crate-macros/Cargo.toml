@@ -1,0 +1,11 @@
+[package]
+name = "plain-crate-macros"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cfg-if = "1"
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

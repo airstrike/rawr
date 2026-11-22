@@ -380,6 +380,51 @@ macro_rules! answer {
     assert_eq!(printed(source), "42\n");
 }
 
+/// A macro that calls itself through `$crate` where an item goes, with an
+/// internal rule per step, puts `#[cfg(..)]` on the call each step expands
+/// to, and so expands only the items of the branch whose `cfg` holds, as
+/// `cfg_if!`'s rules do (#2236). The output is rustc's.
+#[test]
+fn a_recursive_item_macro_keeps_the_items_whose_cfg_holds() {
+    let source = r#"
+#[macro_export]
+macro_rules! pick {
+    (if #[cfg( $($i_meta:tt)+ )] { $( $i_tokens:tt )* } $( else { $( $e_tokens:tt )* } )?) => {
+        $crate::pick! {
+            @__items () ;
+            (( $($i_meta)+ ) ( $( $i_tokens )* )),
+            $( (() ( $( $e_tokens )* )), )?
+        }
+    };
+    (@__items ( $( ($($_:tt)*) , )* ) ; ) => {};
+    (
+        @__items ( $( ($($no:tt)+) , )* ) ;
+        (( $( $($yes:tt)+ )? ) ( $( $tokens:tt )* )),
+        $( $rest:tt , )*
+    ) => {
+        #[cfg(all( $( $($yes)+ , )? not(any( $( $($no)+ ),* )) ))]
+        $crate::pick! { @__temp_group $( $tokens )* }
+        $crate::pick! {
+            @__items ( $( ($($no)+) , )* $( ($($yes)+) , )? ) ;
+            $( $rest , )*
+        }
+    };
+    (@__temp_group $( $tokens:tt )* ) => { $( $tokens )* };
+}
+pick! {
+    if #[cfg(unix)] {
+        fn kind() -> &'static str { "unix" }
+    } else {
+        fn kind() -> &'static str { "other" }
+    }
+}
+fn main() {
+    println!("{}", kind());
+}
+"#;
+    assert_eq!(printed(source), "unix\n");
+}
+
 #[test]
 fn a_call_no_rule_matches_is_rustcs_error() {
     let one = "macro_rules! one { ($x:ident) => { $x }; }\n";
