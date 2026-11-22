@@ -1345,6 +1345,7 @@ impl<'a> Resolver<'a> {
                 qualify_opaque_bounds(&mut parsed, &modules);
                 write_renamed_modules(&mut parsed, &modules);
                 self.write_native_trait_objects(context, &mut parsed, &modules);
+                self.write_outside_paths(context, &mut parsed);
                 self.write_trait_names(context, &mut parsed, &block_binds)
                     .map_err(|error| Failure {
                         primary: context.source,
@@ -1659,21 +1660,7 @@ impl<'a> Resolver<'a> {
         }
         let mut active = BTreeSet::new();
         active.insert(address.clone());
-        let target =
-            self.resolve_any_path(&export.context, &export.path, export.span, &mut active)?;
-        if matches!(target, Target::Module | Target::HostModuleItem { .. }) {
-            return Err(Failure {
-                primary: export.source,
-                secondary: None,
-                error: Error::InvalidImport {
-                    path: export.path.join("::").into(),
-                    reason: "module re-exports are not supported; export the module with `pub mod`"
-                        .into(),
-                    reference: export.span,
-                    declaration: None,
-                },
-            });
-        }
+        self.resolve_any_path(&export.context, &export.path, export.span, &mut active)?;
         // A re-export reaches no further than what it re-exports: rustc's
         // E0364.
         if let Some((address, declaration)) = self.declared_at(&context, &path)
@@ -3006,6 +2993,70 @@ impl<'a> Resolver<'a> {
         each_signature_path(item, &path);
     }
 
+    /// Each path of `item`'s signatures and bounds through this crate's
+    /// modules that lands on a std or crate item through an import
+    /// ([`Self::rust_spelling`]), written as that item's own path, as
+    /// rustc resolves it: `super::fmt::Formatter` after the parent's `use
+    /// std::fmt;` is `std::fmt::Formatter`. The written path's last
+    /// segment keeps its arguments and its span.
+    fn write_outside_paths(&self, context: &Context, item: &mut crate::item::Parsed) {
+        use crate::item::type_ref::{Path, Segment, DYN_SEGMENT};
+        let app = self.tables.rust_crate(context.package);
+        let path = |path: &mut Path, _: Place| {
+            let [first, .., last] = &path.segments[..] else {
+                return;
+            };
+            if path.global
+                || first.name.text.as_str() == DYN_SEGMENT
+                || path.segments[..path.segments.len() - 1]
+                    .iter()
+                    .any(|segment| !segment.arguments.is_empty())
+            {
+                return;
+            }
+            let written = path
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.clone())
+                .collect::<Vec<_>>();
+            if !self.is_script_path(context, &written) {
+                return;
+            }
+            // A path into a `.rs` module keeps its types' own resolution.
+            let Some(spelled) = self
+                .rust_spelling(context, &written)
+                .filter(|spelled| app.is_none_or(|app| spelled[0] != app))
+            else {
+                return;
+            };
+            let (at, span) = (first.name.span, first.span);
+            let last = last.clone();
+            let count = spelled.len();
+            path.segments = spelled
+                .into_iter()
+                .enumerate()
+                .map(|(index, text)| {
+                    if index + 1 == count {
+                        Segment {
+                            name: crate::item::Name {
+                                text,
+                                span: last.name.span,
+                            },
+                            ..last.clone()
+                        }
+                    } else {
+                        Segment {
+                            name: crate::item::Name { text, span: at },
+                            arguments: Box::default(),
+                            span,
+                        }
+                    }
+                })
+                .collect();
+        };
+        each_signature_path(item, &path);
+    }
+
     /// The name the lowering knows the crate trait at `address` by: the
     /// path of [`Resolver::trait_names`] when another module's trait has its
     /// name, else its own name.
@@ -3153,7 +3204,11 @@ impl<'a> Resolver<'a> {
     /// module of the current package, or name one, spelled through the
     /// app's crate name. A `use` that binds a `.rs` module (`use
     /// crate::units;`) so binds the app crate's module, and paths through
-    /// the binding (`units::BONUS`) reach its items as rustc's do.
+    /// the binding (`units::BONUS`) reach its items as rustc's do. One
+    /// that goes through an import of a std or crate item, as
+    /// `super::fmt::Display` after the parent's `use std::fmt;`, or
+    /// `m::Display` after `m`'s `pub use std::fmt::Display;`, is that
+    /// item's own path (`std::fmt::Display`).
     fn rust_spelling(
         &self,
         context: &Context,
@@ -3170,7 +3225,6 @@ impl<'a> Resolver<'a> {
         path: &[ImmutableString],
         active: &mut BTreeSet<Address>,
     ) -> Option<Vec<ImmutableString>> {
-        let alias = self.tables.rust_crate(context.package)?;
         let path = through_self(path);
         let first = path.first()?;
         let supers = path
@@ -3206,7 +3260,9 @@ impl<'a> Resolver<'a> {
         } else {
             return None;
         }
-        if self.tables.names_native(context.package, &absolute) {
+        if let Some(alias) = self.tables.rust_crate(context.package)
+            && self.tables.names_native(context.package, &absolute)
+        {
             return Some(
                 std::iter::once(ImmutableString::from(alias))
                     .chain(absolute)
@@ -3239,11 +3295,14 @@ impl<'a> Resolver<'a> {
                 }
                 return None;
             }
+            // An import `context` doesn't see spells nothing: the path is
+            // its privacy error, as rustc's E0603.
             let import = self
                 .tables
                 .alias(&address)
                 .or_else(|| self.tables.export(&address))
-                .or_else(|| self.tables.glob(&address))?;
+                .or_else(|| self.tables.glob(&address))
+                .filter(|import| import.reach.reaches(&context.namespace))?;
             if !active.insert(address) {
                 return None;
             }
@@ -3253,9 +3312,48 @@ impl<'a> Resolver<'a> {
                 .chain(&absolute[at + 1..])
                 .cloned()
                 .collect::<Vec<_>>();
-            return self.spelling_from(&import.context, &expanded, active);
+            return self.import_spelling(&import.context, expanded, active);
         }
         None
+    }
+
+    /// The spelling of `path`, an import's path in its module `context`
+    /// expanded by the segments after it: [`Self::spelling_from`] for a
+    /// path of this crate, and for one outside it, the std or crate path
+    /// its first segment names through each `use` that binds it
+    /// (`fmt::Display` after `use std::fmt;` is `std::fmt::Display`), as
+    /// rustc resolves it. `None` where that first segment is an item of
+    /// this crate, as an enum is the prefix of `use Shape::*;`'s paths, or
+    /// where the path names nothing outside it.
+    fn import_spelling(
+        &self,
+        context: &Context,
+        path: Vec<ImmutableString>,
+        active: &mut BTreeSet<Address>,
+    ) -> Option<Vec<ImmutableString>> {
+        if self.is_script_path(context, &path) {
+            return self.spelling_from(context, &path, active);
+        }
+        if let Some((address, alias)) = self.crate_alias(context, &path) {
+            if !active.insert(address) {
+                return None;
+            }
+            let expanded = alias.path.iter().chain(&path[1..]).cloned().collect();
+            return self.import_spelling(&alias.context, expanded, active);
+        }
+        let first = path.first()?;
+        if self.tables.declaration(&context.address(first)).is_some() {
+            return None;
+        }
+        host_target(
+            self.host,
+            &path,
+            Span::NONE,
+            #[cfg(feature = "rust-import")]
+            None,
+        )
+        .ok()?;
+        Some(path)
     }
 
     fn resolve_path(
@@ -3514,10 +3612,17 @@ impl<'a> Resolver<'a> {
     ) -> Failure {
         let mut imported = None;
         if active.insert(address.clone()) {
+            // A std item is the kind std declares it as, as `Display` is a
+            // trait, though Rawr holds it as a module.
             imported = self
-                .resolve_any_path(&import.context, &import.path, import.span, active)
-                .ok()
-                .and_then(|target| self.private_kind(&target).imported());
+                .import_spelling(&import.context, import.path.to_vec(), &mut BTreeSet::new())
+                .and_then(|spelled| std_private(&spelled.join("::")))
+                .or_else(|| {
+                    self.resolve_any_path(&import.context, &import.path, import.span, active)
+                        .ok()
+                        .map(|target| self.private_kind(&target))
+                })
+                .and_then(Private::imported);
             active.remove(address);
         }
         Failure {
@@ -4027,7 +4132,9 @@ impl<'a> Resolver<'a> {
     /// rustc's E0425 for the type path `path` into a module of this crate
     /// that `failure` refuses as an unresolved import: the module has no
     /// type of its last segment's name. E0405 where `noun` is `trait`, the
-    /// path an impl's trait.
+    /// path an impl's trait. So for a std module the path reaches through
+    /// an import (`super::fmt::Missing` after `use std::fmt;`), which std's
+    /// table refuses as having no item of the name.
     fn unresolved_type_path(
         &self,
         context: &Context,
@@ -4040,7 +4147,7 @@ impl<'a> Resolver<'a> {
             (
                 Error::UnknownImport {
                     reference,
-                    missing: Unresolved::Path,
+                    missing: Unresolved::Path | Unresolved::Item { .. },
                     ..
                 },
                 Some(last),
@@ -4812,6 +4919,21 @@ fn std_module(qualified: &ImmutableString) -> ImmutableString {
         .map(|rest| format!("std::{rest}"))
         .filter(|std| crate::std_table::is_module(std))
         .map_or_else(|| qualified.clone(), ImmutableString::from)
+}
+
+/// The kind of item the std path `path` names, as a privacy error names
+/// it: `std::fmt::Display` is a trait. `None` for a module or a path std
+/// has no item at.
+fn std_private(path: &str) -> Option<Private> {
+    let private = match crate::std_table::any(path)?.kind {
+        "fn" => Private::Function,
+        "struct" | "union" => Private::Struct,
+        "enum" => Private::Enum,
+        "trait" => Private::Trait,
+        "type" => Private::TypeAlias,
+        _ => return None,
+    };
+    Some(private)
 }
 
 /// Whether the prelude has a trait of `name`, which every module sees.

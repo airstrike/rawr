@@ -14,6 +14,16 @@ impl<'a> Parser<'a> {
         first_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let (path, reference, next) = self.peek_path(&first, first_span);
+        // `super::HashMap::new()` after the parent's `use
+        // std::collections::HashMap;` is std's path, as rustc resolves it.
+        if let Some(tokens) = self.std_spelled(reference) {
+            for _ in path.matches("::") {
+                self.next();
+                self.next();
+            }
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
         // A path into a native module is spelled through the app's crate,
         // as a program's `icon::copy` is `app::icon::copy` in a crate named
         // `app`: its head is that crate, which no `use` shadows, as a `use`

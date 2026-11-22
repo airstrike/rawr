@@ -2852,3 +2852,156 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn a_std_path_through_another_module_s_import_is_std_s() {
+    // rustc resolves `super::fmt::Display` through the parent's `use
+    // std::fmt;`, and `super::super::HashMap` through the root's glob, to
+    // std's items, in a type, a trait, a value and a pattern (#2468).
+    let output = printed(
+        r#"
+use std::fmt;
+use std::cmp::Ordering;
+use std::collections::*;
+struct X;
+mod m {
+    pub struct Y;
+    impl super::fmt::Display for Y {
+        fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result { write!(f, "Y") }
+    }
+    pub mod n {
+        pub struct Z;
+        impl super::super::fmt::Debug for Z {
+            fn fmt(&self, f: &mut super::super::fmt::Formatter) -> crate::fmt::Result { write!(f, "Z") }
+        }
+        pub fn count() -> usize {
+            let mut h: super::super::HashMap<i32, i32> = super::super::HashMap::new();
+            h.insert(1, crate::cmp::max(1, 2));
+            h.len()
+        }
+    }
+    pub fn rank(o: super::Ordering) -> i32 {
+        match o { super::Ordering::Less => 1, crate::Ordering::Equal => 2, _ => 3 }
+    }
+}
+use std::cmp;
+impl crate::fmt::Display for X {
+    fn fmt(&self, f: &mut self::fmt::Formatter<'_>) -> fmt::Result { write!(f, "X") }
+}
+fn main() {
+    println!("{} {} {:?} {} {}", X, m::Y, m::n::Z, m::n::count(), m::rank(Ordering::Equal));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "X Y Z 1 2\n");
+    // A std module std has no item of the name in.
+    let program = |item: &str| {
+        format!(
+            r#"
+use std::fmt;
+mod m {{
+    pub struct X;
+    {item}
+}}
+fn main() {{}}
+main();
+"#
+        )
+    };
+    let report = refused(&program(
+        "impl super::fmt::Displayy for X { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) } }",
+    ));
+    assert!(
+        report.starts_with("error[E0405]: cannot find trait `Displayy` in module `super::fmt`"),
+        "{report}"
+    );
+    let report = refused(&program("pub fn f() -> i32 { super::fmt::nothing() }"));
+    assert!(
+        report.starts_with("error[E0425]: cannot find function `nothing` in module `super::fmt`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_pub_use_of_a_std_item_or_a_module_re_exports_it() {
+    // rustc re-exports a std trait, type, function or module, and a module
+    // of the crate, by `pub use` (#2469).
+    let output = printed(
+        r#"
+mod m {
+    pub use std::fmt::Display as Show;
+    pub use std::fmt;
+    pub use std::collections::HashMap;
+    pub use std::cmp::max;
+}
+mod a {
+    pub mod b {
+        pub struct S(pub i32);
+        pub trait T { fn t(&self) -> i32; }
+        impl T for S { fn t(&self) -> i32 { self.0 } }
+        pub enum E { One, Two }
+    }
+}
+mod r {
+    pub use crate::a::b;
+    pub use crate::a::b as c;
+}
+mod n {
+    use crate::m::Show;
+    pub struct X;
+    impl Show for X {
+        fn fmt(&self, f: &mut crate::m::fmt::Formatter) -> super::m::fmt::Result { write!(f, "X") }
+    }
+    pub fn boxed() -> Box<dyn super::m::Show> { Box::new(X) }
+}
+use r::c::T;
+fn rank(s: &r::b::S, e: r::c::E) -> i32 {
+    let k = match e { r::b::E::One => 1, crate::r::c::E::Two => 2 };
+    s.t() + k
+}
+fn main() {
+    let mut h: m::HashMap<i32, i32> = m::HashMap::new();
+    h.insert(1, m::max(3, 4));
+    let s = r::c::S(5);
+    println!("{} {} {:?} {} {}", n::X, n::boxed(), h.get(&1), rank(&s, r::b::E::Two), s.t());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "X X Some(4) 7 5\n");
+    // A private `use` re-exports nothing: rustc names the std item's kind.
+    let report = refused(
+        r#"
+mod m {
+    use std::fmt::Display;
+}
+struct X;
+impl m::Display for X {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "X") }
+}
+fn main() {}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0603]: trait import `Display` is private"),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+mod m {
+    use std::collections::HashMap;
+}
+fn main() {
+    let h: m::HashMap<i32, i32> = m::HashMap::new();
+    println!("{}", h.len());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0603]: struct import `HashMap` is private"),
+        "{report}"
+    );
+}
