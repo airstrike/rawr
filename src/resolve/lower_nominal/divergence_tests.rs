@@ -1486,3 +1486,42 @@ main();
 "#;
     assert_eq!(printed(source), "[9, 9]\n");
 }
+
+/// rustc resolves an impl's trait path in the type namespace, so
+/// `page::Page` is the trait the module `page` holds, through a `use
+/// crate::page::{self}` too. A module the program declares at that path
+/// is rustc's E0404. A native trait is a module of rawr's host, which
+/// was E0404 too (#2452); only a module the program declares is now. The
+/// output and the report are rustc's for the same programs.
+#[test]
+fn an_impl_s_trait_path_through_a_module_names_the_trait() {
+    let source = r#"
+mod page {
+    pub trait Page { fn title(&self) -> String; }
+}
+mod component {
+    pub mod badge {
+        use crate::page::{self};
+        pub struct BadgePage;
+        impl page::Page for BadgePage { fn title(&self) -> String { "badge".to_string() } }
+    }
+}
+use page::Page;
+fn main() { println!("{}", component::badge::BadgePage.title()); }
+main();
+"#;
+    assert_eq!(printed(source), "badge\n");
+    let report = refused(
+        r#"
+mod page { pub mod Page {} }
+struct B;
+impl page::Page for B {}
+fn main() {}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0404]: expected trait, found module `page::Page`"),
+        "{report}"
+    );
+}
