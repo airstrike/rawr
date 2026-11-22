@@ -753,6 +753,40 @@ pub mod lifetimes {
         }
     }
 
+    /// An element's start tag, as quick-xml's `BytesStart`.
+    #[derive(Debug)]
+    pub struct Tag {
+        name: String,
+    }
+
+    impl Tag {
+        pub fn new(name: &str) -> Self {
+            Tag {
+                name: name.to_owned(),
+            }
+        }
+
+        pub fn rename(&mut self, name: &str) {
+            self.name = name.to_owned();
+        }
+
+        /// As quick-xml's `BytesStart::name`: the output borrows the
+        /// receiver.
+        pub fn name(&self) -> Name<'_> {
+            Name(&self.name)
+        }
+    }
+
+    /// A name borrowed from its tag, as quick-xml's `QName<'a>`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Name<'a>(&'a str);
+
+    impl fmt::Display for Name<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
     /// A clock with the format it borrows, as jiff's `strtime::Display<'f>`.
     #[derive(Debug)]
     pub struct Shown<'f> {
