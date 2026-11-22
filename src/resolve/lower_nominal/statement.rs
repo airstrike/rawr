@@ -210,7 +210,7 @@ impl<'a> Parser<'a> {
         for pending in std::mem::take(&mut self.pending_parses) {
             let (target, error, span, _) = &pending;
             match self.settle_parse(target, error, *span, false)? {
-                Some(helper) => self.settled_parses.push((pending.3, format!("{helper}("))),
+                Some(head) => self.settled_parses.push((pending.3, head)),
                 None => self.pending_parses.push(pending),
             }
         }

@@ -3,13 +3,17 @@
 
 use super::models::{Models, Nominal};
 use super::naming::PRIVATE_CLOSURE;
-use super::op::{builtin_code, owner_id, owner_key, ExecutableOp, PreludeOp, COUNTED_KEY};
-use super::ty::Ty;
+use super::op::{
+    builtin_code, owner_id, owner_key, witness_code, witness_key_statement, ExecutableOp,
+    PreludeOp, COUNTED_KEY,
+};
+use super::ty::{Float, Int, Ty};
 use super::{
     closure, default_value, drops, instance_dispatcher_name, instance_text, item_generics,
-    location, mentions_parameter, method_name, origin, retain_locations, static_dispatcher_name,
-    static_instance_dispatcher_name, trait_dispatcher_name, witness_generics, witness_variable,
-    Lowered, ParsedExpr, Parser, CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL,
+    kind_code, location, mentions_parameter, method_name, origin, retain_locations,
+    static_dispatcher_name, static_instance_dispatcher_name, trait_dispatcher_name,
+    witness_generics, witness_variable, Lowered, ParsedExpr, Parser, CLOSURE_SENTINEL,
+    DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL,
 };
 use crate::resolve::{item, type_ref, Error, Program};
 use crate::{capability, method, ImmutableString, Span};
@@ -528,6 +532,7 @@ pub(super) fn write_static_dispatcher(
     ops: &mut Vec<ExecutableOp>,
 ) {
     let prelude_from = trait_name == "From" && declared.name.span == Span::NONE;
+    let std_from_str = trait_name == "FromStr" && declared.name.span == Span::NONE;
     // The function parameter typed by each trait parameter (`value: T` of
     // `From<T>::from`): the fallback reads that argument's runtime type to
     // choose the impl, for instances inference leaves generic.
@@ -572,6 +577,10 @@ pub(super) fn write_static_dispatcher(
         };
         let mut text =
             format!("__rawr_private fn {name}(__rawr_witness{separator}{parameters}) {{\n");
+        if std_from_str {
+            write_builtin_parses(&mut text, ops);
+        }
+        text.push_str(&witness_key_statement());
         let instance_types = *instance;
         let fallback = !declared.generics.is_empty() && instance_types.is_none();
         let instance = instance_types.map(instance_text);
@@ -683,6 +692,34 @@ pub(super) fn write_static_dispatcher(
     }
 }
 
+/// The arms of std's `FromStr::from_str` dispatcher for the builtin types
+/// std implements it for, each by its kind's witness (`witness_code`): the
+/// parse `s.parse::<T>()` runs for that type, `"300"` failing for `u8`.
+fn write_builtin_parses(text: &mut String, ops: &mut Vec<ExecutableOp>) {
+    let builtins = Int::KINDS.iter().map(|(_, kind)| Ty::Int(*kind)).chain([
+        Ty::Float(Float::F32),
+        Ty::Float(Float::F64),
+        Ty::Bool,
+        Ty::Char,
+        Ty::String,
+    ]);
+    for ty in builtins {
+        let Some(code) = witness_code(&ty) else {
+            continue;
+        };
+        let kind = kind_code(ty);
+        let helper = format!("{SENTINEL}{}", ops.len());
+        ops.push(ExecutableOp::Kinded {
+            op: PreludeOp::Parse,
+            kinds: [kind, kind],
+        });
+        let _ = writeln!(
+            text,
+            "if __rawr_witness == {code} {{ return {helper}(__rawr_parameter_0); }}"
+        );
+    }
+}
+
 /// The function from a type witness to that type's default value, which
 /// `T::default()` calls for a generic `T: Default`.
 pub(super) fn write_default_dispatcher(
@@ -702,6 +739,7 @@ pub(super) fn write_default_dispatcher(
     ops.push(ExecutableOp::Prelude(PreludeOp::None));
     let mut text = format!(
         "__rawr_private fn {DEFAULT_DISPATCHER}(__rawr_witness) {{\n\
+         {}\
          if __rawr_witness == -2 {{ return 0; }}\n\
          if __rawr_witness == -3 {{ return 0.0; }}\n\
          if __rawr_witness == -4 {{ return \"\"; }}\n\
@@ -709,7 +747,8 @@ pub(super) fn write_default_dispatcher(
          if __rawr_witness == -6 {{ return '\\x00'; }}\n\
          if __rawr_witness == -7 {{ return {none}(); }}\n\
          if __rawr_witness == -8 {{ return []; }}\n\
-         if __rawr_witness == -9 {{ return (); }}\n"
+         if __rawr_witness == -9 {{ return (); }}\n",
+        witness_key_statement()
     );
     for (id, model) in &models.by_definition {
         if !model.generics().is_empty() || !model.capabilities().contains(capability::Kind::Default)

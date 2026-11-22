@@ -60,9 +60,17 @@ impl<'a> Parser<'a> {
         // `placeholder(value))`, whose placeholder becomes `helper(` once
         // the target is known (`settle_parses`).
         let source = match self.settle_parse(&target, &error, expression, false)? {
-            Some(helper) => origin::Fragment::call(&helper, [value.rendered_source()]),
+            Some(head) => {
+                let mut source = origin::Fragment::plain(head);
+                source.push(value.rendered_source());
+                source.push_text(")");
+                source
+            }
             None => {
-                let placeholder = super::naming::parse_placeholder(self.parse_count);
+                let placeholder = super::naming::parse_placeholder(
+                    self.parse_count,
+                    self.generics.keys().map(ImmutableString::as_str),
+                );
                 self.parse_count += 1;
                 let mut source = origin::Fragment::call(&placeholder, [value.rendered_source()]);
                 source.push_text(")");
@@ -76,10 +84,12 @@ impl<'a> Parser<'a> {
     }
 
     /// The error type of a `parse` into `target` once `target` is known,
-    /// and the helper its call is: std's `FromStr` for a number, `bool` or
-    /// `char`, or the program's `impl FromStr` for its type, whose `Err` is
-    /// the error. At the end of the body (`last`), Rust's errors for an
-    /// unknown target or one with no `FromStr`.
+    /// and its call's head, up to the parsed text: std's `FromStr` for a
+    /// number, `bool` or `char`, the program's `impl FromStr` for its type,
+    /// whose `Err` is the error, or the impl a generic `T: FromStr`'s
+    /// witness names, whose error is `T::Err`. At the end of the body
+    /// (`last`), Rust's errors for an unknown target or one with no
+    /// `FromStr`.
     pub(super) fn settle_parse(
         &mut self,
         target: &Ty,
@@ -94,13 +104,22 @@ impl<'a> Parser<'a> {
                 op: PreludeOp::Parse,
                 kinds: [resolved.clone(), resolved],
             });
-            return Ok(Some(helper));
+            return Ok(Some(format!("{helper}(")));
         }
         if let Ty::Script(id, _) = &resolved
             && let Some((definition, from_str_error)) = self.program_from_str(*id)
         {
             self.require_type(&from_str_error, error, span)?;
-            return Ok(Some(method_name(&definition)));
+            return Ok(Some(format!("{}(", method_name(&definition))));
+        }
+        if let Ty::Param(name) = &resolved
+            && self.type_implements(&resolved, "FromStr")
+        {
+            let projection =
+                Ty::Projection(Box::new(resolved.clone()), "FromStr".into(), "Err".into());
+            self.require_type(&projection, error, span)?;
+            self.capture_witnesses();
+            return Ok(Some(super::naming::generic_parse_head(name)));
         }
         // A crate type's `impl FromStr`: its `from_str`, which the importer
         // brings as it brings any member of the type (#709).
@@ -110,7 +129,7 @@ impl<'a> Parser<'a> {
         {
             return self
                 .host_from_str(&proof.definition.path(), target, error, span)
-                .map(Some);
+                .map(|helper| Some(format!("{helper}(")));
         }
         match resolved {
             Ty::Infer(_) if !last => Ok(None),

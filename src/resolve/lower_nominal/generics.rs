@@ -475,10 +475,11 @@ impl<'a> Parser<'a> {
     }
 
     /// The witness of a type a `Default`-bounded parameter takes: its script
-    /// id's number, by its key, a negative code for a builtin, or the caller's own
-    /// witness for one of its generic parameters.
+    /// id's number, by its key, a negative code for a builtin (an integer
+    /// kind's or `f32`'s own, `witness_code`), or the caller's own witness
+    /// for one of its generic parameters.
     pub(super) fn witness(&self, ty: &Ty, parameter: &str, span: Span) -> Result<String, Error> {
-        if let Some(code) = builtin_code(ty) {
+        if let Some(code) = witness_code(ty) {
             return Ok(code.to_string());
         }
         Ok(match ty {

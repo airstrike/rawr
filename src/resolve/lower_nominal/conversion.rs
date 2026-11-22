@@ -1248,8 +1248,8 @@ impl<'a> Parser<'a> {
             self.write_over(&placeholder, &text);
         }
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
-            if let Some(helper) = self.settle_parse(&target, &error, span, true)? {
-                self.write_over(&placeholder, &format!("{helper}("));
+            if let Some(head) = self.settle_parse(&target, &error, span, true)? {
+                self.write_over(&placeholder, &head);
             }
         }
         // A crate value's `.into()` whose target holds a type only another

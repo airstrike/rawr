@@ -136,9 +136,28 @@ pub(super) fn text_into_placeholder(index: usize) -> String {
 }
 
 /// The placeholder of the `parse` numbered `index` whose target isn't
-/// known yet (`settle_parses`).
-pub(super) fn parse_placeholder(index: usize) -> String {
-    call_placeholder(&format!("__rawr_nominal_parse_{index:010}"))
+/// known yet (`settle_parses`), with room for the head of a parse into
+/// any of the body's `generics` (`generic_parse_head`).
+pub(super) fn parse_placeholder<'a>(
+    index: usize,
+    generics: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let placeholder = call_placeholder(&format!("__rawr_nominal_parse_{index:010}"));
+    let width = generics
+        .into_iter()
+        .map(|name| generic_parse_head(name).len())
+        .fold(placeholder.len(), usize::max);
+    format!("{placeholder:_<width$}")
+}
+
+/// The head of `s.parse()` into the generic `T: FromStr` named `param`, up
+/// to the parsed text: its `from_str` dispatcher, given `T`'s witness.
+pub(super) fn generic_parse_head(param: &str) -> String {
+    format!(
+        "{}({}, ",
+        static_dispatcher_name("FromStr", "from_str"),
+        witness_variable(param)
+    )
 }
 
 /// A trait's name as a generated name holds it: a trait known by its path,

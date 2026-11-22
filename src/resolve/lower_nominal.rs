@@ -259,7 +259,7 @@ use op::ImportedOperation;
 use op::{
     builtin_code, builtin_path_type, copied_input, copied_places, entry_key, impl_self_ty,
     move_into_call, moved_input, ordering_discriminant, owner_arguments, owner_id, owner_key,
-    probe_rank, receiver_rank, script_type, ExecutableOp, InstantiatedHostSignature,
+    probe_rank, receiver_rank, script_type, witness_code, ExecutableOp, InstantiatedHostSignature,
     IntrinsicOperation, Keys, Op, PreludeOp, ProjectionOperation, WitnessedOp,
     FLOAT_BINARY_METHODS, FLOAT_UNARY_METHODS, SHAPED_HASHED, SHAPED_OPTION, SHAPED_RESULT,
     SHAPED_TOTAL,
