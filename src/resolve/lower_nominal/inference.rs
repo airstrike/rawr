@@ -4,7 +4,8 @@
 #[cfg(feature = "rust-import")]
 use super::ImplProjection;
 use super::{
-    builtin_operator, instantiate, is_iterator_trait, sequence, Float, FnCandidate, Int, Ty,
+    builtin_operator, instantiate, is_iterator_trait, owner_id, sequence, Float, FnCandidate, Int,
+    ParseError, Ty,
 };
 use crate::resolve::type_ref;
 use crate::{type_def, ImmutableString, Shared};
@@ -410,6 +411,21 @@ impl Inference {
                 if name.as_str() == "Output" && builtin_operator(&base, trait_name) =>
             {
                 return base;
+            }
+            // std's `FromStr` impls, unless the program gives the type its
+            // own trait of that name: `<u8 as FromStr>::Err` is
+            // `ParseIntError`.
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::String
+                if trait_name.as_str() == "FromStr" && name.as_str() == "Err" =>
+            {
+                let own = owner_id(&base).is_some_and(|id| {
+                    self.associated
+                        .impls
+                        .contains_key(&(id, trait_name.clone(), name.clone()))
+                });
+                if !own && let Some(error) = ParseError::of(&base) {
+                    return Ty::ParseError(error);
+                }
             }
             // `dyn Shape<Output = i64>`: its binding.
             Ty::Dyn(object, bindings) if object == trait_name => {

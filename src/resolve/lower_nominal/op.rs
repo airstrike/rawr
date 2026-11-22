@@ -8,7 +8,7 @@ use super::format::{
     debug_value, debug_value_spec, pretty_debug, DebugLeaf, DebugSpec, FormatPart,
 };
 use super::inference::Inference;
-use super::ty::{numeric_type, Int, Ty};
+use super::ty::{numeric_type, Float, Int, Ty};
 use super::wide::{integer_text, wide_value, Wide};
 #[cfg(feature = "rust-import")]
 use super::without_references;
@@ -1900,6 +1900,49 @@ pub(super) fn builtin_code(ty: &Ty) -> Option<crate::INT> {
     })
 }
 
+/// The witness codes of the integer kinds and `f32`, each `KIND_WITNESS`
+/// less its kind's code (`kind_code`). One runtime type holds every
+/// integer, but std's impls for them differ (`"300".parse::<u8>()` fails),
+/// so a generic's witness names the kind.
+pub(super) const KIND_WITNESS: INT = -100;
+
+/// `f32`'s kind code (`kind_code`).
+const F32_KIND: INT = 10;
+
+/// The witness a generic's type argument `ty` passes: its builtin code
+/// (`builtin_code`), or for an integer kind or `f32`, that kind's own
+/// (`KIND_WITNESS`).
+pub(super) fn witness_code(ty: &Ty) -> Option<INT> {
+    match ty {
+        Ty::Int(Int::Var(_)) => builtin_code(ty),
+        Ty::Int(_) | Ty::Float(Float::F32) => Some(KIND_WITNESS - super::kind_code(ty.clone())),
+        ty => builtin_code(ty),
+    }
+}
+
+/// The builtin code (`builtin_code`) a witness code stands for: an integer
+/// kind's or `f32`'s own (`witness_code`) is its runtime type's.
+pub(super) const fn witness_key(code: INT) -> INT {
+    if code == KIND_WITNESS - F32_KIND {
+        -3
+    } else if code <= KIND_WITNESS {
+        -2
+    } else {
+        code
+    }
+}
+
+/// The statement a dispatcher runs before it compares its witness with
+/// builtin codes, after the arms that read a witness's kind: the witness
+/// as its builtin code (`witness_key`).
+pub(super) fn witness_key_statement() -> String {
+    format!(
+        "if __rawr_witness == {} {{ __rawr_witness = -3; }} else if __rawr_witness <= \
+         {KIND_WITNESS} {{ __rawr_witness = -2; }}\n",
+        KIND_WITNESS - F32_KIND
+    )
+}
+
 /// The runtime type key of an `Rc` or `Arc`, which owns no impl: what a
 /// std trait's dispatcher derefs it by.
 pub(super) const COUNTED_KEY: crate::INT = -12;
@@ -2154,10 +2197,10 @@ impl WitnessedOp {
     }
 }
 
-/// The runtime type a witness code names (`builtin_code`, or a script
+/// The runtime type a witness code names (`witness_code`, or a script
 /// type's id's number).
 pub(super) fn witness_type(models: &Models, code: crate::INT) -> Option<intrinsic::Type> {
-    Some(match code {
+    Some(match witness_key(code) {
         -2 => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
         -3 => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
         -4 => intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>()),

@@ -1702,3 +1702,150 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn language_a_generic_bounded_by_from_str_parses_as_std_does() {
+    // `T: FromStr` in a generic body: `s.parse()` and `T::from_str(s)`
+    // run std's impl for the type each call gives `T`, by its kind, as
+    // rustc's monomorphised body does (#2464, #2465).
+    let output = printed(
+        r#"
+use std::str::FromStr;
+
+fn parsed<T: FromStr>(s: &str) -> Option<T> {
+    s.parse().ok()
+}
+
+fn from_str<T: FromStr>(s: &str) -> Option<T> {
+    T::from_str(s).ok()
+}
+
+fn turbofish<T: std::str::FromStr>(s: &str) -> Option<T> {
+    s.parse::<T>().ok()
+}
+
+#[derive(Debug)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl FromStr for Point {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (x, y) = s.split_once(',').ok_or("no comma".to_string())?;
+        Ok(Point {
+            x: x.parse().map_err(|_| "bad x".to_string())?,
+            y: y.parse().map_err(|_| "bad y".to_string())?,
+        })
+    }
+}
+
+fn main() {
+    let n: Option<u8> = parsed("200");
+    println!("{:?} {:?} {:?}", n, parsed::<u8>("300"), parsed::<u8>("-1"));
+    println!("{:?} {:?}", parsed::<i8>("-128"), parsed::<i8>("128"));
+    println!("{:?} {:?}", parsed::<i64>("-9000000000"), parsed::<u64>("18446744073709551615"));
+    println!("{:?} {:?}", parsed::<f64>("2.5"), parsed::<f32>("0.1"));
+    println!("{:?} {:?}", parsed::<String>("hi"), parsed::<bool>("true"));
+    println!("{:?} {:?}", parsed::<char>("x"), parsed::<char>("xy"));
+    let m: Option<u8> = from_str("200");
+    println!("{:?} {:?} {:?}", m, from_str::<u8>("300"), from_str::<bool>("no"));
+    println!("{:?} {:?}", turbofish::<i32>("42"), turbofish::<u16>("70000"));
+    println!("{:?} {:?}", parsed::<Point>("1,2"), from_str::<Point>("1;2"));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Some(200) None None\nSome(-128) None\nSome(-9000000000) Some(18446744073709551615)\n\
+         Some(2.5) Some(0.1)\nSome(\"hi\") Some(true)\nSome('x') None\nSome(200) None None\n\
+         Some(42) None\nSome(Point { x: 1, y: 2 }) None\n"
+    );
+}
+
+#[test]
+fn language_a_generic_bounded_by_a_std_trait_calls_its_functions() {
+    // `T::default()`, `T::from(b)` and a parse whose error is `T::Err`, at
+    // the types each call gives `T`.
+    let output = printed(
+        r#"
+use std::str::FromStr;
+
+fn fallback<T: Default>() -> T {
+    T::default()
+}
+
+fn widened<T: From<u8>>(b: u8) -> T {
+    T::from(b)
+}
+
+fn checked<T: FromStr>(s: &str) -> Result<T, T::Err> {
+    s.parse()
+}
+
+#[derive(Debug, Default)]
+struct Tally {
+    n: u32,
+    label: String,
+}
+
+fn main() {
+    let n: i32 = fallback();
+    let s: String = fallback();
+    println!("{:?} {:?} {:?} {:?}", n, s, fallback::<u8>(), fallback::<Tally>());
+    let w: u32 = widened(7);
+    println!("{} {} {}", w, widened::<i64>(9), widened::<u16>(255));
+    println!("{:?} {:?}", checked::<u8>("12"), checked::<u8>("x").is_err());
+    match checked::<i32>("q") {
+        Ok(v) => println!("{v}"),
+        Err(e) => println!("{e}"),
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "0 \"\" 0 Tally { n: 0, label: \"\" }\n7 9 255\nOk(12) true\n\
+         invalid digit found in string\n"
+    );
+}
+
+#[test]
+fn language_a_from_str_bound_no_impl_meets_is_e0277() {
+    // rustc's E0277 at the call, for a program type without `FromStr`.
+    let report = refused(
+        r#"
+use std::str::FromStr;
+
+fn parsed<T: FromStr>(s: &str) -> Option<T> {
+    s.parse().ok()
+}
+
+struct Plain;
+
+fn main() {
+    let p: Option<Plain> = parsed("x");
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `Plain: FromStr` is not satisfied"),
+        "{report}"
+    );
+    assert!(
+        report.contains("11 |     let p: Option<Plain> = parsed(\"x\");"),
+        "{report}"
+    );
+    // And at the parse, for a generic the body doesn't bound by it.
+    let report = refused(
+        "fn bad<T>(s: &str) -> Option<T> {\n    s.parse().ok()\n}\nfn main() {}\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `T: FromStr` is not satisfied"),
+        "{report}"
+    );
+}

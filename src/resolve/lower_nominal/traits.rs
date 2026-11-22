@@ -1284,7 +1284,8 @@ impl<'a> Parser<'a> {
             return true;
         }
         if arguments.is_empty() {
-            return false;
+            let resolved = self.inference.resolve(ty);
+            return self.std_implements(&resolved, trait_name, arguments);
         }
         // `PartialEq<Self>` and `PartialOrd<Self>`, their `Rhs = Self`
         // filled in: a derive or a builtin's comparison is with its own type.
@@ -1358,28 +1359,8 @@ impl<'a> Parser<'a> {
                 self.unifies(&resolved, &argument)
             };
         }
-        // std's impls of a std trait for a type std declares: `String:
-        // AsRef<str>`, `Box<u32>: AsMut<u32>` (D711 step 3). A bound's
-        // bare `str` reads as a `&str`, and is std's unsized `str`.
-        if self.std_trait(trait_name)
-            && self.std_declared(&resolved)
-            && let Some(definition) = crate::resolve::std_trait::anywhere(trait_name)
-        {
-            let arguments = arguments
-                .iter()
-                .map(|argument| match self.inference.resolve(argument) {
-                    Ty::Str => Ty::UnsizedStr,
-                    argument => argument,
-                })
-                .collect::<Vec<_>>();
-            // Matched by unification, so `Vec<{integer}>: BorrowMut<Vec<i32>>`
-            // holds, and checked only: nothing it binds is kept.
-            let checkpoint = self.inference.checkpoint();
-            let holds = std_impl::holds(self, definition, &resolved, &arguments, true, 0).is_ok();
-            self.inference.rollback(checkpoint);
-            if holds {
-                return true;
-            }
+        if self.std_implements(&resolved, trait_name, arguments) {
+            return true;
         }
         let candidates: Vec<Vec<Ty>> = match self.inference.resolve(ty) {
             Ty::Dyn(name, bindings) if name == trait_name => vec![dyn_arguments(&bindings)],
@@ -1403,6 +1384,32 @@ impl<'a> Parser<'a> {
                     .zip(arguments)
                     .all(|(candidate, argument)| self.unifies(candidate, argument))
         })
+    }
+
+    /// Whether std's impls of the std trait `trait_name` cover `resolved`,
+    /// a type std declares, with `arguments`: `String: AsRef<str>`,
+    /// `Box<u32>: AsMut<u32>`, `u8: FromStr` (D711 step 3). A bound's bare
+    /// `str` reads as a `&str`, and is std's unsized `str`.
+    fn std_implements(&mut self, resolved: &Ty, trait_name: &str, arguments: &[Ty]) -> bool {
+        if !self.std_trait(trait_name) || !self.std_declared(resolved) {
+            return false;
+        }
+        let Some(definition) = crate::resolve::std_trait::anywhere(trait_name) else {
+            return false;
+        };
+        let arguments = arguments
+            .iter()
+            .map(|argument| match self.inference.resolve(argument) {
+                Ty::Str => Ty::UnsizedStr,
+                argument => argument,
+            })
+            .collect::<Vec<_>>();
+        // Matched by unification, so `Vec<{integer}>: BorrowMut<Vec<i32>>`
+        // holds, and checked only: nothing it binds is kept.
+        let checkpoint = self.inference.checkpoint();
+        let holds = std_impl::holds(self, definition, resolved, &arguments, true, 0).is_ok();
+        self.inference.rollback(checkpoint);
+        holds
     }
 
     /// Whether std's `impl From<source> for target` holds (D711 step 3),

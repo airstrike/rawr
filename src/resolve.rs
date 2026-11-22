@@ -3443,8 +3443,9 @@ fn resolve_methods(
     declare_facade_traits(items, host)?;
     let items = items.as_mut_slice();
     elaborate_supertraits(items)?;
-    resolve_projections(items)?;
-    let traits = trait_table(items, host)?;
+    let std_traits = std_trait::declarations(items, host);
+    resolve_projections(items, &std_traits)?;
+    let traits = trait_table(items, std_traits)?;
     fill_trait_defaults(items, &traits);
     check_generic_arity(items, &traits)?;
     check_trait_bounds(items, &traits)?;
@@ -4442,7 +4443,7 @@ fn declare_facade_traits(
 /// of that name.
 fn trait_table(
     items: &[item::Shell],
-    host: &host::Registry,
+    std_traits: BTreeMap<ImmutableString, item::Trait>,
 ) -> Result<BTreeMap<ImmutableString, (program::source::Id, item::Trait)>, LocatedError> {
     let mut traits = BTreeMap::<ImmutableString, (program::source::Id, item::Trait)>::new();
     for shell in items {
@@ -4463,7 +4464,7 @@ fn trait_table(
             ));
         }
     }
-    for (name, declared) in std_trait::declarations(items, host) {
+    for (name, declared) in std_traits {
         traits
             .entry(name)
             .or_insert((program::source::Id::ROOT, declared));
@@ -4620,22 +4621,31 @@ fn is_self(ty: &type_ref::Type) -> bool {
 /// bounding `T` that declares `Output`, `Self::Output` of the trait being
 /// declared, `Square::Output` of the one impl for `Square` giving it, and
 /// `<T as Shape>::Output` of `Shape`. Two candidate traits are ambiguous,
-/// as in Rust.
-fn resolve_projections(items: &mut [item::Shell]) -> Result<(), LocatedError> {
-    let declared: BTreeMap<ImmutableString, Box<[ImmutableString]>> = items
+/// as in Rust. A std trait the crate names and doesn't declare itself
+/// (`std_traits`) declares std's: `T::Err` of `T: FromStr`.
+fn resolve_projections(
+    items: &mut [item::Shell],
+    std_traits: &BTreeMap<ImmutableString, item::Trait>,
+) -> Result<(), LocatedError> {
+    let associated = |declared: &item::Trait| -> Box<[ImmutableString]> {
+        declared
+            .associated
+            .iter()
+            .map(|name| name.text.clone())
+            .collect()
+    };
+    let mut declared: BTreeMap<ImmutableString, Box<[ImmutableString]>> = items
         .iter()
         .filter_map(|shell| match &shell.kind {
-            item::Kind::Trait(declared) => Some((
-                declared.name.text.clone(),
-                declared
-                    .associated
-                    .iter()
-                    .map(|name| name.text.clone())
-                    .collect(),
-            )),
+            item::Kind::Trait(declared) => Some((declared.name.text.clone(), associated(declared))),
             _ => None,
         })
         .collect();
+    for (name, std_trait) in std_traits {
+        declared
+            .entry(name.clone())
+            .or_insert_with(|| associated(std_trait));
+    }
     let mut implemented: BTreeMap<(type_def::Id, ImmutableString), Vec<ImmutableString>> =
         BTreeMap::new();
     for shell in items.iter() {
