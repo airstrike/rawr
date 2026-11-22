@@ -3203,7 +3203,9 @@ fn impl_outputs(ty: &crate::item::type_ref::Type, found: &mut Vec<crate::item::G
 /// Each `impl Bounds` of program or std traits in `output`, of the ones
 /// `written` there (`impl_outputs`, `type_ref::opaque_output`), given its
 /// function, named at `function` in `source`, and with its bounds read as
-/// a type parameter's (D1109).
+/// a type parameter's (D1109). Each captures every type parameter `types`
+/// has in scope, its function's and its impl's, as rustc's opaque types
+/// do: its type's arguments are theirs, which a call substitutes.
 fn opaque_outputs(
     mut written: Vec<crate::item::GenericParam>,
     output: &mut type_ref::Type,
@@ -3212,54 +3214,77 @@ fn opaque_outputs(
     types: &BTreeMap<ImmutableString, type_ref::Target>,
     host: &host::Registry,
     #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
-) -> Result<Box<[(type_ref::Opaque, item::Generic)]>, Error> {
+) -> Result<Box<[(type_ref::Opaque, item::OpaqueOutput)]>, Error> {
+    /// Where an opaque output is named: its function, and the type
+    /// parameters it captures.
+    struct Naming<'a> {
+        at: &'a dyn Fn(usize) -> type_ref::Opaque,
+        captured: &'a [ImmutableString],
+    }
     fn name_opaque(
         ty: &mut type_ref::Type,
         written: &mut Vec<crate::item::GenericParam>,
-        at: &dyn Fn(usize) -> type_ref::Opaque,
+        naming: &Naming<'_>,
         named: &mut Vec<(type_ref::Opaque, crate::item::GenericParam)>,
     ) {
         match ty {
             type_ref::Type::Unit(_) => {}
             type_ref::Type::Tuple { members, .. } => {
                 for member in members.iter_mut() {
-                    name_opaque(member, written, at, named);
+                    name_opaque(member, written, naming, named);
                 }
             }
             type_ref::Type::Reference { target, .. } => {
-                name_opaque(target, written, at, named);
+                name_opaque(target, written, naming, named);
             }
             type_ref::Type::Path(path) => {
+                for argument in path.arguments.iter_mut() {
+                    if let type_ref::Argument::Type(ty) = argument {
+                        name_opaque(ty, written, naming, named);
+                    }
+                }
                 if path.target == type_ref::Target::Opaque(None)
                     && let Some(index) = written
                         .iter()
                         .position(|generic| generic.name.span == path.span)
                 {
-                    let opaque = at(named.len());
+                    let opaque = (naming.at)(named.len());
                     path.target = type_ref::Target::Opaque(Some(opaque));
+                    path.arguments = naming
+                        .captured
+                        .iter()
+                        .map(|name| {
+                            type_ref::Argument::Type(type_ref::Type::Path(type_ref::Path {
+                                name: name.clone(),
+                                target: type_ref::Target::Parameter,
+                                arguments: Box::default(),
+                                span: path.span,
+                            }))
+                        })
+                        .collect();
                     let mut generic = written.swap_remove(index);
                     generic.name.text = path.name.clone();
                     named.push((opaque, generic));
                 }
-                for argument in path.arguments.iter_mut() {
-                    if let type_ref::Argument::Type(ty) = argument {
-                        name_opaque(ty, written, at, named);
-                    }
-                }
             }
         }
     }
+    let captured = types
+        .iter()
+        .filter(|(_, target)| **target == type_ref::Target::Parameter)
+        .map(|(name, _)| name.clone())
+        .collect::<Box<[_]>>();
     let mut named = Vec::new();
     let at = |index| type_ref::Opaque::new(source, function, index);
-    name_opaque(output, &mut written, &at, &mut named);
+    let naming = Naming {
+        at: &at,
+        captured: &captured,
+    };
+    name_opaque(output, &mut written, &naming, &mut named);
     if named.is_empty() {
         return Ok(Box::default());
     }
     let (opaque, named): (Vec<_>, Vec<_>) = named.into_iter().unzip();
-    let spans = named
-        .iter()
-        .map(|generic| generic.name.span)
-        .collect::<Vec<_>>();
     let (_, generics) = generic_scope(
         named.into_boxed_slice(),
         types,
@@ -3267,40 +3292,14 @@ fn opaque_outputs(
         #[cfg(feature = "rust-import")]
         native,
     )?;
-    // A bound naming the function's or its impl's type parameters (`impl
-    // Into<T>`) is its opaque type at each of their instances, which a
-    // caller doesn't yet read.
-    for (generic, span) in generics.iter().zip(spans) {
-        let names_parameter = generic
-            .trait_arguments
-            .iter()
-            .flat_map(|(_, arguments)| arguments.iter())
-            .chain(generic.projections.iter().map(|(_, _, ty)| ty))
-            .any(names_type_parameter);
-        if names_parameter {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "`impl Trait` output whose bound names a generic parameter".into(),
-                source: span,
-            });
-        }
-    }
-    Ok(opaque.into_iter().zip(generics).collect())
-}
-
-/// Whether `ty` names a type parameter.
-fn names_type_parameter(ty: &type_ref::Type) -> bool {
-    match ty {
-        type_ref::Type::Unit(_) => false,
-        type_ref::Type::Tuple { members, .. } => members.iter().any(names_type_parameter),
-        type_ref::Type::Reference { target, .. } => names_type_parameter(target),
-        type_ref::Type::Path(path) => {
-            path.target == type_ref::Target::Parameter
-                || path.arguments.iter().any(|argument| match argument {
-                    type_ref::Argument::Type(ty) => names_type_parameter(ty),
-                    type_ref::Argument::Lifetime(_) => false,
-                })
-        }
-    }
+    Ok(opaque
+        .into_iter()
+        .zip(generics)
+        .map(|(opaque, bounds)| {
+            let captured = captured.clone();
+            (opaque, item::OpaqueOutput { bounds, captured })
+        })
+        .collect())
 }
 
 /// Whether `ty` is written `&mut Formatter`, by any path to it.
@@ -6400,7 +6399,11 @@ fn type_name_of(ty: &type_ref::Type, canonical: bool) -> String {
             };
             if let type_ref::Target::Projection(base, _) = &path.target {
                 format!("{}::{}", name(base), path.name)
-            } else if arguments.is_empty() {
+            } else if arguments.is_empty()
+                // An opaque output's arguments are the parameters it
+                // captures, which it never writes (D1109).
+                || matches!(path.target, type_ref::Target::Opaque(_))
+            {
                 written
             } else {
                 format!("{written}<{}>", arguments.join(", "))

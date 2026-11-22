@@ -50,7 +50,10 @@ impl<'a> Parser<'a> {
     /// The bounds of the opaque output `opaque` (D1109), which every body
     /// knows it by.
     pub(super) fn opaque_bounds(&self, opaque: &type_ref::Opaque) -> Option<&item::Generic> {
-        self.models.opaque_outputs.get(opaque)
+        self.models
+            .opaque_outputs
+            .get(opaque)
+            .map(|output| &output.bounds)
     }
 
     /// The body of a function whose output `output` writes opaque types
@@ -61,12 +64,14 @@ impl<'a> Parser<'a> {
         let ty = Ty::from_resolved(output);
         let outputs = Shared::clone(&self.models.opaque_outputs);
         let mut hidden = BTreeMap::new();
-        for (opaque, generic) in outputs.iter() {
-            let own = |ty: &Ty| matches!(ty, Ty::Param(_, Parameter::Opaque(own)) if own == opaque);
+        for (opaque, opaque_output) in outputs.iter() {
+            let own =
+                |ty: &Ty| matches!(ty, Ty::Param(_, Parameter::Opaque(own, _)) if own == opaque);
             if !contains(&ty, &own) {
                 continue;
             }
-            let fresh = self.fresh_generics(std::slice::from_ref(generic), output.span());
+            let generic = std::slice::from_ref(&opaque_output.bounds);
+            let fresh = self.fresh_generics(generic, output.span());
             if let Some(fresh) = fresh.into_values().next() {
                 hidden.insert(*opaque, fresh);
             }
@@ -75,7 +80,7 @@ impl<'a> Parser<'a> {
             return;
         }
         self.return_ty = Some(substitute(&ty, &|ty| match ty {
-            Ty::Param(_, Parameter::Opaque(opaque)) => hidden.get(opaque).cloned(),
+            Ty::Param(_, Parameter::Opaque(opaque, _)) => hidden.get(opaque).cloned(),
             _ => None,
         }));
         self.hidden_outputs = hidden;
@@ -605,10 +610,17 @@ impl<'a> Parser<'a> {
                 witness_variable(name)
             }
             // An opaque output's witness is its hidden type's, which the
-            // generated text reads once every body is checked (D1109).
-            Ty::Param(_, Parameter::Opaque(opaque)) => {
+            // generated text reads once every body is checked (D1109),
+            // given its type arguments' for a hidden type that is one.
+            Ty::Param(_, Parameter::Opaque(opaque, arguments)) => {
                 let [source, line, column, index] = opaque.numbers();
-                format!("{HIDDEN_DISPATCHER}({source},{line},{column},{index})")
+                let arguments = self
+                    .opaque_argument_witnesses(arguments, parameter, span)
+                    .iter()
+                    .map(|witness| witness.as_deref().unwrap_or("()"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{HIDDEN_DISPATCHER}({source},{line},{column},{index},[{arguments}])")
             }
             Ty::Infer(_) => {
                 return Err(Error::TypeAnnotationsNeeded {
@@ -627,6 +639,27 @@ impl<'a> Parser<'a> {
                 });
             }
         })
+    }
+
+    /// The witness of each type argument of an opaque output at a call,
+    /// which its hidden type's is where it is one of them (D1109): `None`
+    /// for one with none, or itself an opaque output.
+    fn opaque_argument_witnesses(
+        &self,
+        arguments: &[Ty],
+        parameter: &str,
+        span: Span,
+    ) -> Box<[Option<String>]> {
+        arguments
+            .iter()
+            .map(|argument| {
+                let argument = self.inference.resolve(argument);
+                if argument.is_opaque() {
+                    return None;
+                }
+                self.witness(&argument, parameter, span).ok()
+            })
+            .collect()
     }
 
     /// Write each pending witness over its placeholder (same length, so
@@ -717,8 +750,17 @@ impl<'a> Parser<'a> {
                 ty = self.inference.resolve(target);
             }
             let witness = self.witness(&ty, &parameter, span)?;
-            if let Ty::Param(_, Parameter::Opaque(opaque)) = ty {
-                self.witnessed_opaques.push((opaque, span));
+            if let Ty::Param(_, Parameter::Opaque(opaque, arguments)) = &ty {
+                let arguments = self
+                    .opaque_argument_witnesses(arguments, &parameter, span)
+                    .iter()
+                    .map(Option::is_some)
+                    .collect();
+                self.witnessed_opaques.push(Witnessed {
+                    opaque: *opaque,
+                    span,
+                    arguments,
+                });
             }
             if witness.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -1172,6 +1214,12 @@ pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
     let each =
         |types: &[Ty]| -> Box<[Ty]> { types.iter().map(|ty| substitute(ty, replaced)).collect() };
     match ty {
+        // An opaque output's type arguments too (`impl Into<T>` at `T`).
+        Ty::Param(name, Parameter::Opaque(opaque, arguments)) => {
+            replaced(ty).unwrap_or_else(|| {
+                Ty::Param(name.clone(), Parameter::Opaque(*opaque, each(arguments)))
+            })
+        }
         Ty::Param(..) => replaced(ty).unwrap_or_else(|| ty.clone()),
         Ty::Option(element) => Ty::Option(Box::new(substitute(element, replaced))),
         Ty::Boxed(target) => Ty::Boxed(Box::new(substitute(target, replaced))),
@@ -1368,10 +1416,12 @@ pub(super) fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
         functions
             .iter()
             .flat_map(|function| {
-                function
-                    .generics
-                    .iter()
-                    .chain(function.opaque_outputs.iter().map(|(_, generic)| generic))
+                function.generics.iter().chain(
+                    function
+                        .opaque_outputs
+                        .iter()
+                        .map(|(_, output)| &output.bounds),
+                )
             })
             .collect()
     }
@@ -1389,9 +1439,25 @@ pub(super) fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
     }
 }
 
+/// The substitution of the type parameters an opaque output captures by
+/// its type's `arguments` (D1109): what its bounds name them at.
+pub(super) fn opaque_substitution(
+    output: &item::OpaqueOutput,
+    arguments: &[Ty],
+) -> BTreeMap<ImmutableString, Ty> {
+    output
+        .captured
+        .iter()
+        .cloned()
+        .zip(arguments.iter().cloned())
+        .collect()
+}
+
 /// Every opaque output of the program's functions (D1109), which
 /// any body reads as it reads its own type parameters.
-pub(super) fn opaque_outputs(items: &[item::Shell]) -> BTreeMap<type_ref::Opaque, item::Generic> {
+pub(super) fn opaque_outputs(
+    items: &[item::Shell],
+) -> BTreeMap<type_ref::Opaque, item::OpaqueOutput> {
     items
         .iter()
         .flat_map(|shell| match &shell.kind {

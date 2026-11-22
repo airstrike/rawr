@@ -1448,10 +1448,24 @@ impl<'a> Parser<'a> {
         if self.unify_type(expected, actual) {
             return Ok(());
         }
-        let (expected, actual) = (
+        let (mut expected, mut actual) = (
             self.inference.resolve(expected),
             self.inference.resolve(actual),
         );
+        // One function's opaque output at two type arguments: rustc's label
+        // names the arguments that differ (`expected `Sq`, found `Ci``).
+        while let (
+            Ty::Param(_, Parameter::Opaque(want, wanted)),
+            Ty::Param(_, Parameter::Opaque(have, had)),
+        ) = (&expected, &actual)
+            && want == have
+            && let Some((wanted, had)) = wanted
+                .iter()
+                .zip(had.iter())
+                .find(|(wanted, had)| wanted != had)
+        {
+            (expected, actual) = (wanted.clone(), had.clone());
+        }
         if let Some(error) = self.argument_signature(&expected, &actual, span) {
             return Err(error);
         }

@@ -148,7 +148,7 @@ pub(super) struct Tables {
     pub(super) std_traits: BTreeSet<ImmutableString>,
     /// Every function's opaque outputs by name (D1109): type parameters
     /// no caller chooses, which every body knows by their bounds.
-    pub(super) opaque_outputs: Shared<BTreeMap<type_ref::Opaque, item::Generic>>,
+    pub(super) opaque_outputs: Shared<BTreeMap<type_ref::Opaque, item::OpaqueOutput>>,
     pub(super) functions: BTreeMap<(crate::program::source::Id, ImmutableString), ScriptFunction>,
     pub(super) functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
     pub(super) sources: crate::program::source::Table,

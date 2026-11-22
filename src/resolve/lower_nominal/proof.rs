@@ -664,7 +664,7 @@ impl<'a> Parser<'a> {
             }
             // A generic parameter has exactly its bounds' capabilities, and
             // an opaque output its written bounds' (D1109).
-            Ty::Param(_, Parameter::Opaque(opaque)) => self
+            Ty::Param(_, Parameter::Opaque(opaque, _)) => self
                 .opaque_bounds(&opaque)
                 .is_some_and(|generic| generic.bounds.contains(capability)),
             Ty::Param(name, _) => self

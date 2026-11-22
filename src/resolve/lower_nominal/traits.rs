@@ -1299,6 +1299,15 @@ impl<'a> Parser<'a> {
         // The prelude's blanket impls: `impl<T> From<T> for T`, its builtin
         // conversions, and `impl<T, U: From<T>> Into<U> for T`.
         let resolved = self.inference.resolve(ty);
+        // `impl<T> From<T> for T` holds for a type parameter too: `T:
+        // Into<T>` of `fn conv<T>(t: T) -> impl Into<T> { t }`.
+        if let [argument] = arguments
+            && matches!(resolved, Ty::Param(..) | Ty::Projection(..))
+            && self.prelude_trait(trait_name)
+            && self.inference.resolve(argument) == resolved
+        {
+            return true;
+        }
         if let [argument] = arguments
             && !matches!(resolved, Ty::Param(..) | Ty::Projection(..))
             && self.prelude_trait(trait_name)
@@ -1529,7 +1538,7 @@ impl<'a> Parser<'a> {
                         .get(name)
                         .map(|traits| traits.to_vec())
                         .unwrap_or_default(),
-                    Parameter::Opaque(opaque) => self
+                    Parameter::Opaque(opaque, _) => self
                         .opaque_bounds(opaque)
                         .map(|generic| {
                             generic
@@ -1785,12 +1794,27 @@ impl<'a> Parser<'a> {
     /// associated type's (`type Item: Into<String>;`).
     pub(super) fn bound_trait_arguments(&self, ty: &Ty, trait_name: &str) -> Vec<Box<[Ty]>> {
         match ty {
-            Ty::Param(_, Parameter::Opaque(opaque)) => self
-                .opaque_bounds(opaque)
+            // `impl Into<T>` at its call's `T` (D1109).
+            Ty::Param(_, Parameter::Opaque(opaque, captured)) => self
+                .models
+                .opaque_outputs
+                .get(opaque)
                 .into_iter()
-                .flat_map(|generic| generic.trait_arguments.iter())
-                .filter(|(bound, _)| bound == trait_name)
-                .map(|(_, arguments)| arguments.iter().map(Ty::from_resolved).collect())
+                .flat_map(|output| {
+                    let substitution = opaque_substitution(output, captured);
+                    output
+                        .bounds
+                        .trait_arguments
+                        .iter()
+                        .filter(|(bound, _)| bound == trait_name)
+                        .map(move |(_, arguments)| {
+                            arguments
+                                .iter()
+                                .map(|ty| instantiate(&Ty::from_resolved(ty), &substitution))
+                                .collect()
+                        })
+                        .collect::<Vec<_>>()
+                })
                 .collect(),
             Ty::Param(name, _) => self
                 .generic_trait_arguments
