@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-22",
-  "version": "0.5.17",
+  "version": "0.5.18",
   "examples": {
     "running": 55,
     "total": 56,
@@ -11,6 +11,30 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.18",
+        "date": "2026-11-22",
+        "entries": [
+          {"text":"A pattern naming a float constant matches its value, and a suffixed number can end a match or if head.","issues":[2508]},
+          {"text":"A parameter pattern's literal takes its suffix, and a literal of one integer or float type no longer matches another.","issues":[2510]},
+          {"text":"match x { ref v => .. } and ref mut arms bind a borrow of the matched value for every type.","issues":[194]},
+          {"text":"An element borrow past the end panics where the borrow is made, as rustc's does.","issues":[410]},
+          {"text":"A primitive op= through a RefCell borrow evaluates its right side first, as rustc does.","issues":[3]},
+          {"text":"A whole Option<&mut T> binding beside &mut bindings of its value works for a call's value.","issues":[166]},
+          {"text":"A part with drop glue moves out below a field or a member, and the rest drops where rustc drops it.","issues":[196]},
+          {"text":"`<T>::f(..)`, a qualified path without a trait, runs as `T::f(..)`.","issues":[378]},
+          {"text":"A generic trait's associated type bound may name the trait's parameters (`type Out: Iterator<Item = T>`), and an impl that breaks such a bound is rustc's E0271.","issues":[382]},
+          {"text":"A turbofish counts a parameter bounded by `Fn` or `Iterator<Item = T>`, and a wrong count is rustc's E0107.","issues":[408]},
+          {"text":"A closure argument is read after the argument that fixes its parameter types, as rustc checks closures last.","issues":[409]},
+          {"text":"`where Self: Sized` on a trait method parses and keeps the method out of `dyn Trait`. In a free function it is E0411.","issues":[802]},
+          {"text":"`?` converts an error through std's `From` impls, such as `&str` into `String`.","issues":[1034]},
+          {"text":"An `Err(e)` arm where a `Result<_, Box<dyn Error>>` is expected is rustc's E0308 instead of being boxed.","issues":[1430]},
+          {"text":"A prelude type imported under another name (`use std::string::String as Text;`) works in bodies, and `pub use inner::*;` re-exports inner's names, each no further than its item reaches.","issues":[810,1349]},
+          {"text":"A Read, Write or BufRead method of Stdin, Stdout, Stderr, File or Cursor needs its trait in scope, with rustc's E0599 and its `use` help, and a Cursor's lines run.","issues":[1427]},
+          {"text":"std::iter's repeat, repeat_n, repeat_with, once, once_with, empty, from_fn and successors run, as far as the chain pulls.","issues":[2593]},
+          {"text":"std's io::BufReader runs over a File, Stdin or Cursor, and io::BufWriter over a File, flushing when it is dropped.","issues":[2580]}
+        ]
+      },
       {
         "version": "0.5.17",
         "date": "2026-11-22",
@@ -3780,7 +3804,7 @@
   "items": [
     {"issue":1,"title":"A method call through a borrow guard (`text.write().push_str(..)`) calls the guard method twice…","state":"retired","category":"Divergences from rustc"},
     {"issue":2,"title":"A panic printed `error[RAWR-RUNTIME-THROW]` instead of rustc's panic text","state":"closed","category":"Divergences from rustc","release":"0.1.0"},
-    {"issue":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"open","category":"Divergences from rustc"},
+    {"issue":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":4,"title":"`VecDeque` is type-checked as a `Vec`","state":"retired","category":"Divergences from rustc"},
     {"issue":5,"title":"`write!` works without `use std::fmt::Write`","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":6,"title":"A `Box<dyn Error>` coerces without `Box::new` or `.into()`","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3943,7 +3967,7 @@
     {"issue":163,"title":"A `&mut` binding of a slice pattern's rest (`[first, rest @ ..] = &mut v[..]`) and a catch-all…","state":"open","category":"Borrow checker (D572)"},
     {"issue":164,"title":"A closure that uses a `&mut` pattern binding is refused, because a closure runs in its own scope…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
     {"issue":165,"title":"Guard places still copy: each use copies the guard's whole value out and back, and copies the…","state":"open","category":"Borrow checker (D572)"},
-    {"issue":166,"title":"A whole `Option<&mut T>` catch-all binding beside `&mut` bindings of its value is refused","state":"open","category":"Borrow checker (D572)"},
+    {"issue":166,"title":"A whole `Option<&mut T>` catch-all binding beside `&mut` bindings of its value is refused","state":"closed","category":"Borrow checker (D572)","release":"0.5.18"},
     {"issue":167,"title":"Changing a struct field through a binding (`row.list.push(9)`) copies the field and stores it…","state":"closed","category":"Borrow checker (D572)","release":"0.2.6"},
     {"issue":168,"title":"An or-pattern whose alternatives use unannotated integers and `None` is refused by type inference","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
     {"issue":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"closed","category":"rawr-iced (D586)"},
@@ -3971,9 +3995,9 @@
     {"issue":191,"title":"A trait's default body is lowered only inside an impl that receives it, so one no impl receives…","state":"open","category":"Borrow checker (D572)"},
     {"issue":192,"title":"`static` items are parsed as `const`, so moving out of a static (E0507) is left to rustc","state":"closed","category":"Borrow checker (D572)","release":"0.5.16"},
     {"issue":193,"title":"The closure kind a use requires (`Fn` or `FnMut` bounds) isn't read, so a closure that moves out…","state":"open","category":"Borrow checker (D572)"},
-    {"issue":194,"title":"`match x { ref v => .. }` isn't lowered (\"'=>' after a match pattern\"), and on scalars it…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":194,"title":"`match x { ref v => .. }` isn't lowered (\"'=>' after a match pattern\"), and on scalars it…","state":"closed","category":"Borrow checker (D572)","release":"0.5.18"},
     {"issue":195,"title":"`let o = v.last_mut(); let r = o.unwrap(); *r = 9;` is refused as \"Cannot mutate immutable…","state":"closed","category":"Borrow checker (D572)","release":"0.5.16"},
-    {"issue":196,"title":"Moving a member or nested field whose type has drop glue is refused as unsupported, since only…","state":"open","category":"Borrow checker (D572)"},
+    {"issue":196,"title":"Moving a member or nested field whose type has drop glue is refused as unsupported, since only…","state":"closed","category":"Borrow checker (D572)","release":"0.5.18"},
     {"issue":197,"title":"A `break value` move is recorded after the jump, so the move check doesn't follow it","state":"retired","category":"Borrow checker (D572)"},
     {"issue":198,"title":"The list of `Option` and `Result` methods that take `&self` (`builtin_enum_receiver`) is kept by…","state":"retired","category":"Borrow checker (D572)"},
     {"issue":199,"title":"Lowering one function takes time quadratic in its length, in v0.1.0 and on main alike","state":"open","category":"Borrow checker (D572)"},
@@ -4155,11 +4179,11 @@
     {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"},
     {"issue":376,"title":"`T::method(&t)` for a `&self` trait method through a generic parameter fails","state":"closed","category":"Divergences from rustc","release":"0.3.26"},
     {"issue":377,"title":"Closure argument whose Fn bound names a not-yet-inferred type rejects `*x`","state":"closed","category":"Divergences from rustc","release":"0.3.26"},
-    {"issue":378,"title":"Qualified path without a trait, `<T>::f(..)`, is unsupported","state":"open","category":"Divergences from rustc"},
+    {"issue":378,"title":"Qualified path without a trait, `<T>::f(..)`, is unsupported","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":379,"title":"`for` over an associated type bounded by plain `Iterator` is not iterable","state":"closed","category":"Divergences from rustc","release":"0.3.26"},
     {"issue":380,"title":"A script iterator struct can't fill `I: Iterator<Item = X>`","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
     {"issue":381,"title":"Impls for references beyond forwarding impls are refused","state":"open","category":"Divergences from rustc"},
-    {"issue":382,"title":"Equality in a generic trait's associated type bound is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":382,"title":"Equality in a generic trait's associated type bound is refused","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":383,"title":"`where` bounds on non-parameter types accept only Sized and auto traits","state":"closed","category":"Divergences from rustc","release":"0.5.6"},
     {"issue":384,"title":"An imported trait method whose meaning depends on which traits a block imports now runs","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.23"},
     {"issue":385,"title":"Each dependency crate's trait facts are kept under their own key, so a later run reuses them and…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.23"},
@@ -4185,9 +4209,9 @@
     {"issue":405,"title":"A project that depends on serde fails to build its runner","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.27"},
     {"issue":406,"title":"A struct that implements `Iterator` can be passed where a generic parameter takes…","state":"closed","category":"Divergences from rustc","release":"0.3.26"},
     {"issue":407,"title":"An iterator passed to a function is collected in full at the call","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
-    {"issue":408,"title":"A turbofish on a generic fn with an Fn parameter miscounts its arguments","state":"open","category":"Divergences from rustc"},
-    {"issue":409,"title":"A closure before the argument that fixes its generic parameter gets no types","state":"open","category":"Divergences from rustc"},
-    {"issue":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open","category":"Divergences from rustc"},
+    {"issue":408,"title":"A turbofish on a generic fn with an Fn parameter miscounts its arguments","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
+    {"issue":409,"title":"A closure before the argument that fixes its generic parameter gets no types","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
+    {"issue":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":411,"title":"One-time 'workspace manifest closure changed' drift on a fresh path-crate project","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.11"},
     {"issue":412,"title":"An imported type compared with a number is requested as a std provided method","state":"closed","category":"No glue (D593)","release":"0.3.30"},
     {"issue":413,"title":"An alias with defaulted parameters in expression position leaves them open","state":"closed","category":"No glue (D593)"},
@@ -4579,7 +4603,7 @@
     {"issue":799,"title":"The std table's toolchain is nightly, so methods stable only there resolve where stable rustc gives E0658","state":"open","category":"Divergences from rustc"},
     {"issue":800,"title":"A `&mut [T]` kept from `v.as_mut_slice()` or `d.make_contiguous()` can't be changed","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
     {"issue":801,"title":"`?Sized` bounds on generic parameters are refused","state":"open","category":"Divergences from rustc"},
-    {"issue":802,"title":"`where Self: Sized` on a trait method is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":802,"title":"`where Self: Sized` on a trait method is refused","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":803,"title":"Closures passed to Cell, RefCell, char and number methods get no parameter types from std","state":"open","category":"Divergences from rustc"},
     {"issue":804,"title":"A closure passed to a std method doesn't take its return type from the method's Fn bound","state":"open","category":"Divergences from rustc"},
     {"issue":805,"title":"A kept `iter_mut()` holds its Vec mutably borrowed while it lives","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
@@ -4587,7 +4611,7 @@
     {"issue":807,"title":"A bare `Reverse(x)` or `PhantomData` value with no `use` is refused as rustc refuses it","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":808,"title":"A module-relative std path such as `time::Duration` needs a `use` of its module, as in rustc","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":809,"title":"rustc's 'consider importing' help for a std name no `use` binds","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
-    {"issue":810,"title":"A std type imported under another name works in bodies","state":"open","category":"Divergences from rustc"},
+    {"issue":810,"title":"A std type imported under another name works in bodies","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":811,"title":"Changes through `&mut` or `ref mut` to a crate enum's number or String fields are lost","state":"open","category":"Divergences from rustc"},
     {"issue":812,"title":"Exhaustiveness on crate enums ignores literal and bool patterns below a variant","state":"closed","category":"Divergences from rustc","release":"0.5.14"},
     {"issue":813,"title":"A crate reading Arc::strong_count through &Arc sees the call's argument copies","state":"open","category":"Divergences from rustc"},
@@ -4811,7 +4835,7 @@
     {"issue":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"closed","category":"Divergences from rustc","release":"0.3.160"},
     {"issue":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"closed","category":"Divergences from rustc","release":"0.3.155"},
     {"issue":1033,"title":"A trait function called by its trait's path infers Self from the expected type","state":"open","category":"Divergences from rustc"},
-    {"issue":1034,"title":"? converts &str to String through From","state":"open","category":"Divergences from rustc"},
+    {"issue":1034,"title":"? converts &str to String through From","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":1035,"title":"u128 in a crate signature","state":"open","category":"Divergences from rustc"},
     {"issue":1036,"title":"Two functions' local items of the same name collide","state":"closed","category":"Divergences from rustc"},
     {"issue":1037,"title":"Infer a generic fn's type parameter from the let it's assigned to","state":"open","category":"Divergences from rustc"},
@@ -5126,7 +5150,7 @@
     {"issue":1346,"title":"The file watcher fails to start on a large project: `unable to start FSEvent stream`; watch the inputs, not the tree","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open","category":"Health"},
     {"issue":1348,"title":"In a single file with modules, a top-level statement such as `picks::Count(2)` or…","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
-    {"issue":1349,"title":"`pub use inner::*;` inside a module binds inner's names only within that module; rustc…","state":"open","category":"Divergences from rustc"},
+    {"issue":1349,"title":"`pub use inner::*;` inside a module binds inner's names only within that module; rustc…","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":1350,"title":"A new top-level file in a package tree beside its target/ is not seen before the next native read","state":"open","category":"Health"},
     {"issue":1351,"title":"A watched package tree covers its .git and nested packages","state":"open","category":"Health"},
     {"issue":1352,"title":"A crate generic called with a literal for an unsized str parameter reaches its own adapter in any registration order","state":"closed","category":"Health","release":"0.3.172"},
@@ -5204,10 +5228,10 @@
     {"issue":1424,"title":"rawr::universe loads a marked file against a binary's linked generated bindings and reloads it in process","state":"closed","category":"Importer","release":"0.3.172"},
     {"issue":1425,"title":"rawr-import generates a runner's sources without building it, for a build script to compile as…","state":"open","category":"Importer"},
     {"issue":1426,"title":"The generator emits a runner as a module of a host crate, and a `rawr_build::bindings()` for…","state":"open","category":"Importer"},
-    {"issue":1427,"title":"A non-prelude std trait's method (io::Write, BufRead, Read, Hasher) is callable out of scope…","state":"open","category":"Divergences from rustc"},
+    {"issue":1427,"title":"A non-prelude std trait's method (io::Write, BufRead, Read, Hasher) is callable out of scope…","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":1428,"title":"write! into a String with only std::io::Write in scope is accepted; rustc's E0599 says its trait…","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":1429,"title":"Two blocks' uses binding one name to different items collide, and items declared in a block are…","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
-    {"issue":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"open","category":"Divergences from rustc"},
+    {"issue":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":1431,"title":"Panics inside std (pow, sum, step_by, drain) name the call site where rustc names core's source file","state":"open","category":"Divergences from rustc"},
     {"issue":1432,"title":"A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"closed","category":"No glue (D593)","release":"0.3.172"},
     {"issue":1433,"title":"A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)"},
@@ -6284,9 +6308,9 @@
     {"issue":2505,"title":"A trait's `where` clauses aren't checked at its impls","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2506,"title":"rustc's E0277 help at a std impl (\"conditionally implemented for `Vec<T, A>`\") is missing","state":"open","category":"Divergences from rustc"},
     {"issue":2507,"title":"A method of an `I: Iterator` parameter (`i.count()`, `self.0.collect()`) is E0599","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
-    {"issue":2508,"title":"A pattern naming a float `const` binds a new name instead of matching its value","state":"open","category":"Divergences from rustc"},
+    {"issue":2508,"title":"A pattern naming a float `const` binds a new name instead of matching its value","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":2509,"title":"E0004 has no 'defined here' note for std's enums","state":"open","category":"Divergences from rustc"},
-    {"issue":2510,"title":"A parameter pattern's literal takes no suffix","state":"open","category":"Divergences from rustc"},
+    {"issue":2510,"title":"A parameter pattern's literal takes no suffix","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":2511,"title":"A macro fragment that starts but doesn't parse reports no-rules, not rustc's parser error","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
     {"issue":2512,"title":"An untyped closure called where it is written fails with E0308","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2513,"title":"A program trait's generic method called through its path with a turbofish panics","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
@@ -6356,7 +6380,7 @@
     {"issue":2577,"title":"A binding arm in a match on a scalar through a `&mut` binds the value, so `*n` is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2578,"title":"A store more than one field deep and a by-reference part binding over-approximate a value's borrows","state":"open","category":"Divergences from rustc"},
     {"issue":2579,"title":"std's `process::Command` builds a command (`arg`, `env`, `current_dir`) and runs it with `status`, giving its","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
-    {"issue":2580,"title":"std::io::BufReader (and BufWriter) over a File","state":"open","category":"Divergences from rustc"},
+    {"issue":2580,"title":"std::io::BufReader (and BufWriter) over a File","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
     {"issue":2581,"title":"reveal_tests' reuse test fails in some full lib runs and passes alone","state":"open","category":"Health"},
     {"issue":2582,"title":"A start re-prepared because its watcher saw a change, or because its read set went stale, says nothing and names no file","state":"open","category":"Health"},
     {"issue":2583,"title":"Overlapping impls are rawr's duplicate-method error, not rustc's E0119","state":"open","category":"Divergences from rustc"},
@@ -6369,8 +6393,21 @@
     {"issue":2590,"title":"A native module under a marked parent in a trampoline layout doesn't see the parent's macros","state":"open","category":"Divergences from rustc"},
     {"issue":2591,"title":"A body macro call that expands to calls of itself where an item goes fails in the lowering","state":"open","category":"Divergences from rustc"},
     {"issue":2592,"title":"rev() and len() on a runtime iterator pull its items forward first","state":"open","category":"Divergences from rustc"},
-    {"issue":2593,"title":"std::iter's constructors (repeat, once, empty, from_fn, successors, repeat_with) aren't run","state":"open","category":"Divergences from rustc"},
-    {"issue":2594,"title":"crossing::a_region_value_moved_into_a_row_or_a_column_keeps_its_family fails in some full crossing runs and passes alone","state":"open","category":"Health"}
+    {"issue":2593,"title":"std::iter's constructors (repeat, once, empty, from_fn, successors, repeat_with) aren't run","state":"closed","category":"Divergences from rustc","release":"0.5.18"},
+    {"issue":2594,"title":"crossing::a_region_value_moved_into_a_row_or_a_column_keeps_its_family fails in some full crossing runs and passes alone","state":"open","category":"Health"},
+    {"issue":2595,"title":"A RefCell borrow used as a temporary is released at once, not at the end of its statement","state":"open","category":"Divergences from rustc"},
+    {"issue":2596,"title":"A move closure that captures a part below an impl Drop field drops that field at the end of the scope","state":"open","category":"Divergences from rustc"},
+    {"issue":2597,"title":"Some(ref mut x) and ref mut whole of a stored Option<&mut T> are not supported","state":"open","category":"Divergences from rustc"},
+    {"issue":2598,"title":"let ref v = s is not checked against a later mutation of s, and ref borrows are reported at the name","state":"open","category":"Divergences from rustc"},
+    {"issue":2599,"title":"A RefCell panic says 'already mutably borrowed: BorrowError' where the toolchain's std says 'RefCell already mutably bor","state":"open","category":"Divergences from rustc"},
+    {"issue":2600,"title":"A generic parameter's implicit `Sized` bound is not checked","state":"open","category":"Divergences from rustc"},
+    {"issue":2601,"title":"`<[T]>::f(..)` and other qualified paths on a non-path type are refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2602,"title":"A closure that borrows a value moved by a later argument is E0382 where rustc says E0505","state":"open","category":"Divergences from rustc"},
+    {"issue":2603,"title":"A generic fn's parameter named only in a bound is not inferred from the impl","state":"open","category":"Divergences from rustc"},
+    {"issue":2604,"title":"A generic body bounded by io::Read, BufRead or Write takes no std facade type","state":"open","category":"Divergences from rustc"},
+    {"issue":2605,"title":"BufWriter of Stdout, Stderr or a Vec<u8>, and BufReader of a program's own Read type","state":"open","category":"Divergences from rustc"},
+    {"issue":2606,"title":"StdinLock's BufRead methods are callable out of scope, and E0599 lacks rustc's similar-name help","state":"open","category":"Divergences from rustc"},
+    {"issue":2607,"title":"plan.test.mjs release tests fail: their fixture copies no shells/gui/Cargo.toml","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -7254,17 +7291,29 @@
           "milestone": "0.3"
         },
         {
-          "id": "opaque-values",
+          "id": "opaque-values-0-5",
           "name": "A crate's `impl Trait` values",
           "start": 47,
-          "size": 1.7,
-          "state": "next",
+          "size": 0.5,
+          "state": "done",
           "note": "A view's values live past the call in a kept region (#1217). An opaque iterator that borrows its text lives beside the string (#1966). A fn item or closure coerces to a crate trait's object (#1981). Left: an opaque output that captures &self (#1991), a borrowing opaque value with another core-trait bound (#1968), markdown's impl Widget return in a Viewer impl (#83).",
           "issues": [
             {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"closed"},
             {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"closed"},
-            {"number":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open"},
             {"number":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"closed"},
+            {"number":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
+          "id": "opaque-values",
+          "name": "A crate's `impl Trait` values",
+          "start": 47,
+          "size": 1.6,
+          "state": "next",
+          "note": "A view's values live past the call in a kept region (#1217). An opaque iterator that borrows its text lives beside the string (#1966). A fn item or closure coerces to a crate trait's object (#1981). Left: an opaque output that captures &self (#1991), a borrowing opaque value with another core-trait bound (#1968), markdown's impl Widget return in a Viewer impl (#83).",
+          "issues": [
+            {"number":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open"},
             {"number":1188,"title":"An iterator whose items are references, as Vec::iter_mut's are","state":"open"},
             {"number":1189,"title":"An opaque output that borrows its receiver, as `fn items(&self) -> impl Iterator + '_`","state":"open"},
             {"number":1215,"title":"ratatui's Line::styled_graphemes and Span::styled_graphemes are left out of the facade","state":"open"},
@@ -7272,7 +7321,6 @@
             {"number":1235,"title":"A crate call whose closure gives a value holding an opaque type counts as that type's producer","state":"open"},
             {"number":1236,"title":"A program can't call an inherent method that several impls of a generic type give, as `Setting::<u16>::parse_list`","state":"open"},
             {"number":1237,"title":"A lent cell's value can't move into a by-value method of a trait with arguments (changelog's markdown::view(..).map(..))","state":"open"},
-            {"number":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"closed"},
             {"number":1269,"title":"A closure on another thread giving a non-Send crate value, or a tuple mixing crate and program values, still panics","state":"open"},
             {"number":1271,"title":"An opaque type's Add, as impl Number gets it through a supertrait, gives the + operator","state":"open"},
             {"number":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open"},
@@ -7305,7 +7353,7 @@
             {"number":2100,"title":"A variant's lending matchers at an enum holding an opaque type refuse the value","state":"open"},
             {"number":2101,"title":"Reduce the opaque-table builder-chain case to a crossing fixture","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "closures-across-0-4",
@@ -7343,7 +7391,7 @@
             {"number":1483,"title":"A script fn a crate calls at once inside a lifetime-carrying receiver's call …","state":"open"},
             {"number":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "lends-and-regions",
@@ -7391,7 +7439,7 @@
             {"number":1908,"title":"A plain-value field read through a native field path moves the path","state":"open"},
             {"number":1909,"title":"A nested store through a field of a generic native struct is unsupported","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "static-borrows",
@@ -7416,7 +7464,7 @@
             {"number":1565,"title":"A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open"},
             {"number":1572,"title":"A cycle of body statics whose pointer is only inside an enum variant or a union needs variant-aware layout","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "crate-generics-0-4",
@@ -7486,7 +7534,7 @@
             {"number":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open"},
             {"number":2243,"title":"`Itertools::sorted` on `RepeatN<String>` is E0599 under rawr check, which cargo accepts","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "program-impls-cross-0-4",
@@ -7528,7 +7576,7 @@
             {"number":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open"},
             {"number":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "nameable-types",
@@ -7548,7 +7596,7 @@
             {"number":1035,"title":"u128 in a crate signature","state":"open"},
             {"number":2209,"title":"A crate function whose return type has no public path can't be called","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "async-crossing",
@@ -7569,7 +7617,7 @@
             {"number":2016,"title":"A carried future or Send closure can't reach its values while the main store is lent, or under a Send-implying bound","state":"open"},
             {"number":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "iced-era-leftovers",
@@ -7593,7 +7641,7 @@
             {"number":601,"title":"Remove the runner's always-None event mapper","state":"open"},
             {"number":1210,"title":"Decide the fate of input/membership, the unwired contained cargo-package listing","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         }
       ]
     },
@@ -7983,6 +8031,24 @@
           "milestone": "0.4"
         },
         {
+          "id": "real-app-shapes-0-5",
+          "name": "Real app shapes: a library and a thin main",
+          "start": 78,
+          "size": 0.5,
+          "state": "done",
+          "note": "inboard (about 1,070 crates) checks and runs with theme.rs, home.rs and sidebar.rs marked. Its speed is on the Bind, install, Build, Boot and Save rows. Left: native code can't call a marked fn that takes impl Fn or a named generic (#1539). A native root can't name a marked module's types (#1249).",
+          "issues": [
+            {"number":1490,"title":"An edit to code only iced's view calls waits for the next message after a swap","state":"retired"},
+            {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired"},
+            {"number":1585,"title":"An islands run test waits forever when the program's check fails instead of failing","state":"closed"},
+            {"number":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"closed"},
+            {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"closed"},
+            {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"closed"},
+            {"number":1601,"title":"A project's target/rawr cache from an older rawr build can make rawr check give a wrong error","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
           "id": "real-app-shapes",
           "name": "Real app shapes: a library and a thin main",
           "start": 78,
@@ -8007,9 +8073,7 @@
             {"number":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open"},
             {"number":1487,"title":"A native part a marked &mut call moves to another place comes back","state":"open"},
             {"number":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open"},
-            {"number":1490,"title":"An edit to code only iced's view calls waits for the next message after a swap","state":"retired"},
             {"number":1510,"title":"A marked module can't name a native module's type alias by its path (`crate::widget::Element`)","state":"open"},
-            {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired"},
             {"number":1539,"title":"Native code can't call a marked fn taking impl Fn, impl Iterator, a multi-bound impl or a named generic parameter","state":"open"},
             {"number":1545,"title":"A &self method of a marked type copied whole that returns a non-text &T can't give native code a reference","state":"open"},
             {"number":1550,"title":"A marked fn returning an array such as [u32; 4] to native code panics with a malformed answer","state":"open"},
@@ -8017,11 +8081,6 @@
             {"number":1575,"title":"Calls from a package's bin target to a marked generic fn aren't recorded","state":"open"},
             {"number":1576,"title":"A marked generic fn's body is checked only at its recorded types, never against its own bounds","state":"open"},
             {"number":1578,"title":"`&v as &dyn NativeTrait` of a primitive or marked value is refused","state":"open"},
-            {"number":1585,"title":"An islands run test waits forever when the program's check fails instead of failing","state":"closed"},
-            {"number":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"closed"},
-            {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"closed"},
-            {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"closed"},
-            {"number":1601,"title":"A project's target/rawr cache from an older rawr build can make rawr check give a wrong error","state":"closed"},
             {"number":44,"title":"A marked struct can't hold a native value that native code keeps between calls, such as…","state":"open"},
             {"number":683,"title":"A module function taking a dependency's type checks","state":"open"},
             {"number":1441,"title":"A marked function returning `[NativeType; N]` to native code fails: the interpreter's answer is…","state":"open"},
@@ -8031,7 +8090,7 @@
             {"number":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open"},
             {"number":1492,"title":"Pins kept for a marked value's borrowed results leak when the value is dropped or moved","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.7"
         },
         {
           "id": "bind-phase-0-3",
@@ -8084,7 +8143,7 @@
             {"number":2171,"title":"A stored API's exports repeat their own path and span in their alias, and its spans repeat their file path","state":"open"},
             {"number":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "check-after-install-0-3",
@@ -8113,7 +8172,7 @@
           "issues": [
             {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "build-phase-0-3",
@@ -8172,17 +8231,31 @@
           "milestone": "0.3"
         },
         {
-          "id": "build-phase",
+          "id": "build-phase-0-5",
           "name": "Build: the runner on every core",
           "start": 80,
-          "size": 1.5,
-          "state": "next",
+          "size": 0.5,
+          "state": "done",
           "note": "The runner is a workspace of a base crate and one adapter crate per imported root (#1670). A native rebuild for a one-crate edit takes 177 s where cargo build takes 18-27 s (#1772). Left: the copy's speed (#1801), a harness per preparation (#1794), re-encoding per hit (#1851).",
           "issues": [
             {"number":1721,"title":"The importer's rustc-driver it suite is stale: the p3 runner fails E0599 and tests read src/main.rs for moved code","state":"closed"},
             {"number":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"closed"},
-            {"number":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open"},
             {"number":1778,"title":"scripts/cargo.mjs prunes rawr's runner units in a rawr project's target","state":"closed"},
+            {"number":1816,"title":"About 37 s pass between restarting and the runner build's start with nothing printed","state":"closed"},
+            {"number":1838,"title":"Three owner-stage unit tests fail on main","state":"closed"},
+            {"number":1858,"title":"A save reads every source's parse from disk cells again; the owner could keep the remembered cells","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
+          "id": "build-phase",
+          "name": "Build: the runner on every core",
+          "start": 80,
+          "size": 1.3,
+          "state": "next",
+          "note": "The runner is a workspace of a base crate and one adapter crate per imported root (#1670). A native rebuild for a one-crate edit takes 177 s where cargo build takes 18-27 s (#1772). Left: the copy's speed (#1801), a harness per preparation (#1794), re-encoding per hit (#1851).",
+          "issues": [
+            {"number":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open"},
             {"number":1786,"title":"After an edit to one crate's API, the whole API graph is joined, sealed and classified again","state":"open"},
             {"number":1787,"title":"A save still JSON-decodes every sidecar, including unchanged ones","state":"open"},
             {"number":1788,"title":"A fresh rawr check or a new rawr run keeps no fragment reads and re-reads every sidecar","state":"open"},
@@ -8191,12 +8264,10 @@
             {"number":1799,"title":"A rawr run owner holds the dependencies' API about three times over","state":"open"},
             {"number":1801,"title":"rawr's copy of the program's crate compiles about 3.5 times slower than cargo's build of it","state":"open"},
             {"number":1815,"title":"The first native save after a start prepares in 205 s where the next takes 66 s, with the same counters","state":"open"},
-            {"number":1816,"title":"About 37 s pass between restarting and the runner build's start with nothing printed","state":"closed"},
             {"number":1819,"title":"Generate crossing types' glue only where needed, without making a marked-only edit rebuild the copy","state":"open"},
             {"number":1830,"title":"An API-changing native edit renders only the adapters whose plans changed","state":"open"},
             {"number":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open"},
             {"number":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open"},
-            {"number":1838,"title":"Three owner-stage unit tests fail on main","state":"closed"},
             {"number":1847,"title":"A Persisted cold resolution reruns cargo metadata and --unit-graph although the remembered output proves them unchanged","state":"open"},
             {"number":1848,"title":"The nightly check runs with checksum freshness over every unit and its outputs are relocated message by message","state":"open"},
             {"number":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open"},
@@ -8204,7 +8275,6 @@
             {"number":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open"},
             {"number":1854,"title":"The admitting replay still compares every input the build just captured","state":"open"},
             {"number":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open"},
-            {"number":1858,"title":"A save reads every source's parse from disk cells again; the owner could keep the remembered cells","state":"closed"},
             {"number":1859,"title":"About 20 s pass between the program's check and the runner build on an inboard start","state":"open"},
             {"number":1860,"title":"One ledger transaction and one root sync per save","state":"open"},
             {"number":1861,"title":"Discoverable and bundled misses read back what they just published","state":"open"},
@@ -8225,7 +8295,7 @@
             {"number":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open"},
             {"number":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "runner-once",
@@ -8250,7 +8320,7 @@
             {"number":1784,"title":"A runner over a program whose script types never reach native code keeps its base depending on the program's crate","state":"open"},
             {"number":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "owner-locks-0-4",
@@ -8280,7 +8350,7 @@
             {"number":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open"},
             {"number":2252,"title":"Find which searched directory another build changed under extraction, and close the window","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "boot-phase-0-3",
@@ -8313,29 +8383,40 @@
           "milestone": "0.3"
         },
         {
+          "id": "boot-phase-0-5",
+          "name": "Boot: a warm start compiles nothing",
+          "start": 80,
+          "size": 0.5,
+          "state": "done",
+          "note": "A warm start reaches inboard's first app log in about 10.5 s (resolving 2.8 s, reading the API 4.8 s). A start with no edits compiles no marked file (#1638). Left: a warm start still resolves the whole program and compiles the whole generated text (#1662).",
+          "issues": [
+            {"number":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"closed"},
+            {"number":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
           "id": "boot-phase",
           "name": "Boot: a warm start compiles nothing",
           "start": 80,
-          "size": 0.8,
+          "size": 0.7,
           "state": "next",
           "note": "A warm start reaches inboard's first app log in about 10.5 s (resolving 2.8 s, reading the API 4.8 s). A start with no edits compiles no marked file (#1638). Left: a warm start still resolves the whole program and compiles the whole generated text (#1662).",
           "issues": [
             {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
             {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
-            {"number":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"closed"},
             {"number":1767,"title":"A shared resolution's remembered.json is parsed again for every check in a running owner","state":"open"},
             {"number":1768,"title":"The owner replay still re-observes the bundle and rebuilds the extraction capture on every check","state":"open"},
             {"number":1781,"title":"When a new runner replaces an old one, the old runner has already exited 0 before its Shutdown","state":"open"},
             {"number":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open"},
             {"number":1813,"title":"A marked main keeps taking swaps while its new runner builds","state":"open"},
             {"number":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open"},
-            {"number":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"closed"},
             {"number":1873,"title":"A start that replays shared bindings keeps no record of what native code uses","state":"open"},
             {"number":1874,"title":"A rustc auto-trait error about a handle-held struct names rawr's hidden marker","state":"open"},
             {"number":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open"},
             {"number":2198,"title":"A `rawr test` start never reads its parse cells: every run parses all sources again","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "save-in-place-0-3",
@@ -8393,10 +8474,28 @@
           "milestone": "0.4"
         },
         {
+          "id": "save-in-place-0-5",
+          "name": "Save: re-lower only what changed",
+          "start": 80,
+          "size": 0.5,
+          "state": "done",
+          "note": "On inboard (0.3.213, scripted, no model in the loop): a body edit is on screen in 0.98 s, and a field change to a type native code holds restarts with no native build and settles in 2.5-2.9 s (#1755, #1865). A doc comment, an inert attribute, a blank line or a reflowed signature lowers nothing.",
+          "issues": [
+            {"number":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"closed"},
+            {"number":1739,"title":"A restart that needs no native build takes 99 s on inboard, against 20 s before","state":"closed"},
+            {"number":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed"},
+            {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired"},
+            {"number":2036,"title":"islands::saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line fails on main","state":"closed"},
+            {"number":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"closed"},
+            {"number":2051,"title":"rawr-import's own integration suite failed 14 of 71 tests on main","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
           "id": "save-in-place",
           "name": "Save: re-lower only what changed",
           "start": 80,
-          "size": 1.7,
+          "size": 1.5,
           "state": "now",
           "note": "On inboard (0.3.213, scripted, no model in the loop): a body edit is on screen in 0.98 s, and a field change to a type native code holds restarts with no native build and settles in 2.5-2.9 s (#1755, #1865). A doc comment, an inert attribute, a blank line or a reflowed signature lowers nothing.",
           "issues": [
@@ -8405,28 +8504,21 @@
             {"number":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open"},
             {"number":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open"},
             {"number":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open"},
-            {"number":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"closed"},
             {"number":1738,"title":"A std derive added to a marked type native code holds as a trait object rebuilds for its stand-in's impl","state":"open"},
-            {"number":1739,"title":"A restart that needs no native build takes 99 s on inboard, against 20 s before","state":"closed"},
             {"number":1744,"title":"A new marked item can change what native code means while the running program keeps the old meaning","state":"open"},
-            {"number":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed"},
             {"number":1747,"title":"One dependency graph decides re-lowering, native rebuilds and restarts","state":"open"},
             {"number":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open"},
             {"number":1749,"title":"Adapters name their crate by its whole facade, so a path-crate edit lowers every file calling its adapters","state":"open"},
             {"number":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open"},
             {"number":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open"},
-            {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired"},
             {"number":2008,"title":"An unchanged iced app's view-only edit waits for its next message, and the stale widgets handle that input","state":"open"},
             {"number":2032,"title":"A field change migrates live values inside Rc, Arc, RefCell, Cell, closure captures and crate generics","state":"open"},
             {"number":2033,"title":"A field change runs the dropped field's Drop instead of restarting","state":"open"},
             {"number":2034,"title":"A removed type whose live values sit only in dropped fields migrates instead of restarting","state":"open"},
             {"number":2035,"title":"An enum's struct-like variant migrates its fields by name","state":"open"},
-            {"number":2036,"title":"islands::saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line fails on main","state":"closed"},
             {"number":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open"},
             {"number":2043,"title":"The runner turns on serde's rc and std, so a project whose serde lacks rc builds a second serde","state":"open"},
             {"number":2044,"title":"rawr-import run given a relative project path joins it with an absolute Cargo output path","state":"open"},
-            {"number":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"closed"},
-            {"number":2051,"title":"rawr-import's own integration suite failed 14 of 71 tests on main","state":"closed"},
             {"number":2052,"title":"Retire the fixed-path runner build: the cache entry, its pins and the no-chain path in Manifest::build","state":"open"},
             {"number":2053,"title":"rawr-import runner_dag tests each build all of rawr in a fresh directory under the system temp dir","state":"open"},
             {"number":2056,"title":"A project whose target/ is a symlink is refused as a Rawr-owned cache path","state":"open"},
@@ -8446,7 +8538,7 @@
             {"number":1564,"title":"A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open"},
             {"number":2218,"title":"Plain `rawr run` restarts a single file on save instead of reloading a looping `main` in place","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "no-copies",
@@ -8482,7 +8574,7 @@
             {"number":1975,"title":"A program's Rc or Arc of a by-value type passed as a crate call's argument doesn't cross as Rust's pointer","state":"open"},
             {"number":834,"title":"A by-value read, a nested or self receiver, or a generic struct's crate field still takes the whole struct","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "grammar-is-rust",
@@ -8516,7 +8608,7 @@
             {"number":1047,"title":"Interpreted serde stays 10x/49x slower than debug Rust after #1038","state":"open"},
             {"number":1068,"title":"The import path copies the engine's host registry once per compile","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         },
         {
           "id": "cargo-options",
@@ -8550,7 +8642,7 @@
             {"number":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open"},
             {"number":2092,"title":"A frontmatter script outside any workspace fails to build serde_json or regex","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.6"
         }
       ]
     },
@@ -8626,10 +8718,26 @@
           "milestone": "0.3"
         },
         {
+          "id": "example-sweeps-0-5",
+          "name": "Caches fit on the machine",
+          "start": 84,
+          "size": 0.5,
+          "state": "done",
+          "note": "rawr deletes stale caches by state, with no timer (#1677). That took inboard's target/rawr from 22 GB to 15 GB. Left: inboard's store keeps parts beside whole executions (#1407). The facade plan, compression and single facts are #1360, #1361 and #1362.",
+          "issues": [
+            {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed"},
+            {"number":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed"},
+            {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed"},
+            {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed"},
+            {"number":1782,"title":"scripts/cargo.mjs keeps every incremental session in a crate's directory: 13 GB, 396 sessions over 123 crates","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
           "id": "example-sweeps",
           "name": "Caches fit on the machine",
           "start": 84,
-          "size": 1.3,
+          "size": 1.1,
           "state": "next",
           "note": "rawr deletes stale caches by state, with no timer (#1677). That took inboard's target/rawr from 22 GB to 15 GB. Left: inboard's store keeps parts beside whole executions (#1407). The facade plan, compression and single facts are #1360, #1361 and #1362.",
           "issues": [
@@ -8640,7 +8748,6 @@
             {"number":999,"title":"Every check leaves empty execution-key directories in the store","state":"open"},
             {"number":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open"},
             {"number":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open"},
-            {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed"},
             {"number":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open"},
             {"number":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open"},
             {"number":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open"},
@@ -8651,18 +8758,14 @@
             {"number":1371,"title":"The driver's extraction/ prune can remove an unsettled table a staged record names","state":"open"},
             {"number":1376,"title":"Charge store.parts to the installation ledger so the store's size targets see parts","state":"open"},
             {"number":1377,"title":"Trim generations that never build a new runner, and keep siblings reused across generations","state":"open"},
-            {"number":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed"},
-            {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed"},
             {"number":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open"},
-            {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed"},
-            {"number":1782,"title":"scripts/cargo.mjs keeps every incremental session in a crate's directory: 13 GB, 396 sessions over 123 crates","state":"closed"},
             {"number":1790,"title":"rawr run's cargo check of a project leaves superseded check units in the project's target","state":"open"},
             {"number":1791,"title":"Other toolchains' nightly build directories in rawr home retire by a day of idleness, not by state","state":"open"},
             {"number":725,"title":"Units no project uses stay in the current pin's shared nightly directory until the whole directory goes","state":"open"},
             {"number":865,"title":"Read Cargo's new build-dir layout","state":"open"},
             {"number":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         },
         {
           "id": "error-messages",
@@ -8706,10 +8809,23 @@
           "milestone": "0.4"
         },
         {
+          "id": "steady-suites-0-5",
+          "name": "Suites pass on main and under load",
+          "start": 86,
+          "size": 0.5,
+          "state": "done",
+          "note": "A test fails for a cause, never for its neighbours. Left: tests failing on main (#253, #353, #696), races in the lib suites (#421, #1057, #1229), Miri under Stacked Borrows (#574).",
+          "issues": [
+            {"number":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed"},
+            {"number":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
           "id": "steady-suites",
           "name": "Suites pass on main and under load",
           "start": 86,
-          "size": 1.9,
+          "size": 1.8,
           "state": "next",
           "note": "A test fails for a cause, never for its neighbours. Left: tests failing on main (#253, #353, #696), races in the lib suites (#421, #1057, #1229), Miri under Stacked Borrows (#574).",
           "issues": [
@@ -8747,11 +8863,9 @@
             {"number":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open"},
             {"number":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open"},
             {"number":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open"},
-            {"number":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed"},
-            {"number":2302,"title":"AppKit input test each_button_keeps_its_number_and_every_pointer_event_lands_where_it_was_sent fails now and then","state":"open"},
-            {"number":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed"}
+            {"number":2302,"title":"AppKit input test each_button_keeps_its_number_and_every_pointer_event_lands_where_it_was_sent fails now and then","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         },
         {
           "id": "ci-and-install",
@@ -8772,7 +8886,7 @@
             {"number":868,"title":"Adopt the nightly-window job's breakage issue into the plan","state":"open"},
             {"number":882,"title":"Lock play/universe's dependencies for a reproducible ?play image","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         },
         {
           "id": "windows-and-signing",
@@ -8787,7 +8901,7 @@
             {"number":824,"title":"Run rawr-import on Windows","state":"open"},
             {"number":1910,"title":"rawr-hot's signal comes at once only on macOS","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         },
         {
           "id": "docs-match-code",
@@ -8805,7 +8919,7 @@
             {"number":1221,"title":"Highlight names inside macro arguments and format-string placeholders","state":"open"},
             {"number":1223,"title":"Render the link cards with rawr run","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         }
       ]
     },
@@ -8898,21 +9012,32 @@
           "milestone": "0.4"
         },
         {
-          "id": "browser-wasm-bindings",
+          "id": "browser-wasm-bindings-0-5",
           "name": "rawr on wasm with declared packages",
           "start": 58,
-          "size": 1.9,
-          "state": "now",
+          "size": 0.5,
+          "state": "done",
           "note": "`rawr run --web` runs any Cargo project, cargo script or plain program in the browser and reloads saves there with state kept (#2119, #2122, #2123), with cargo's wasm32 cfg (#2121) and its own runner rebuilt for an uncovered crate use. The landing page's ratatui snippet runs in the browser (#1384). Next: ratzilla's resize (#2116, upstream) and the engine's per-frame preparation (#1520, #1529).",
           "issues": [
             {"number":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"closed"},
             {"number":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"closed"},
+            {"number":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
+          "id": "browser-wasm-bindings",
+          "name": "rawr on wasm with declared packages",
+          "start": 58,
+          "size": 1.5,
+          "state": "now",
+          "note": "`rawr run --web` runs any Cargo project, cargo script or plain program in the browser and reloads saves there with state kept (#2119, #2122, #2123), with cargo's wasm32 cfg (#2121) and its own runner rebuilt for an uncovered crate use. The landing page's ratatui snippet runs in the browser (#1384). Next: ratzilla's resize (#2116, upstream) and the engine's per-frame preparation (#1520, #1529).",
+          "issues": [
             {"number":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open"},
             {"number":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open"},
             {"number":1513,"title":"A runner installs each re-export path of a crate's item as its own registry entry, so prepare stays above a second","state":"open"},
             {"number":1517,"title":"A facade whose crate depends on another holds that crate's surface again under its hidden segment","state":"open"},
             {"number":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open"},
-            {"number":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"closed"},
             {"number":1529,"title":"A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open"},
             {"number":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open"},
             {"number":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open"},
@@ -8921,7 +9046,7 @@
             {"number":2219,"title":"A browser with neither JSPI nor exnref can't compile the browser's universe module","state":"open"},
             {"number":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         },
         {
           "id": "play-universe-limits",
@@ -8989,21 +9114,32 @@
             {"number":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open"},
             {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"}
           ],
+          "milestone": "0.8"
+        },
+        {
+          "id": "share-and-gifs-0-5",
+          "name": "Share previews and GIFs",
+          "start": 88,
+          "size": 0.5,
+          "state": "done",
+          "note": "Left: an image in a shared snippet's preview (#530), a GIF that loops a program that never settles (#543).",
+          "issues": [
+            {"number":2467,"title":"The playground has a New button beside Examples that starts from an empty `fn main`","state":"closed"}
+          ],
           "milestone": "0.5"
         },
         {
           "id": "share-and-gifs",
           "name": "Share previews and GIFs",
           "start": 88,
-          "size": 1,
+          "size": 0.7,
           "state": "next",
           "note": "Left: an image in a shared snippet's preview (#530), a GIF that loops a program that never settles (#543).",
           "issues": [
             {"number":530,"title":"A shared iced snippet's link preview shows its frame","state":"open"},
-            {"number":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open"},
-            {"number":2467,"title":"The playground has a New button beside Examples that starts from an empty `fn main`","state":"closed"}
+            {"number":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         }
       ]
     },
@@ -9039,8 +9175,7 @@
             {"number":2037,"title":"A &mut argument that is a place below a field can't be held by an async fn's future","state":"open"},
             {"number":2038,"title":"Native code calling a program's async fn that takes &mut parameters misreads its result","state":"open"},
             {"number":13,"title":"Calls made directly from `main`'s frame aren't swap entries yet","state":"open"}
-          ],
-          "milestone": "0.5"
+          ]
         },
         {
           "id": "polars-app",
@@ -9051,8 +9186,7 @@
           "note": "Declares polars, runs lazy queries over a CSV; matches cargo and hot-reloads its queries.",
           "issues": [
             {"number":2025,"title":"A data app on polars runs under rawr run as under cargo, and its lazy-query code hot-reloads","state":"open"}
-          ],
-          "milestone": "0.5"
+          ]
         },
         {
           "id": "embedding",
@@ -9068,8 +9202,7 @@
             {"number":1159,"title":"Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open"},
             {"number":1425,"title":"rawr-import generates a runner's sources without building it, for a build script to compile as…","state":"open"},
             {"number":1426,"title":"The generator emits a runner as a module of a host crate, and a `rawr_build::bindings()` for…","state":"open"}
-          ],
-          "milestone": "0.5"
+          ]
         }
       ]
     },
@@ -9294,7 +9427,7 @@
             {"number":1996,"title":"A program rawr runs on Windows gets rawr's menu items (restart, screenshot, about, exit)","state":"open"},
             {"number":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.8"
         }
       ]
     },
@@ -9312,13 +9445,13 @@
           "state": "now",
           "note": "Now: method calls pick what rustc picks — inherent before trait at each autoderef step (game_of_life, since 2026-11-20). Left: <T>::f paths (#378), program iterators as I: Iterator (#380), annotations that fix a generic (#1419), expected types into arms (#1293), impls keyed by full Self (#1178).",
           "issues": [
-            {"number":378,"title":"Qualified path without a trait, `<T>::f(..)`, is unsupported","state":"open"},
+            {"number":378,"title":"Qualified path without a trait, `<T>::f(..)`, is unsupported","state":"closed"},
             {"number":380,"title":"A script iterator struct can't fill `I: Iterator<Item = X>`","state":"closed"},
             {"number":381,"title":"Impls for references beyond forwarding impls are refused","state":"open"},
-            {"number":382,"title":"Equality in a generic trait's associated type bound is refused","state":"open"},
+            {"number":382,"title":"Equality in a generic trait's associated type bound is refused","state":"closed"},
             {"number":383,"title":"`where` bounds on non-parameter types accept only Sized and auto traits","state":"closed"},
-            {"number":408,"title":"A turbofish on a generic fn with an Fn parameter miscounts its arguments","state":"open"},
-            {"number":409,"title":"A closure before the argument that fixes its generic parameter gets no types","state":"open"},
+            {"number":408,"title":"A turbofish on a generic fn with an Fn parameter miscounts its arguments","state":"closed"},
+            {"number":409,"title":"A closure before the argument that fixes its generic parameter gets no types","state":"closed"},
             {"number":459,"title":"Type annotations don't apply a crate type's default parameters","state":"open"},
             {"number":460,"title":"No deref coercion or Deref method lookup on crate types","state":"open"},
             {"number":461,"title":"button(..).on_press(m) runs where rustc gives E0283","state":"open"},
@@ -9331,14 +9464,14 @@
             {"number":773,"title":"try_into into an integer while a program TryFrom of the same source exists","state":"open"},
             {"number":789,"title":"An instance alias's core traits are claimed for any arguments","state":"open"},
             {"number":801,"title":"`?Sized` bounds on generic parameters are refused","state":"open"},
-            {"number":802,"title":"`where Self: Sized` on a trait method is refused","state":"open"},
+            {"number":802,"title":"`where Self: Sized` on a trait method is refused","state":"closed"},
             {"number":815,"title":"A crate type's Deref target read in place, not copied","state":"open"},
             {"number":816,"title":"&mut deref coercion and as_deref_mut through a program's DerefMut","state":"open"},
             {"number":817,"title":"Indexing through a program's Deref","state":"closed"},
             {"number":820,"title":"Text `.into()` follows only a `let`'s annotated target","state":"open"},
             {"number":873,"title":"(*w).method() through DerefMut picks deref","state":"closed"},
             {"number":1033,"title":"A trait function called by its trait's path infers Self from the expected type","state":"open"},
-            {"number":1034,"title":"? converts &str to String through From","state":"open"},
+            {"number":1034,"title":"? converts &str to String through From","state":"closed"},
             {"number":1037,"title":"Infer a generic fn's type parameter from the let it's assigned to","state":"open"},
             {"number":1048,"title":"An integer literal is i64 where rustc infers usize from its use","state":"open"},
             {"number":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"closed"},
@@ -9346,7 +9479,7 @@
             {"number":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"closed"},
             {"number":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"closed"},
             {"number":1419,"title":"A generic filled through a `let`'s annotation takes the annotated type…","state":"closed"},
-            {"number":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"open"},
+            {"number":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"closed"},
             {"number":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open"},
             {"number":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open"},
             {"number":2099,"title":"A method call on a script fn's `impl Trait` value resolves to the hidden type's inherent method (false E0061)","state":"open"},
@@ -9407,17 +9540,17 @@
             {"number":123,"title":"A new borrow into a `&mut` local inside an async body is refused","state":"open"},
             {"number":124,"title":"The grain VM doesn't know the names a rebound `&mut` local uses, so such a program stops there…","state":"open"},
             {"number":163,"title":"A `&mut` binding of a slice pattern's rest (`[first, rest @ ..] = &mut v[..]`) and a catch-all…","state":"open"},
-            {"number":166,"title":"A whole `Option<&mut T>` catch-all binding beside `&mut` bindings of its value is refused","state":"open"},
+            {"number":166,"title":"A whole `Option<&mut T>` catch-all binding beside `&mut` bindings of its value is refused","state":"closed"},
             {"number":184,"title":"A `&mut` stored in a struct, tuple, `Option` or `vec!` is refused as unsupported syntax, so…","state":"closed"},
             {"number":189,"title":"A closure inside a `&mut self` method that changes a field of `self` (`|x| { self.b.push(x); }`)…","state":"closed"},
-            {"number":194,"title":"`match x { ref v => .. }` isn't lowered (\"'=>' after a match pattern\"), and on scalars it…","state":"open"},
+            {"number":194,"title":"`match x { ref v => .. }` isn't lowered (\"'=>' after a match pattern\"), and on scalars it…","state":"closed"},
             {"number":195,"title":"`let o = v.last_mut(); let r = o.unwrap(); *r = 9;` is refused as \"Cannot mutate immutable…","state":"closed"},
-            {"number":196,"title":"Moving a member or nested field whose type has drop glue is refused as unsupported, since only…","state":"open"},
+            {"number":196,"title":"Moving a member or nested field whose type has drop glue is refused as unsupported, since only…","state":"closed"},
             {"number":800,"title":"A `&mut [T]` kept from `v.as_mut_slice()` or `d.make_contiguous()` can't be changed","state":"closed"},
             {"number":806,"title":"A kept `iter_mut()` used other than by `next()`","state":"closed"},
             {"number":870,"title":"Drop a temporary at the end of its statement","state":"closed"},
-            {"number":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"open"},
-            {"number":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open"},
+            {"number":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"closed"},
+            {"number":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"closed"},
             {"number":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"closed"},
             {"number":2225,"title":"`&req.comparators[0]` on a crate struct's field is taken as a partial move: a later method call is a false E0382","state":"open"}
           ],
@@ -9569,14 +9702,14 @@
             {"number":758,"title":"std traits are keyed by their definition, not their short name","state":"open"},
             {"number":807,"title":"A bare `Reverse(x)` or `PhantomData` value with no `use` is refused as rustc refuses it","state":"closed"},
             {"number":808,"title":"A module-relative std path such as `time::Duration` needs a `use` of its module, as in rustc","state":"closed"},
-            {"number":810,"title":"A std type imported under another name works in bodies","state":"open"},
+            {"number":810,"title":"A std type imported under another name works in bodies","state":"closed"},
             {"number":874,"title":"Calling a crate function item bound to a local","state":"open"},
             {"number":1036,"title":"Two functions' local items of the same name collide","state":"closed"},
             {"number":1052,"title":"A block's use binds a module name that child modules see","state":"closed"},
             {"number":1141,"title":"A top-level statement can't name an inline module's path","state":"closed"},
             {"number":1348,"title":"In a single file with modules, a top-level statement such as `picks::Count(2)` or…","state":"closed"},
-            {"number":1349,"title":"`pub use inner::*;` inside a module binds inner's names only within that module; rustc…","state":"open"},
-            {"number":1427,"title":"A non-prelude std trait's method (io::Write, BufRead, Read, Hasher) is callable out of scope…","state":"open"},
+            {"number":1349,"title":"`pub use inner::*;` inside a module binds inner's names only within that module; rustc…","state":"closed"},
+            {"number":1427,"title":"A non-prelude std trait's method (io::Write, BufRead, Read, Hasher) is callable out of scope…","state":"closed"},
             {"number":1428,"title":"write! into a String with only std::io::Write in scope is accepted; rustc's E0599 says its trait…","state":"closed"},
             {"number":1962,"title":"A native module's path spelled through the crate's name ignores `use` bindings inside the call's arguments too","state":"open"},
             {"number":997,"title":"Application path: `x.into()` beside an unimported crate trait's own `into`","state":"open"},
@@ -9608,9 +9741,9 @@
             {"number":1307,"title":"Struct patterns in fn parameters","state":"closed"},
             {"number":1308,"title":"rustc's witnesses for native patterns with several refutable fields or a native enum variant","state":"closed"},
             {"number":1972,"title":"A match on a crate struct pattern with refutable fields is E0004 though its arms cover every value","state":"closed"},
-            {"number":2508,"title":"A pattern naming a float `const` binds a new name instead of matching its value","state":"open"},
+            {"number":2508,"title":"A pattern naming a float `const` binds a new name instead of matching its value","state":"closed"},
             {"number":2509,"title":"E0004 has no 'defined here' note for std's enums","state":"open"},
-            {"number":2510,"title":"A parameter pattern's literal takes no suffix","state":"open"}
+            {"number":2510,"title":"A parameter pattern's literal takes no suffix","state":"closed"}
           ],
           "milestone": "0.5"
         },
@@ -9726,8 +9859,7 @@
             {"number":78,"title":"Let the editor tell `rawr run` a file changed: the VS Code extension sends it on save and…","state":"open"},
             {"number":1090,"title":"Previews render nowhere since rawr-iced was removed: bring them back on generated bindings","state":"open"},
             {"number":1095,"title":"rawr-macros comments claim previews render and #[widget] runs","state":"open"}
-          ],
-          "milestone": "0.5"
+          ]
         },
         {
           "id": "misc",
@@ -9744,8 +9876,7 @@
             {"number":1142,"title":"The grain VM's script calls don't grow the stack","state":"open"},
             {"number":1417,"title":"`rawr check` passes where the runner build fails: a check that also compiles the generated…","state":"open"},
             {"number":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open"}
-          ],
-          "milestone": "0.5"
+          ]
         },
         {
           "id": "time-travel",
@@ -9758,8 +9889,7 @@
             {"number":491,"title":"Record and replay messages, with iced's comet","state":"open"},
             {"number":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open"},
             {"number":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open"}
-          ],
-          "milestone": "0.5"
+          ]
         },
         {
           "id": "playground-debugger-0-4",
@@ -9784,8 +9914,7 @@
             {"number":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open"},
             {"number":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open"},
             {"number":2304,"title":"The playground's debugger icon swaps in a debugger build of the browser module and restarts the program under it","state":"open"}
-          ],
-          "milestone": "0.5"
+          ]
         }
       ]
     }

@@ -250,4 +250,7 @@ test("a row shows under each milestone its issues shipped in, and its open issue
     { milestone: "0.5", issues: [3, 4], state: "now", size: 2 },
   ]);
   assert.deepEqual(milestoneSlices({ id: "h", milestone: "0.0", state: "done", size: 5, issues: [] }, items, "0.5"), [{ milestone: "0.0", issues: [] }]);
+  // A row aimed at a later milestone holds its open work there, and a row with none leaves it unplaced.
+  assert.deepEqual(milestoneSlices({ ...row, milestone: "0.7" }, items, "0.5").at(-1), { milestone: "0.7", issues: [4], state: "now", size: 1 });
+  assert.deepEqual(milestoneSlices({ ...row, milestone: undefined }, items, "0.5").at(-1), { issues: [4], state: "now", size: 1 });
 });

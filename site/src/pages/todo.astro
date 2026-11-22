@@ -6,8 +6,8 @@
 //
 // Gantt: bar length is complexity, not time. Milestones are the top level,
 // in version order. A row shows under each milestone its issues shipped in,
-// and its open issues show under the milestone under way (siteData in
-// plan/plan.mjs slices it). Under each milestone come the groups with rows
+// and its open issues under the milestone it aims at, or under Unplaced
+// (siteData in plan/plan.mjs slices it). Under each milestone come the groups with rows
 // in it, so a group can appear under several. Milestones
 // whose rows are all done, before the first with work left, start folded.
 // Milestones and groups fold, and the chart rescales to the rows that show.
@@ -36,7 +36,7 @@ const versions = [...new Set(rows.flatMap((r) => (r.milestone ? [r.milestone] : 
 const sections = [...versions, undefined]
   .map((m) => ({
     id: m ? `ms-${m}` : "ms-none",
-    title: m ?? "No milestone yet",
+    title: m ?? "Unplaced",
     groups: GROUPS.map((g) => ({ ...g, rows: g.rows.filter((r) => r.milestone === m) })).filter((g) => g.rows.length),
   }))
   .filter((m) => m.groups.length);
