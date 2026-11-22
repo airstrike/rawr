@@ -718,12 +718,18 @@ pub(crate) fn stable_trait(path: &str) -> Option<&'static str> {
 }
 
 /// A stable std trait's declaration as a program would write it, from its
-/// line and its members': its stable items, each provided function with an
-/// empty body when `provided` names it, else none. `pub trait FromStr:
-/// Sized { type Err; fn from_str(s: &str) -> Result<Self, Self::Err>; }`.
+/// line and its members': its stable items, each provided function when
+/// `provided` names it, else none. `pub trait FromStr: Sized { type Err;
+/// fn from_str(s: &str) -> Result<Self, Self::Err>; }`. A provided
+/// function is the declaration `body` gives for its name, with its body,
+/// else its own with an empty one.
 ///
 /// Every type a rawr value has is sized, so `?Sized` is left out.
-pub(crate) fn trait_source(definition: &str, provided: &[&str]) -> Option<String> {
+pub(crate) fn trait_source(
+    definition: &str,
+    provided: &[&str],
+    body: impl Fn(&str) -> Option<&'static str>,
+) -> Option<String> {
     let declared = item(definition)?;
     if declared.kind != "trait" || declared.stability != Stability::Stable {
         return None;
@@ -757,6 +763,14 @@ pub(crate) fn trait_source(definition: &str, provided: &[&str]) -> Option<String
             continue;
         }
         text.push_str("    ");
+        if member.provided()
+            && member.kind == "assoc-fn"
+            && let Some(declaration) = body(member.name())
+        {
+            text.push_str(declaration);
+            text.push('\n');
+            continue;
+        }
         let declaration = member.declaration();
         let declaration = declaration.replace(": ?Sized", "").replace(" + ?Sized", "");
         text.push_str(&declaration);

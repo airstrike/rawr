@@ -53,6 +53,11 @@ const DEFAULT_TAG_VALUE: Tag = 0;
 /// parameter, which prints and orders as the unsigned number.
 pub(crate) const UNSIGNED_TAG: Tag = 0x7536;
 
+/// The tag of an array that holds a tuple's members where no static type
+/// says so: a tuple a typed script passed to a generic parameter, whose
+/// `{:?}` is Rust's `(a, b)`.
+pub(crate) const TUPLE_TAG: Tag = 0x7475;
+
 /// Dynamic type containing any value.
 #[must_use]
 pub struct Dynamic(pub(crate) Union);
@@ -629,6 +634,13 @@ impl fmt::Debug for Dynamic {
             Union::Float(ref v, ..) => fmt::Debug::fmt(v, f),
             #[cfg(feature = "decimal")]
             Union::Decimal(ref v, ..) => fmt::Debug::fmt(v, f),
+            Union::Array(ref v, tag, ..) if tag == TUPLE_TAG => {
+                let mut tuple = f.debug_tuple("");
+                for member in v.iter() {
+                    tuple.field(member);
+                }
+                tuple.finish()
+            }
             Union::Array(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Blob(ref v, ..) => {
                 f.write_str("[")?;

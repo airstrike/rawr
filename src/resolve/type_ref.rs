@@ -1236,6 +1236,78 @@ pub(super) fn host_trait(
     (definition.role() == host::type_def::Role::Trait).then(|| definition.clone())
 }
 
+/// `impl Shape` of one program or std trait outside a parameter, as a
+/// return type writes it (#2462): what rustc knows of the opaque type, its
+/// bound's methods alone, which a trait object of the bound has (`dyn
+/// Shape`), dispatched by the hidden value's own type (#2099). Each
+/// `Shape<Output = i64>` binding is the object's. None for other bounds.
+fn opaque_object(
+    parsed: item::type_ref::Path,
+    types: &BTreeMap<ImmutableString, Target>,
+    host: &host::Registry,
+    #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
+) -> Option<Result<Path, Error>> {
+    let [segment] = &parsed.segments[..] else {
+        return None;
+    };
+    let (mut traits, mut bindings) = (Vec::new(), Vec::new());
+    for argument in segment.arguments.iter() {
+        let item::type_ref::Argument::Type(item::type_ref::Type::Path(bound)) = argument else {
+            continue;
+        };
+        // `=Shape=Output<i64>`: the binding `=Output<i64>` of `Shape`.
+        if let [binding] = &bound.segments[..]
+            && let Some(rest) = binding
+                .name
+                .text
+                .strip_prefix(item::type_ref::BINDING_PREFIX)
+            && let Some((_, name)) = rest.split_once('=')
+        {
+            let mut binding = binding.clone();
+            binding.name.text = format!("{}{name}", item::type_ref::BINDING_PREFIX).into();
+            bindings.push(item::type_ref::Argument::Type(item::type_ref::Type::Path(
+                item::type_ref::Path {
+                    segments: Box::new([binding]),
+                    span: bound.span,
+                    global: false,
+                },
+            )));
+            continue;
+        }
+        traits.push(bound.clone());
+    }
+    let [bound] = &traits[..] else {
+        return None;
+    };
+    let mut segments = Vec::with_capacity(bound.segments.len() + 1);
+    segments.push(item::type_ref::Segment {
+        name: item::Name {
+            text: item::type_ref::DYN_SEGMENT.into(),
+            span: segment.name.span,
+        },
+        arguments: Box::default(),
+        span: segment.name.span,
+    });
+    segments.extend(bound.segments.iter().cloned());
+    if let Some(last) = segments.last_mut() {
+        let mut arguments = last.arguments.to_vec();
+        arguments.extend(bindings);
+        last.arguments = arguments.into_boxed_slice();
+    }
+    let object = item::type_ref::Path {
+        segments: segments.into_boxed_slice(),
+        span: parsed.span,
+        global: false,
+    };
+    Some(resolve_path(
+        object,
+        types,
+        host,
+        #[cfg(feature = "rust-import")]
+        native,
+    ))
+}
+
 /// `impl Trait<..> + 'a` of a facade trait is the one type the trait
 /// projects to, taking the trait's leading arguments: `impl Widget<Message>`
 /// is `Element<Message>`. Arguments after them (iced's defaulted `Theme` and
@@ -1339,7 +1411,14 @@ fn resolve_impl(
                 span,
             });
         }
-        return Err(unsupported());
+        return opaque_object(
+            parsed,
+            types,
+            host,
+            #[cfg(feature = "rust-import")]
+            native,
+        )
+        .unwrap_or_else(|| Err(unsupported()));
     };
     let [projection] = definition.projections() else {
         return Err(unsupported());

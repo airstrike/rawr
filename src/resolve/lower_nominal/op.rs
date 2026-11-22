@@ -117,7 +117,8 @@ pub(super) enum Op {
     },
     /// A comparison or a map's or set's operation on values of type `ty`
     /// (a map's or set's key), whose shape inference settles: where it
-    /// holds unsigned integers (`Shape`). `flags` are `SHAPED_*`.
+    /// holds unsigned integers or tuples (`Shape`). `flags` are
+    /// `SHAPED_*`.
     Shaped {
         op: PreludeOp,
         ty: Ty,
@@ -136,6 +137,9 @@ pub(super) const SHAPED_RESULT: u8 = 4;
 /// A `MapFrom` or `SetFrom` of `Option` items: the first `None`, else
 /// `Some` of the payloads'.
 pub(super) const SHAPED_OPTION: u8 = 8;
+/// A value passed to a generic parameter (`PreludeOp::Unsigned`), whose
+/// shape keeps its tuples (`Shape::with_tuples`).
+pub(super) const SHAPED_TUPLES: u8 = 16;
 
 /// The runtime primitives of `Option<T>` and `Result<T, E>`;
 /// every method composes them.
