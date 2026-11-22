@@ -543,30 +543,22 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Vec<origin::Fragment> {
         let mut arguments = Vec::new();
-        // A parameter witnessed for its traits alone may take a reference,
-        // which implements them only by forwarding to its referent's impls
-        // (`resolve::forward`): the referent's witness serves.
         let names = witness_generics(generics, &self.models)
-            .map(|generic| {
-                (
-                    generic.name.text.clone(),
-                    !generic.host && !generic.bounds.contains(capability::Kind::Default),
-                )
-            })
+            .map(|generic| (generic.name.text.clone(), Need::of(generic, &self.models)))
             .collect::<Vec<_>>();
         // A call inside a closure may pass this body's own witnesses, which
         // the closure then captures.
         if !names.is_empty() {
             self.capture_witnesses();
         }
-        for (name, forwarded) in names {
+        for (name, need) in names {
             let Some(ty) = substitution.get(&name) else {
                 continue;
             };
             let placeholder = witness_placeholder(self.pending_witnesses.len());
             arguments.push(origin::Fragment::plain(placeholder.clone()));
             self.pending_witnesses
-                .push((placeholder, name, ty.clone(), span, forwarded));
+                .push((placeholder, name, ty.clone(), span, need));
         }
         arguments
     }
@@ -579,10 +571,19 @@ impl<'a> Parser<'a> {
                 .generics
                 .get(name)
                 .is_some_and(|bounds| bounds.contains(capability::Kind::Default))
+            || self.generic_traits.get(name).is_some_and(|traits| {
+                traits.iter().any(|name| {
+                    static_trait(&self.models, name) || self.models.kind_traits.contains(name)
+                })
+            })
             || self
-                .generic_traits
-                .get(name)
-                .is_some_and(|traits| traits.iter().any(|name| static_trait(&self.models, name)))
+                .generic_trait_arguments
+                .get(&(name.into(), "Into".into()))
+                .is_some_and(|lists| {
+                    lists
+                        .iter()
+                        .any(|arguments| kind_into_bound(&self.models, "Into", arguments))
+                })
     }
 
     /// Each enclosing closure captures this body's type witnesses, which a
@@ -750,14 +751,18 @@ impl<'a> Parser<'a> {
         }
         self.finish_instances()?;
         self.finish_defaults()?;
-        for (placeholder, parameter, ty, span, forwarded) in
-            std::mem::take(&mut self.pending_witnesses)
+        for (placeholder, parameter, ty, span, need) in std::mem::take(&mut self.pending_witnesses)
         {
             let mut ty = self.inference.resolve(&ty);
-            while forwarded && let Ty::Reference { target, .. } = &ty {
+            while need != Need::Type
+                && let Ty::Reference { target, .. } = &ty
+            {
                 ty = self.inference.resolve(target);
             }
-            let witness = self.witness(&ty, &parameter, span)?;
+            let witness = match self.witness(&ty, &parameter, span) {
+                Err(_) if need == Need::Kind => UNKNOWN_WITNESS.to_string(),
+                witness => witness?,
+            };
             if let Ty::Param(_, Parameter::Opaque(captured)) = &ty {
                 let arguments = self
                     .opaque_argument_witnesses(&captured.arguments, &parameter, span)
@@ -1333,6 +1338,8 @@ pub(super) fn assumed_generics(generics: &[item::Generic]) -> Box<[(Ty, Immutabl
 /// function without `self`: each takes a hidden type witness, so
 /// `T::default()` and `T::new()` reach a type erased at runtime. A const
 /// parameter takes its value as its witness, which `N` in the body reads.
+/// One bounded by a kind trait (`Models::kind_traits`) takes one too, so
+/// `x.half()` of a `T` that is `f32` runs `f32`'s impl.
 pub(super) fn witness_generics<'a>(
     generics: &'a [item::Generic],
     models: &'a Models,
@@ -1345,8 +1352,75 @@ pub(super) fn witness_generics<'a>(
                 .traits
                 .iter()
                 .any(|name| static_trait(models, &name.text))
+            || kind_bounded(generic, models)
     })
 }
+
+/// Whether `generic` is bounded by a kind trait (`Models::kind_traits`) or
+/// by `Into` of a type whose `From` impls name kinds (`Models::kind_into`).
+fn kind_bounded(generic: &item::Generic, models: &Models) -> bool {
+    generic
+        .traits
+        .iter()
+        .any(|name| models.kind_traits.contains(&name.text))
+        || generic.trait_arguments.iter().any(|(name, arguments)| {
+            kind_into_bound(
+                models,
+                name,
+                &arguments.iter().map(Ty::from_resolved).collect::<Vec<_>>(),
+            )
+        })
+}
+
+/// Whether `name<arguments>` is the prelude's `Into` of a type whose `From`
+/// impls name kinds (`Models::kind_into`).
+pub(super) fn kind_into_bound(models: &Models, name: &str, arguments: &[Ty]) -> bool {
+    name == "Into"
+        && models
+            .traits
+            .get(name)
+            .is_some_and(|(_, declared)| declared.name.span == Span::NONE)
+        && matches!(arguments, [target] if models.kind_into(target).is_some())
+}
+
+/// What a call's witness for a generic parameter must name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Need {
+    /// The type itself: `T::default()` builds one, and a host operation
+    /// is instantiated by it.
+    Type,
+    /// The referent of a reference: a parameter witnessed for its traits
+    /// alone may take a reference, which implements them only by
+    /// forwarding to its referent's impls (`resolve::forward`).
+    Referent,
+    /// As `Referent`, for a parameter witnessed for its kind traits alone:
+    /// a type without a witness passes `UNKNOWN_WITNESS`, and the call
+    /// runs the impl of the value's runtime type.
+    Kind,
+}
+
+impl Need {
+    /// What a call's witness for `generic`, one of `witness_generics`,
+    /// must name.
+    pub(super) fn of(generic: &item::Generic, models: &Models) -> Self {
+        if generic.host || generic.bounds.contains(capability::Kind::Default) {
+            Self::Type
+        } else if generic.constant.is_some()
+            || generic
+                .traits
+                .iter()
+                .any(|name| static_trait(models, &name.text))
+        {
+            Self::Referent
+        } else {
+            Self::Kind
+        }
+    }
+}
+
+/// The witness of a type no witness code names, which a kind trait's
+/// dispatcher (`write_kind_dispatchers`) reads as the value's runtime type.
+pub(super) const UNKNOWN_WITNESS: crate::INT = -1;
 
 /// Whether a resolved type names a generic parameter.
 pub(super) fn mentions_parameter(ty: &type_ref::Type) -> bool {

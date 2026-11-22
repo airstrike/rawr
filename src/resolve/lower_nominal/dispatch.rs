@@ -10,10 +10,10 @@ use super::op::{
 use super::ty::{Float, Int, Ty};
 use super::{
     closure, default_value, drops, instance_dispatcher_name, instance_text, item_generics,
-    kind_code, location, mentions_parameter, method_name, origin, retain_locations,
-    static_dispatcher_name, static_instance_dispatcher_name, trait_dispatcher_name,
-    witness_generics, witness_variable, Lowered, ParsedExpr, Parser, CLOSURE_SENTINEL,
-    DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL,
+    kind_code, kind_dispatcher_name, location, mentions_parameter, method_name, origin,
+    retain_locations, static_dispatcher_name, static_instance_dispatcher_name,
+    trait_dispatcher_name, witness_generics, witness_variable, Lowered, ParsedExpr, Parser,
+    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL, UNKNOWN_WITNESS,
 };
 use crate::resolve::{item, type_ref, Error, Program};
 use crate::{capability, method, ImmutableString, Span};
@@ -178,17 +178,25 @@ pub(super) fn write_trait_dispatchers(
                     }
                     let _ = writeln!(
                         text,
-                        "if __rawr_type == {} {{ return self.{}({parameters}); }}",
+                        "if __rawr_type == {} {{ return self.{}({}); }}",
                         owner_key(*owner),
-                        method_name(definition)
+                        method_name(definition),
+                        unknown_witnesses(&parameters, definition, models)
                     );
                 }
+            }
+            if models.kind_traits.contains(trait_name) {
+                write_kind_dispatcher(output, models, trait_name, *source, declared, function);
             }
             // A std trait's dispatcher falls back to what Rawr does for a
             // type without a hand-written impl: a derive, or a builtin.
             let fallback = match (models.std_traits.contains(trait_name), trait_name.as_str()) {
                 _ if let Some(blanket) = blanket => {
-                    format!("return self.{}({parameters});", method_name(blanket))
+                    format!(
+                        "return self.{}({});",
+                        method_name(blanket),
+                        unknown_witnesses(&parameters, blanket, models)
+                    )
                 }
                 (true, "Clone") => "return self;".to_string(),
                 // An `Rc` or `Arc` writes what it points to, as std's
@@ -237,6 +245,116 @@ pub(super) fn write_trait_dispatchers(
             output.declaration(*source, declared.name.span, &text);
         }
     }
+}
+
+/// The arguments a dispatcher by runtime type passes the impl method
+/// `definition`: `parameters`, then `UNKNOWN_WITNESS` for each witness its
+/// generics take, which no runtime value names (`impl<T: Half> Show for
+/// W<T>` called through `dyn Show`).
+fn unknown_witnesses(parameters: &str, definition: &method::Definition, models: &Models) -> String {
+    let witnesses = witness_generics(definition.generics(), models).count();
+    std::iter::once(parameters)
+        .filter(|parameters| !parameters.is_empty())
+        .map(str::to_string)
+        .chain(std::iter::repeat_n(UNKNOWN_WITNESS.to_string(), witnesses))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The dispatcher of the kind trait `trait_name`'s method `function`
+/// (`Models::kind_traits`): the impl for the builtin type a generic
+/// parameter's witness names (`witness_code`), so a `T` that is `f32` runs
+/// `f32`'s impl and not `f64`'s, else the impl of the receiver's runtime
+/// type (`write_trait_dispatchers`).
+fn write_kind_dispatcher(
+    output: &mut location::Generated,
+    models: &Models,
+    trait_name: &str,
+    source: crate::program::source::Id,
+    declared: &item::Trait,
+    function: &item::Function,
+) {
+    let parameters = (0..function.parameters.len())
+        .map(|index| format!("__rawr_parameter_{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let separator = if parameters.is_empty() { "" } else { ", " };
+    let mut text = format!(
+        "__rawr_private fn {}(__rawr_witness{separator}{parameters}) {{\n",
+        kind_dispatcher_name(trait_name, &function.name.text)
+    );
+    for definition in models
+        .trait_methods
+        .iter()
+        .filter(|((_, name), _)| *name == function.name.text)
+        .flat_map(|(_, definitions)| definitions)
+        .filter(|definition| {
+            definition
+                .trait_name()
+                .is_some_and(|name| name == trait_name)
+        })
+    {
+        let Some(code) = definition
+            .builtin_owner()
+            .and_then(|owner| witness_code(&Ty::from_resolved(owner)))
+        else {
+            continue;
+        };
+        let _ = writeln!(
+            text,
+            "if __rawr_witness == {code} {{ return self.{}({}); }}",
+            method_name(definition),
+            unknown_witnesses(&parameters, definition, models)
+        );
+    }
+    let _ = write!(
+        text,
+        "return self.{}({parameters});\n}}\n",
+        trait_dispatcher_name(trait_name, &function.name.text)
+    );
+    output.declaration(source, declared.name.span, &text);
+}
+
+/// The name of `Into`'s dispatcher into its instance `index` by a generic
+/// parameter's witness (`Models::kind_into`).
+pub(super) fn kind_into_dispatcher_name(index: usize) -> String {
+    kind_dispatcher_name("Into", &format!("into__{index:08}"))
+}
+
+/// `x.into()` into `target`, `Into`'s instance `index`, by the witness of
+/// the generic parameter `x` is a value of: the `From` impl for the type
+/// it names, so a `T` that is `&str` runs `From<&str>` and not
+/// `From<String>`, else the impl of `x`'s runtime type.
+fn write_kind_into_dispatcher(
+    output: &mut location::Generated,
+    models: &Models,
+    source: crate::program::source::Id,
+    declared: &item::Trait,
+    target: &Ty,
+    index: usize,
+) {
+    let mut text = format!(
+        "__rawr_private fn {}(__rawr_witness) {{\n",
+        kind_into_dispatcher_name(index)
+    );
+    for conversion in models.conversions_into(target) {
+        if let Some(code) = conversion
+            .conversion()
+            .and_then(|from| witness_code(&Ty::from_resolved(from)))
+        {
+            let _ = writeln!(
+                text,
+                "if __rawr_witness == {code} {{ return {}(self); }}",
+                method_name(conversion)
+            );
+        }
+    }
+    let _ = write!(
+        text,
+        "return self.{}();\n}}\n",
+        instance_dispatcher_name("Into", "into", index)
+    );
+    output.declaration(source, declared.name.span, &text);
 }
 
 /// What a dispatcher gives for a std trait method that only borrows its
@@ -444,18 +562,7 @@ pub(super) fn write_into_dispatchers(
             "__rawr_private fn {}() {{\nlet __rawr_type = {type_index}(self);\n",
             instance_dispatcher_name("Into", "into", index)
         );
-        // A builtin owner's conversions are into each of its Self types:
-        // `From<Roar> for f32` is not into `f64`.
-        for conversion in owner_id(&target)
-            .and_then(|id| models.conversions.get(&id))
-            .into_iter()
-            .flatten()
-            .filter(|conversion| {
-                conversion
-                    .builtin_owner()
-                    .is_none_or(|owner| Ty::from_resolved(owner) == target)
-            })
-        {
+        for conversion in models.conversions_into(&target) {
             let from =
                 Ty::from_resolved(conversion.conversion().expect("conversions have a source"));
             if let Some(id) = owner_id(&from) {
@@ -466,6 +573,9 @@ pub(super) fn write_into_dispatchers(
                     method_name(conversion)
                 );
             }
+        }
+        if models.kind_into(&target).is_some() {
+            write_kind_into_dispatcher(output, models, source, declared, &target, index);
         }
         for (from, op) in builtin_conversions_into(&target) {
             let helper = format!("{SENTINEL}{}", ops.len());
@@ -582,6 +692,29 @@ pub(super) fn write_static_dispatcher(
             format!("__rawr_private fn {name}(__rawr_witness{separator}{parameters}) {{\n");
         if std_from_str {
             write_builtin_parses(&mut text, ops);
+        }
+        // `T::make()` of a `T` that is `u8` runs `u8`'s impl, not `i64`'s:
+        // each builtin impl by its own type's witness (`witness_code`),
+        // before the arms by runtime type.
+        if declared.generics.is_empty() {
+            for definition in models
+                .trait_methods
+                .iter()
+                .filter(|((_, name), _)| *name == function.name.text)
+                .flat_map(|(_, definitions)| definitions)
+                .filter(|definition| definition.trait_name() == Some(trait_name))
+            {
+                if let Some(code) = definition
+                    .builtin_owner()
+                    .and_then(|owner| witness_code(&Ty::from_resolved(owner)))
+                {
+                    let _ = writeln!(
+                        text,
+                        "if __rawr_witness == {code} {{ return {}({parameters}); }}",
+                        method_name(definition)
+                    );
+                }
+            }
         }
         text.push_str(&witness_key_statement());
         let instance_types = *instance;

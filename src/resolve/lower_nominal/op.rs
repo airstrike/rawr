@@ -1956,22 +1956,30 @@ pub(super) const KIND_WITNESS: INT = -100;
 /// `f32`'s kind code (`kind_code`).
 const F32_KIND: INT = 10;
 
+/// `&str`'s kind code (`kind_code`), which it shares with `String`, its
+/// runtime type: `&str`'s witness is `KIND_WITNESS` less it, as std's
+/// impls for the two differ.
+const STR_KIND: INT = 16;
+
 /// The witness a generic's type argument `ty` passes: its builtin code
-/// (`builtin_code`), or for an integer kind or `f32`, that kind's own
-/// (`KIND_WITNESS`).
+/// (`builtin_code`), or for an integer kind, `f32` or `&str`, that kind's
+/// own (`KIND_WITNESS`).
 pub(super) fn witness_code(ty: &Ty) -> Option<INT> {
     match ty {
         Ty::Int(Int::Var(_)) => builtin_code(ty),
         Ty::Int(_) | Ty::Float(Float::F32) => Some(KIND_WITNESS - super::kind_code(ty.clone())),
+        Ty::Str => Some(KIND_WITNESS - STR_KIND),
         ty => builtin_code(ty),
     }
 }
 
 /// The builtin code (`builtin_code`) a witness code stands for: an integer
-/// kind's or `f32`'s own (`witness_code`) is its runtime type's.
+/// kind's, `f32`'s or `&str`'s own (`witness_code`) is its runtime type's.
 pub(super) const fn witness_key(code: INT) -> INT {
     if code == KIND_WITNESS - F32_KIND {
         -3
+    } else if code == KIND_WITNESS - STR_KIND {
+        -4
     } else if code <= KIND_WITNESS {
         -2
     } else {
@@ -1984,9 +1992,11 @@ pub(super) const fn witness_key(code: INT) -> INT {
 /// as its builtin code (`witness_key`).
 pub(super) fn witness_key_statement() -> String {
     format!(
-        "if __rawr_witness == {} {{ __rawr_witness = -3; }} else if __rawr_witness <= \
-         {KIND_WITNESS} {{ __rawr_witness = -2; }}\n",
-        KIND_WITNESS - F32_KIND
+        "if __rawr_witness == {} {{ __rawr_witness = -3; }} else if __rawr_witness == {} {{ \
+         __rawr_witness = -4; }} else if __rawr_witness <= {KIND_WITNESS} {{ __rawr_witness = \
+         -2; }}\n",
+        KIND_WITNESS - F32_KIND,
+        KIND_WITNESS - STR_KIND
     )
 }
 

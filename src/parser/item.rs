@@ -5503,6 +5503,35 @@ fn erase_fn_bounds(
     output: &mut Option<type_ref::Type>,
     outlives: &[(crate::item::Name, crate::item::Name)],
 ) {
+    // `I: Iterator` with no `Item` equality: its item is a lifted
+    // parameter, `<I as Iterator>::Item`, which the call infers.
+    for index in 0..generics.len() {
+        let generic = &generics[index];
+        let Some(trait_name) = generic.bounds.iter().find_map(|bound| {
+            let (last, prefix) = bound.segments.split_last()?;
+            iterator_trait(&last.name.text)?;
+            prefix
+                .iter()
+                .all(|module| matches!(module.name.text.as_str(), "std" | "core" | "iter"))
+                .then(|| last.name.clone())
+        }) else {
+            continue;
+        };
+        if generic
+            .projections
+            .iter()
+            .any(|(owner, item, _)| owner.text == trait_name.text && item.text == "Item")
+        {
+            continue;
+        }
+        let base = generic.name.clone();
+        let item = crate::item::Name {
+            text: "Item".into(),
+            span: trait_name.span,
+        };
+        // The base is declared and the trait named, so a parameter is lifted.
+        let _ = associated_parameter(generics, &base, Some(trait_name), &item);
+    }
     generics.retain(|generic| {
         // `I: Iterator<Item = T>` (or `IntoIterator`): `impl Iterator<Item =
         // T>` wherever `I` is written, and `T` for `I::Item`.

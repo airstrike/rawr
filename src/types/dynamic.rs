@@ -58,6 +58,11 @@ pub(crate) const UNSIGNED_TAG: Tag = 0x7536;
 /// `{:?}` is Rust's `(a, b)`.
 pub(crate) const TUPLE_TAG: Tag = 0x7475;
 
+/// The tag of a float that holds an `f32` where no static type says so: a
+/// value a typed script passed to a generic parameter, which prints as
+/// the `f32` it is.
+pub(crate) const SINGLE_TAG: Tag = 0x6633;
+
 /// Dynamic type containing any value.
 #[must_use]
 pub struct Dynamic(pub(crate) Union);
@@ -493,6 +498,9 @@ impl fmt::Display for Dynamic {
             Union::Char(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => fmt::Display::fmt(&(*v as u64), f),
             Union::Int(ref v, ..) => fmt::Display::fmt(v, f),
+            Union::Float(ref v, tag, ..) if tag == SINGLE_TAG => {
+                fmt::Display::fmt(&super::FloatWrapper::new(**v as f32), f)
+            }
             Union::Float(ref v, ..) => fmt::Display::fmt(v, f),
             #[cfg(feature = "decimal")]
             Union::Decimal(ref v, ..) => fmt::Display::fmt(v, f),
@@ -631,6 +639,7 @@ impl fmt::Debug for Dynamic {
             Union::Char(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => fmt::Debug::fmt(&(*v as u64), f),
             Union::Int(ref v, ..) => fmt::Debug::fmt(v, f),
+            Union::Float(ref v, tag, ..) if tag == SINGLE_TAG => fmt::Debug::fmt(&(**v as f32), f),
             Union::Float(ref v, ..) => fmt::Debug::fmt(v, f),
             #[cfg(feature = "decimal")]
             Union::Decimal(ref v, ..) => fmt::Debug::fmt(v, f),

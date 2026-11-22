@@ -1178,9 +1178,10 @@ impl<'a> Parser<'a> {
                 Token::LeftParen | Token::Unit | Token::DoubleColon
             ) && self.iterator_receiver(&builtin, &member)
             {
-                // An adaptor or a consumer that takes `self` moves a range
-                // out of its place, as `r.collect()` does.
-                if self.stepped_item(&builtin).is_some()
+                // An adaptor or a consumer that takes `self` moves the
+                // iterator out of its place, as `it.collect()` does. A
+                // `&mut` iterator's own impl is left to its place.
+                if !matches!(builtin, Ty::Reference { .. })
                     && std_method::iterator(&member, |_| true)
                         .is_some_and(|found| found.mode == receiver::Mode::Owned)
                 {

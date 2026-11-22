@@ -653,7 +653,6 @@ impl<'a> Parser<'a> {
                 | Ty::Never
                 | Ty::Reference { .. }
                 | Ty::Dyn(..)
-                | Ty::Iter(..)
                 | Ty::Callable { .. }
                 | Ty::Param(..)
                 | Ty::Projection(..)

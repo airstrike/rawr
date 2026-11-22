@@ -3,6 +3,7 @@
 
 use super::inference::AssociatedTypes;
 use super::obligation;
+use super::op::{builtin_code, witness_code};
 use super::ty::Ty;
 use super::{
     function_name, inherit_block_names, inherit_names, instance_text, is_iterator_trait,
@@ -147,6 +148,11 @@ pub(super) struct Tables {
     /// The distinct argument lists without parameters of each generic
     /// trait's impls: one dispatcher per instance.
     pub(super) trait_instances: BTreeMap<ImmutableString, Vec<Box<[type_ref::Type]>>>,
+    /// The program's traits with impls for two kinds of one runtime type
+    /// (`f32` and `f64`, or two integer kinds). A call through a generic
+    /// parameter bounded by one picks its impl by the parameter's witness,
+    /// as rustc picks it by the parameter's type.
+    pub(super) kind_traits: BTreeSet<ImmutableString>,
     /// `type Name = T;` of each `impl Trait for Owner`.
     pub(super) associated: Shared<AssociatedTypes>,
     /// The std traits among `traits` (`Clone`, `Display`, ..).
@@ -297,6 +303,7 @@ impl Models {
                     .push(method.clone());
             }
         }
+        let kind_traits = kind_traits(&trait_methods);
         let traits = program
             .items
             .iter()
@@ -1015,6 +1022,7 @@ impl Models {
             impl_arguments,
             impl_bounds,
             trait_instances,
+            kind_traits,
             associated: Shared::new(associated),
             std_traits,
             opaque_outputs: Shared::new(opaque_outputs(&program.items)),
@@ -1365,6 +1373,45 @@ impl Models {
             [single] => Some(single),
             _ => None,
         }
+    }
+
+    /// The program's `From<S> for target` impls, which `s.into()` into
+    /// `target` runs. A builtin owner's are into each of its Self types:
+    /// `From<Roar> for f32` is not into `f64`.
+    pub(super) fn conversions_into<'a>(
+        &'a self,
+        target: &'a Ty,
+    ) -> impl Iterator<Item = &'a method::Definition> {
+        super::op::owner_id(target)
+            .and_then(|id| self.conversions.get(&id))
+            .into_iter()
+            .flatten()
+            .filter(|conversion| {
+                conversion
+                    .builtin_owner()
+                    .is_none_or(|owner| Ty::from_resolved(owner) == *target)
+            })
+    }
+
+    /// The index among `Into`'s instances of `target`, when `target`'s
+    /// `From` impls name two kinds of one runtime type (`From<u8>` and
+    /// `From<i64>`, or `From<&str>` and `From<String>`): `x.into()` of a
+    /// generic parameter's value picks one by the parameter's witness, as
+    /// `kind_traits`' calls do.
+    pub(super) fn kind_into(&self, target: &Ty) -> Option<usize> {
+        let index = self.trait_instances.get("Into")?.iter().position(
+            |instance| matches!(&instance[..], [only] if Ty::from_resolved(only) == *target),
+        )?;
+        let mut kinds = BTreeMap::<crate::INT, BTreeSet<crate::INT>>::new();
+        for conversion in self.conversions_into(target) {
+            let Some(source) = conversion.conversion().map(Ty::from_resolved) else {
+                continue;
+            };
+            if let (Some(key), Some(code)) = (builtin_code(&source), witness_code(&source)) {
+                kinds.entry(key).or_default().insert(code);
+            }
+        }
+        kinds.values().any(|codes| codes.len() > 1).then_some(index)
     }
 
     /// The inherent function `name` of `owner` that is private to a module
@@ -1765,6 +1812,33 @@ impl Nominal {
     pub(super) fn capabilities(&self) -> capability::Set {
         self.definition().capabilities()
     }
+}
+
+/// The traits whose impls name two kinds of one runtime type (`Models::
+/// kind_traits`): two builtin owners with one runtime key and two witness
+/// codes (`witness_code`).
+fn kind_traits(
+    trait_methods: &BTreeMap<(type_def::Id, ImmutableString), Vec<method::Definition>>,
+) -> BTreeSet<ImmutableString> {
+    let mut kinds = BTreeMap::<(ImmutableString, crate::INT), BTreeSet<crate::INT>>::new();
+    for definition in trait_methods.values().flatten() {
+        let (Some(trait_name), Some(owner)) = (definition.trait_name(), definition.builtin_owner())
+        else {
+            continue;
+        };
+        let owner = Ty::from_resolved(owner);
+        if let (Some(key), Some(code)) = (builtin_code(&owner), witness_code(&owner)) {
+            kinds
+                .entry((trait_name.clone(), key))
+                .or_default()
+                .insert(code);
+        }
+    }
+    kinds
+        .into_iter()
+        .filter(|(_, codes)| codes.len() > 1)
+        .map(|((trait_name, _), _)| trait_name)
+        .collect()
 }
 
 /// The crate traits each source's `use`s put in scope, each with the block
