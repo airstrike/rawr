@@ -8,6 +8,7 @@ mod definition;
 mod panic;
 mod render;
 mod report;
+mod requirement;
 pub mod section;
 pub(crate) mod source;
 pub mod suggestion;

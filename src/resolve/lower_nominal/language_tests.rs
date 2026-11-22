@@ -2015,7 +2015,10 @@ fn language_patterns_literals_ranges_tuples_and_bindings() {
     let missing = rejected(
         "fn f(x: Option<i64>) -> i64 { match x { Some(0) => 0, None => 1 } } pub fn run() -> i64 { 0 } run()",
     );
-    assert!(missing.contains("`Some(_)` not covered"), "{missing}");
+    assert!(
+        missing.contains("`Some(i64::MIN..=-1_i64)` and `Some(1_i64..=i64::MAX)` not covered"),
+        "{missing}"
+    );
     let tuple = rejected(
         "fn f(p: (bool, bool)) -> i64 { match p { (true, _) => 0, (false, true) => 1 } } pub fn run() -> i64 { 0 } run()",
     );
@@ -9080,14 +9083,14 @@ fn language_type_aliases() {
 
 #[test]
 fn language_field_and_variant_attributes_are_inert() {
-    // Derive helpers such as `#[serde(..)]` mean nothing to Rawr, as rustc
+    // Documentation and lint attributes mean nothing to Rawr, as rustc
     // leaves them inert. `#[cfg(..)]` still leaves a field out.
     let value = run(r#"
         #[derive(Debug, Clone, Default)]
         struct Task {
-            #[serde(default = "Uuid::new_v4")]
+            #[doc = "The task's id."]
             id: i64,
-            #[serde(skip)]
+            #[deprecated]
             #[allow(dead_code)]
             pub weight: i64,
             #[cfg(test)]
@@ -9096,7 +9099,7 @@ fn language_field_and_variant_attributes_are_inert() {
         struct Pair(#[allow(unused)] i64, i64);
         #[derive(Debug, Clone, Copy, PartialEq, Default)]
         enum Filter {
-            #[serde(rename = "all")]
+            #[doc(alias = "all")]
             #[default]
             All,
             Done { #[allow(unused)] count: i64 },

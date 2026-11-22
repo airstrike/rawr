@@ -79,6 +79,7 @@ impl Parser<'_> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
                 let source = value.rendered_source();

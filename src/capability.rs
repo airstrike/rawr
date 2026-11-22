@@ -308,6 +308,9 @@ struct Request {
     /// Each crate derive whose expansion isn't loaded: as written, the
     /// macro it names, and where it is written.
     unexpanded: Vec<(ImmutableString, ImmutableString, Span)>,
+    /// Whether a crate's derive is among the item's, whose helper
+    /// attributes the item and its members may carry.
+    helpers: bool,
 }
 
 /// What a `#[derive(..)]` path names, resolved as rustc resolves it in the
@@ -484,11 +487,38 @@ pub(crate) fn resolve(
                 ..request
             })
             .map_err(|error| LocatedError::primary(shell.source, error))?,
-            item::Kind::Use(_)
-            | item::Kind::Impl(_)
-            | item::Kind::Trait(_)
-            | item::Kind::Function(_) => continue,
+            item::Kind::Function(item) => {
+                attributes_in_scope(shell, &item.header.attributes, &uses)?;
+                continue;
+            }
+            item::Kind::Use(_) | item::Kind::Impl(_) | item::Kind::Trait(_) => continue,
         };
+        if !request.helpers {
+            let members: Vec<&crate::item::Attribute> = match &shell.kind {
+                item::Kind::Struct(item) => item
+                    .fields
+                    .iter()
+                    .flat_map(|field| field.attributes.iter())
+                    .collect(),
+                item::Kind::Enum(item) => item
+                    .variants
+                    .iter()
+                    .flat_map(|variant| {
+                        variant
+                            .attributes
+                            .iter()
+                            .chain(variant.field_attributes.iter().flatten())
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let header = match &shell.kind {
+                item::Kind::Struct(item) => &item.header,
+                item::Kind::Enum(item) => &item.header,
+                _ => unreachable!("only nominal items create capability requests"),
+            };
+            attributes_in_scope(shell, header.attributes.iter().chain(members), &uses)?;
+        }
         if let Some(&(_, _, attribute)) = request.unexpanded.first() {
             let header = match &shell.kind {
                 item::Kind::Struct(item) => &item.header,
@@ -671,6 +701,21 @@ pub(crate) fn resolve(
     Ok(resolved)
 }
 
+/// rustc's error for an attribute among `attributes`, on `shell`'s item
+/// or its members, that names nothing in scope
+/// ([`crate::resolve::attribute::unknown`]).
+fn attributes_in_scope<'a>(
+    shell: &item::Shell,
+    attributes: impl IntoIterator<Item = &'a crate::item::Attribute>,
+    uses: &BTreeMap<program::source::Id, Vec<&item::Use>>,
+) -> Result<(), LocatedError> {
+    let uses = uses.get(&shell.source).map_or(&[][..], Vec::as_slice);
+    match crate::resolve::attribute::unknown(attributes, uses) {
+        Some(error) => Err(LocatedError::primary(shell.source, error)),
+        None => Ok(()),
+    }
+}
+
 impl Request {
     fn new(
         derive: &dyn Fn(program::source::Id, &crate::item::type_ref::Path) -> Derive,
@@ -684,6 +729,7 @@ impl Request {
         let mut requested = Set::default();
         let mut spans = BTreeMap::new();
         let mut unexpanded = Vec::new();
+        let mut helpers = false;
 
         for attribute in &header.attributes {
             if attribute.path.segments.len() != 1
@@ -704,6 +750,7 @@ impl Request {
                     // rustc expands it, and its items are the program's
                     // (D740).
                     Derive::Crate(path) => {
+                        helpers = true;
                         unexpanded.push((
                             crate::item::written_path(argument).into(),
                             path,
@@ -711,7 +758,10 @@ impl Request {
                         ));
                         continue;
                     }
-                    Derive::Expanded => continue,
+                    Derive::Expanded => {
+                        helpers = true;
+                        continue;
+                    }
                     Derive::Unknown => {
                         return Err(Error::Syntax {
                             message: format!("cannot find derive macro `{name}` in this scope")
@@ -745,6 +795,7 @@ impl Request {
             spans,
             enum_default: Ok(()),
             unexpanded,
+            helpers,
         })
     }
 

@@ -14,6 +14,7 @@ pub mod conversions;
 pub mod custom;
 pub mod diverging;
 pub mod elevated;
+pub mod flags;
 pub mod fonts;
 pub mod framing;
 pub mod grid;

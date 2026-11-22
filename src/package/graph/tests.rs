@@ -168,3 +168,67 @@ fn a_snapshot_holds_a_file_with_inline_modules_once() {
     assert_eq!(reloaded.sources().len(), 3);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// A `macro_rules!` a module defines before its `mod` items is in scope in
+/// the files of those modules and the files below them, as rustc's textual
+/// scope has it, where an item goes and in a body (#2190). The output is
+/// rustc's.
+#[test]
+fn a_macro_defined_before_a_mod_is_in_scope_in_its_files() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/graph-tests")
+        .join(format!("macro-scope-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src/a/b")).unwrap();
+    let files = [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"scope\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        ),
+        (
+            "src/main.rs",
+            "// rawr\nmacro_rules! one { () => { 1 }; }\n\
+             macro_rules! make { ($name:ident, $value:expr) => { pub fn $name() -> i32 { $value } }; }\n\
+             mod a;\n\
+             fn main() { println!(\"{} {} {} {}\", a::first(), a::b::two(), a::b::c::three(), a::made()); }\n",
+        ),
+        ("src/a.rs", "// rawr\npub mod b;\nmake!(made, 4);\npub fn first() -> i32 { one!() }\n"),
+        (
+            "src/a/b.rs",
+            "// rawr\nmacro_rules! two_of { () => { one!() + one!() }; }\npub mod c;\n\
+             pub fn two() -> i32 { two_of!() }\n",
+        ),
+        ("src/a/b/c.rs", "// rawr\npub fn three() -> i32 { two_of!() + one!() }\n"),
+    ];
+    for (path, text) in files {
+        fs::write(root.join(path), text).unwrap();
+    }
+    let mut answers = crate::project::cargo::Answers::new();
+    let target = project::Target::discover(&root, &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
+    let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = std::sync::Arc::clone(&printed);
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let (ast, main) = engine
+        .compile_package(graph)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = crate::Scope::new();
+    let _: crate::Dynamic = engine
+        .eval_ast_with_scope::<crate::Dynamic>(&mut scope, &ast)
+        .unwrap();
+    let main = main.expect("the package has a main");
+    let _: crate::Dynamic = engine
+        .call_fn_with_options::<crate::Dynamic>(
+            crate::CallFnOptions::new()
+                .eval_ast(false)
+                .rewind_scope(false),
+            &mut scope,
+            &ast,
+            main,
+            (),
+        )
+        .unwrap();
+    assert_eq!(*printed.lock().unwrap(), "1 2 3 4\n");
+    let _ = fs::remove_dir_all(&root);
+}

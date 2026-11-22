@@ -1033,6 +1033,7 @@ impl<'a> Parser<'a> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
                 // A hand-written `Clone` runs for the value's type.
@@ -2583,6 +2584,7 @@ impl<'a> Parser<'a> {
                     declared: None,
                     required_by: None,
                     formatted: None,
+                    chain: crate::resolve::Chain::default(),
                 })
             }
             Ty::Array { element, .. } => Ty::Array {
@@ -3559,6 +3561,7 @@ impl<'a> Parser<'a> {
             declared: this.declared_name(ty),
             required_by: None,
             formatted: None,
+            chain: crate::resolve::Chain::default(),
         };
         let (a, b) = (self.temporary("left"), self.temporary("right"));
         let pair = (
@@ -3768,6 +3771,7 @@ impl<'a> Parser<'a> {
                 declared: this.declared_name(key),
                 required_by: None,
                 formatted: None,
+                chain: crate::resolve::Chain::default(),
             })
         };
         let (half, mid) = (self.temporary("half"), self.temporary("mid"));
@@ -3867,6 +3871,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&output),
                     required_by: None,
                     formatted: None,
+                    chain: crate::resolve::Chain::default(),
                 })?
             } else {
                 origin::Fragment::plain(format!("{function}.__rawr_call({best}, {current})"))
@@ -3885,6 +3890,7 @@ impl<'a> Parser<'a> {
                 declared: self.declared_name(element),
                 required_by: None,
                 formatted: None,
+                chain: crate::resolve::Chain::default(),
             })?
         };
         let key_value = if keyed {
@@ -4002,6 +4008,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(error.as_ref()),
                     required_by: None,
                     formatted: None,
+                    chain: crate::resolve::Chain::default(),
                 });
             };
             let returned = self.prelude_op(PreludeOp::Err, [converted]);

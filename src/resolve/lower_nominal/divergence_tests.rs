@@ -3318,6 +3318,1475 @@ main();
 }
 
 #[test]
+fn a_mut_reborrow_lasts_within_every_reference_it_goes_through() {
+    // rustc: `&mut **x` is within `'a`, and `self.a` within the `&mut
+    // self` it goes through (#2476).
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a mut &'b mut i32) -> &'b mut i32 { &mut **x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:55
+  |
+2 | fn f<'a, 'b>(x: &'a mut &'b mut i32) -> &'b mut i32 { &mut **x }
+  |      --  -- lifetime `'b` defined here                ^^^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> { fn get(&mut self) -> &'a mut i32 { self.a } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:53
+  |
+3 | impl<'a> S<'a> { fn get(&mut self) -> &'a mut i32 { self.a } }
+  |      --                 -                           ^^^^^^ method was supposed to return data with lifetime `'a` but it is returning data with lifetime `'1`
+  |      |                  |
+  |      |                  let's call the lifetime of this reference `'1`
+  |      lifetime `'a` defined here
+"#),
+    );
+    // A `&mut self` moved out of is moved.
+    signature_verdict(
+        r#"
+struct S { a: i32 }
+impl S {
+    fn get(&mut self) -> &mut i32 {
+        let t = self;
+        t.a += 1;
+        &mut self.a
+    }
+}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0382]: borrow of moved value: `self`
+ --> <script>:7:9
+  |
+4 |     fn get(&mut self) -> &mut i32 {
+  |            --------- move occurs because `self` has type `&mut S`, which does not implement the `Copy` trait
+5 |         let t = self;
+  |                 ---- value moved here
+6 |         t.a += 1;
+7 |         &mut self.a
+  |         ^^^^^^^^^^^ value borrowed here after move
+"#),
+    );
+    // So is one given to a generic parameter, which rustc doesn't reborrow.
+    signature_verdict(
+        r#"
+struct X(u32);
+impl X {
+    fn f(&mut self) {
+        generic(self);
+        self.0 += 1;
+    }
+}
+fn generic<T>(_x: T) {}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0382]: use of moved value: `self`
+ --> <script>:6:9
+  |
+4 |     fn f(&mut self) {
+  |          --------- move occurs because `self` has type `&mut X`, which does not implement the `Copy` trait
+5 |         generic(self);
+  |                 ---- value moved here
+6 |         self.0 += 1;
+  |         ^^^^^^^^^^^ value used here after move
+  |
+help: consider creating a fresh reborrow of `self` here
+  |
+5 |         generic(&mut *self);
+  |                 ++++++
+"#),
+    );
+    // So is any `&mut` a `let` takes without its type written.
+    signature_verdict(
+        r#"
+fn f(r: &mut i32) {
+    let t = r;
+    *t += 1;
+    *r += 1;
+}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0382]: use of moved value: `r`
+ --> <script>:5:5
+  |
+2 | fn f(r: &mut i32) {
+  |      - move occurs because `r` has type `&mut i32`, which does not implement the `Copy` trait
+3 |     let t = r;
+  |             - value moved here
+4 |     *t += 1;
+5 |     *r += 1;
+  |     ^^^^^^^ value used here after move
+"#),
+    );
+    // rustc accepts each: the reborrow is within the output's lifetime.
+    signature_verdict(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> {
+    fn get(&mut self) -> &mut i32 { self.a }
+    fn whole(&'a mut self) -> &'a mut i32 { self.a }
+}
+fn inner<'a, 'b>(x: &'a mut &'b mut i32) -> &'a mut i32 { &mut **x }
+fn take(s: &mut i32) -> &mut i32 { let t = s; t }
+fn main() {
+    let mut m = 5;
+    let mut r = &mut m;
+    *inner(&mut r) += 1;
+    *take(&mut m) += 1;
+    println!("{}", m);
+}
+main();
+"#,
+        Ok("7\n"),
+    );
+}
+
+#[test]
+fn a_range_slice_lasts_within_the_str_it_slices() {
+    // rustc: `&x[1..]` of a `&'a str` is within `'a` (#2477).
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a str, _y: &'b str) -> &'b str { &x[1..] }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:52
+  |
+2 | fn f<'a, 'b>(x: &'a str, _y: &'b str) -> &'b str { &x[1..] }
+  |      --  -- lifetime `'b` defined here             ^^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    // So is one of a `&'a [i32]`.
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a [i32], _y: &'b [i32]) -> &'b [i32] { &x[1..] }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:58
+  |
+2 | fn f<'a, 'b>(x: &'a [i32], _y: &'b [i32]) -> &'b [i32] { &x[1..] }
+  |      --  -- lifetime `'b` defined here                   ^^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+}
+
+#[test]
+fn a_borrow_stored_through_a_mut_parameter_outlives_what_it_refers_to() {
+    // rustc: what a `&mut` parameter refers to keeps the borrows stored in
+    // it for its own lifetimes (#2478).
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(v: &mut Vec<&'a i32>, x: &'b i32) { v.push(x); }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:50
+  |
+2 | fn f<'a, 'b>(v: &mut Vec<&'a i32>, x: &'b i32) { v.push(x); }
+  |      --  -- lifetime `'b` defined here           ^^^^^^^^^ argument requires that `'b` must outlive `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+  = note: requirement occurs because of a mutable reference to `Vec<&i32>`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
+    );
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(r: &mut &'a i32, x: &'b i32) { *r = x; }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:45
+  |
+2 | fn f<'a, 'b>(r: &mut &'a i32, x: &'b i32) { *r = x; }
+  |      --  -- lifetime `'b` defined here      ^^^^^^ assignment requires that `'b` must outlive `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+"#),
+    );
+    signature_verdict(
+        r#"
+struct H<'a> { x: &'a i32 }
+fn f<'a, 'b>(h: &mut H<'a>, x: &'b i32) { h.x = x; }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:43
+  |
+3 | fn f<'a, 'b>(h: &mut H<'a>, x: &'b i32) { h.x = x; }
+  |      --  -- lifetime `'b` defined here    ^^^^^^^ assignment requires that `'b` must outlive `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+"#),
+    );
+    // rustc runs each: the stored borrow outlives the lifetime it is
+    // stored at.
+    signature_verdict(
+        r#"
+struct H<'a> { x: &'a i32 }
+fn push<'a, 'b: 'a>(v: &mut Vec<&'a i32>, x: &'b i32) { v.push(x); }
+fn set<'a, 'b: 'a>(r: &mut &'a i32, x: &'b i32) { *r = x; }
+fn field<'a>(h: &mut H<'a>, x: &'a i32) { h.x = x; }
+fn slice<'a, 'b>(x: &'a str, _y: &'b str) -> &'a str { &x[1..] }
+fn main() {
+    let (a, b, c) = (1, 2, 3);
+    let mut v = vec![&a];
+    push(&mut v, &b);
+    let mut r = &a;
+    set(&mut r, &c);
+    let mut h = H { x: &a };
+    field(&mut h, &b);
+    println!("{:?} {} {} {}", v, r, h.x, slice("hey", "x"));
+}
+main();
+"#,
+        Ok("[1, 2] 3 2 ey\n"),
+    );
+}
+
+#[test]
+fn a_fn_field_is_contravariant_and_a_struct_implies_its_bounds() {
+    // rustc: `F<'a>` of a `fn(&'a i32)` field is contravariant in `'a`,
+    // and `S<'a, 'b>` of a `&'a &'b i32` field implies `'b: 'a` (#2479).
+    signature_verdict(
+        r#"
+struct S<'a> { f: fn(&'a i32) }
+fn f<'a, 'b>(x: S<'a>, _y: &'b i32) -> S<'b> { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:48
+  |
+3 | fn f<'a, 'b>(x: S<'a>, _y: &'b i32) -> S<'b> { x }
+  |      --  -- lifetime `'b` defined here         ^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+"#),
+    );
+    signature_verdict(
+        r#"
+struct F<'a> { f: fn(&'a i32) -> i32 }
+struct S<'a, 'b> { x: &'a &'b i32 }
+fn shorten<'a, 'b: 'a>(x: F<'a>, _y: &'b i32) -> F<'b> { x }
+fn implied<'a, 'b>(s: S<'a, 'b>) -> &'a i32 { *s.x }
+fn one(x: &i32) -> i32 { *x + 1 }
+fn main() {
+    let n = 1;
+    let f = shorten(F { f: one }, &n);
+    let r = &n;
+    println!("{} {}", (f.f)(&n), implied(S { x: &r }));
+}
+main();
+"#,
+        Ok("2 1\n"),
+    );
+}
+
+#[test]
+fn a_where_clause_of_an_impl_struct_or_trait_bounds_another_type() {
+    // rustc reads `where Vec<T>: Debug` on an impl, a struct and a trait as
+    // on a function: the body assumes it, and a use proves it (#2470).
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+struct S<T>(T);
+impl<T> S<T> where Vec<T>: Debug {
+    fn show(&self, v: Vec<T>) { println!("{:?}", v); }
+}
+struct P<T>(T) where Vec<T>: Debug;
+trait Show<T> where Vec<T>: Debug {
+    fn show(&self, v: Vec<T>) { println!("{:?}", v); }
+}
+struct A;
+impl Show<i32> for A {}
+fn main() {
+    S(1).show(vec![1, 2]);
+    let p = P(3);
+    println!("{}", p.0);
+    A.show(vec![4]);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2]\n3\n[4]\n");
+    // Building the struct proves its clause.
+    let report = refused(
+        r#"
+use std::fmt::Debug;
+struct Opaque;
+struct P<T>(T) where Vec<T>: Debug;
+fn main() { let p = P(Opaque); let _ = p; }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Opaque` doesn't implement `Debug`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("  = note: required for `Vec<Opaque>` to implement `Debug`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_bound_met_through_a_conditional_impl_proves_the_impls_own_bounds() {
+    // rustc proves `Wrapper<Opaque>: Summary` through `impl<T: Debug>
+    // Summary for Wrapper<T>`, whose `Opaque: Debug` fails (#2471).
+    let program = |derive: &str| {
+        format!(
+            r#"
+use std::fmt::Debug;
+{derive}
+struct Opaque;
+struct Wrapper<T>(T);
+trait Summary {{ fn s(&self) -> String; }}
+impl<T: Debug> Summary for Wrapper<T> {{ fn s(&self) -> String {{ format!("w({{:?}})", self.0) }} }}
+fn sum<W: Summary>(w: W) {{ println!("{{}}", w.s()); }}
+fn main() {{ sum(Wrapper(Opaque)); }}
+main();
+"#
+        )
+    };
+    assert_eq!(printed(&program("#[derive(Debug)]")), "w(Opaque)\n");
+    let report = refused(&program(""));
+    assert!(
+        report.starts_with(
+            r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:9:25
+  |
+9 | fn main() { sum(Wrapper(Opaque)); }
+  |             ---         ^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
+ --> <script>:7:1
+  |
+7 | impl<T: Debug> Summary for Wrapper<T> { fn s(&self) -> String { format!("w({:?})", self.0) } }
+  | ^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: Debug`
+note: required for `Wrapper<Opaque>` to implement `Summary`
+ --> <script>:7:16
+  |
+7 | impl<T: Debug> Summary for Wrapper<T> { fn s(&self) -> String { format!("w({:?})", self.0) } }
+  |         -----  ^^^^^^^     ^^^^^^^^^^
+  |         |
+  |         unsatisfied trait bound introduced here
+note: required by a bound in `sum`
+ --> <script>:8:11
+  |
+8 | fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+  |           ^^^^^^^ required by this bound in `sum`
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+"#
+        ),
+        "{report}"
+    );
+    // A `where` clause on another type: the innermost type it needs.
+    let report = refused(
+        r#"
+use std::fmt::Debug;
+struct Opaque;
+struct Wrapper<T>(T);
+trait Summary { fn s(&self) -> String; }
+impl<T> Summary for Wrapper<T> where Vec<T>: Debug { fn s(&self) -> String { String::from("w") } }
+fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+fn main() { sum(Wrapper(1)); sum(Wrapper(Opaque)); }
+main();
+"#,
+    );
+    assert!(report.starts_with(r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:8:34
+  |
+8 | fn main() { sum(Wrapper(1)); sum(Wrapper(Opaque)); }
+  |                              --- ^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |                              |
+  |                              required by a bound introduced by this call
+  |
+help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
+ --> <script>:6:1
+  |
+6 | impl<T> Summary for Wrapper<T> where Vec<T>: Debug { fn s(&self) -> String { String::from("w") } }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-----
+  |                                              |
+  |                                              unsatisfied requirement introduced here: `Vec<Opaque>: Debug`
+  = note: required for `Vec<Opaque>` to implement `Debug`
+note: required for `Wrapper<Opaque>` to implement `Summary`
+ --> <script>:6:9
+  |
+6 | impl<T> Summary for Wrapper<T> where Vec<T>: Debug { fn s(&self) -> String { String::from("w") } }
+  |         ^^^^^^^     ^^^^^^^^^^               ----- unsatisfied trait bound introduced here
+note: required by a bound in `sum`
+ --> <script>:7:11
+  |
+7 | fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+  |           ^^^^^^^ required by this bound in `sum`
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+"#), "{report}");
+}
+
+#[test]
+fn a_hand_written_std_impl_holds_where_its_own_bounds_do() {
+    // `impl<T> Debug for W<T>` asks nothing of `T`, and `impl<T: Clone>
+    // Debug for W<T>` asks `Clone`, not `Debug` (#2471).
+    let program = |bound: &str, main: &str| {
+        format!(
+            r#"
+use std::fmt;
+#[derive(Debug)]
+struct Opaque;
+struct W<T>(T);
+impl<T{bound}> fmt::Debug for W<T> {{ fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {{ write!(f, "W") }} }}
+fn show<T: fmt::Debug>(t: T) {{ println!("{{:?}}", t); }}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    let main = "show(W(Opaque)); println!(\"{:?}\", vec![W(Opaque)]);";
+    assert_eq!(printed(&program("", main)), "W\n[W]\n");
+    let report = refused(&program(": Clone", "show(W(Opaque));"));
+    assert!(report.starts_with(r#"error[E0277]: the trait bound `Opaque: Clone` is not satisfied
+ --> <script>:8:20
+  |
+8 | fn main() { show(W(Opaque)); }
+  |             ----   ^^^^^^ the trait `Clone` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `Debug` is conditionally implemented for `W<T>`
+ --> <script>:6:1
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  | ^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: Clone`
+note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:6:16
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  |         -----  ^^^^^^^^^^     ^^^^
+  |         |
+  |         unsatisfied trait bound introduced here
+note: required by a bound in `show`
+ --> <script>:7:12
+  |
+7 | fn show<T: fmt::Debug>(t: T) { println!("{:?}", t); }
+  |            ^^^^^^^^^^ required by this bound in `show`
+help: consider annotating `Opaque` with `#[derive(Clone)]`
+"#), "{report}");
+    // A formatted value proves the impl it formats by.
+    let report = refused(&program(": Clone", "println!(\"{:?}\", W(Opaque));"));
+    assert!(report.starts_with(r#"error[E0277]: the trait bound `Opaque: Clone` is not satisfied
+ --> <script>:8:30
+  |
+8 | fn main() { println!("{:?}", W(Opaque)); }
+  |                       ----   ^^^^^^^^^ the trait `Clone` is not implemented for `Opaque`
+  |                       |
+  |                       required by this formatting parameter
+  |
+help: the trait `Debug` is conditionally implemented for `W<T>`
+ --> <script>:6:1
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  | ^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: Clone`
+note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:6:16
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  |         -----  ^^^^^^^^^^     ^^^^
+  |         |
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Clone)]`
+"#), "{report}");
+}
+
+#[test]
+fn an_unmet_bound_names_the_innermost_type_with_each_impl_that_needed_it() {
+    // rustc names `Opaque` of `Option<Vec<Opaque>>: Debug`, and each std
+    // impl that needed it, folding a run of one trait's (#2472).
+    let program = |main: &str| {
+        format!(
+            r#"
+use std::fmt::Debug;
+struct Opaque;
+#[derive(Debug)]
+struct W<T>(T);
+fn show<T: Debug>(t: T) {{ println!("{{:?}}", t); }}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    let report = refused(&program("show(Some(vec![Opaque]));"));
+    assert!(
+        report.starts_with(
+            r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:7:23
+  |
+7 | fn main() { show(Some(vec![Opaque])); }
+  |             ----      ^^^^^^^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+"#
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            r#"  = note: required for `Vec<Opaque>` to implement `Debug`
+  = note: 1 redundant requirement hidden
+  = note: required for `Option<Vec<Opaque>>` to implement `Debug`
+note: required by a bound in `show`
+"#
+        ),
+        "{report}"
+    );
+    let report = refused(&program("show(Some((1, Opaque)));"));
+    assert!(
+        report.contains(
+            r#"7 | fn main() { show(Some((1, Opaque))); }
+  |             ----          ^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+  = note: required for `({integer}, Opaque)` to implement `Debug`
+  = note: 1 redundant requirement hidden
+  = note: required for `Option<({integer}, Opaque)>` to implement `Debug`
+note: required by a bound in `show`
+"#
+        ),
+        "{report}"
+    );
+    // A derive bounds its parameters.
+    let report = refused(&program("show(vec![W(Opaque)]);"));
+    assert!(
+        report.contains(
+            r#"note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:5:8
+  |
+4 | #[derive(Debug)]
+  |          ----- in this derive macro expansion
+5 | struct W<T>(T);
+  |        ^ - type parameter would need to implement `Debug`
+  = help: consider manually implementing `Debug` to avoid undesired bounds
+  = note: 1 redundant requirement hidden
+  = note: required for `Vec<W<Opaque>>` to implement `Debug`
+note: required by a bound in `show`
+"#
+        ),
+        "{report}"
+    );
+    // A formatted value, which a derive's bound also refuses.
+    let report = refused(&program("let v = vec![W(Opaque)]; println!(\"{:?}\", v);"));
+    assert!(
+        report.contains(
+            r#"  = help: the trait `Debug` is not implemented for `Opaque`
+note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:5:8
+  |
+4 | #[derive(Debug)]
+  |          ----- in this derive macro expansion
+5 | struct W<T>(T);
+  |        ^ - type parameter would need to implement `Debug`
+  = help: consider manually implementing `Debug` to avoid undesired bounds
+  = note: 1 redundant requirement hidden
+  = note: required for `Vec<W<Opaque>>` to implement `Debug`
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_program_display_impl_holds_where_its_own_bounds_do() {
+    // `impl<T: Display> Display for Shown<T>` asks `Display` of `T`, which
+    // a formatted value and a bound both prove (#2471).
+    let program = |main: &str| {
+        format!(
+            r#"
+use std::fmt::{{self, Display}};
+struct Opaque;
+struct Shown<T>(T);
+impl<T: Display> Display for Shown<T> {{ fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {{ write!(f, "<{{}}>", self.0) }} }}
+fn show<T: Display>(t: T) {{ println!("{{}}", t); }}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    assert_eq!(
+        printed(&program("show(Shown(3)); println!(\"{}\", Shown(\"t\"));")),
+        "<3>\n<t>\n"
+    );
+    let report = refused(&program("println!(\"{}\", Shown(Opaque));"));
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Opaque` doesn't implement `std::fmt::Display`
+ --> <script>:7:28
+  |
+7 | fn main() { println!("{}", Shown(Opaque)); }
+  |                       --   ^^^^^^^^^^^^^ `Opaque` cannot be formatted with the default formatter
+  |                       |
+  |                       required by this formatting parameter
+  |
+help: the trait `std::fmt::Display` is not implemented for `Opaque`
+ --> <script>:3:1
+  |
+3 | struct Opaque;
+  | ^^^^^^^^^^^^^
+  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+help: the trait `std::fmt::Display` is conditionally implemented for `Shown<T>`
+ --> <script>:5:1
+  |
+5 | impl<T: Display> Display for Shown<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "<{}>", self.0) } }
+  | ^^^^^^^^-------^^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: std::fmt::Display`
+note: required for `Shown<Opaque>` to implement `std::fmt::Display`
+ --> <script>:5:18
+  |
+5 | impl<T: Display> Display for Shown<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "<{}>", self.0) } }
+  |         -------  ^^^^^^^     ^^^^^^^^
+  |         |
+  |         unsatisfied trait bound introduced here"#
+    );
+    let report = refused(&program("show(Shown(Opaque));"));
+    assert!(
+        report.starts_with(
+            r#"error[E0277]: `Opaque` doesn't implement `std::fmt::Display`
+ --> <script>:7:24
+  |
+7 | fn main() { show(Shown(Opaque)); }
+  |             ----       ^^^^^^ unsatisfied trait bound
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `std::fmt::Display` is not implemented for `Opaque`
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_conditional_impl_holds_through_generic_and_blanket_bounds() {
+    // An impl's bound met by a caller's own bound, a blanket impl, a
+    // reference, an opaque output or a nested impl, as rustc proves each.
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+trait Two { fn two(&self) -> i32 { 2 } }
+impl<X: Debug> Two for X {}
+trait Summary { fn s(&self) -> String; }
+struct Wrapper<T>(T);
+impl<T: Debug> Summary for Wrapper<T> { fn s(&self) -> String { format!("w({:?})", self.0) } }
+struct Twice<T>(T);
+impl<T: Two> Summary for Twice<T> { fn s(&self) -> String { format!("{}", self.0.two()) } }
+impl Summary for i32 { fn s(&self) -> String { String::from("i") } }
+struct Pair<A, B>(A, B);
+impl<A: Summary, B: Summary> Summary for Pair<A, B> { fn s(&self) -> String { format!("{}{}", self.0.s(), self.1.s()) } }
+fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+fn outer<U: Debug>(u: U) { sum(Wrapper(u)); }
+fn via_ref<U: Debug>(u: &U) { sum(Wrapper(u)); }
+fn make() -> impl Debug { 7 }
+fn main() {
+    outer(1);
+    via_ref(&"r");
+    sum(Wrapper(make()));
+    sum(Twice(1));
+    sum(Pair(Pair(1, Twice(2)), Wrapper(vec![Some(3)])));
+    let boxed: Box<dyn Summary> = Box::new(Wrapper(4));
+    println!("{}", boxed.s());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "w(1)\nw(\"r\")\nw(7)\n2\ni2w([Some(3)])\nw(4)\n");
+}
+
+fn crate_facade() -> crate::host::facade::Definition {
+    use crate::host::{facade, type_def, type_ref};
+    use rawr_import::surface::identity::{Form, Selector};
+    let mut builder = facade::Builder::new("crt", facade::Abi::new(1).unwrap()).unwrap();
+    let mut allocation = crate::host::TestImportAllocation::default();
+    let field = |name: &str, ty: type_ref::Type| {
+        type_def::Field::new(name.into(), ty, Selector::Unavailable)
+    };
+    let variant = |index: u32, name: &str, fields: Vec<type_def::Field>| {
+        let form = if fields.is_empty() {
+            Form::Unit
+        } else {
+            Form::Tuple { arity: 1 }
+        };
+        type_def::Variant::new(
+            name.into(),
+            fields.into_boxed_slice(),
+            true,
+            Selector::EnumVariant {
+                index,
+                name: name.into(),
+                form,
+            },
+        )
+    };
+    let variants = vec![
+        variant(
+            0,
+            "On",
+            vec![field("0", type_ref::Type::builtin(type_ref::Builtin::Bool))],
+        ),
+        variant(
+            1,
+            "Level",
+            vec![field("0", type_ref::Type::builtin(type_ref::Builtin::I64))],
+        ),
+        variant(2, "Off", Vec::new()),
+    ];
+    builder
+        .imported_type(
+            "Flag",
+            type_def::import::Identity::new([0x61; 32]),
+            &[crate::capability::Kind::Clone],
+            Box::default(),
+            Box::default(),
+            type_def::Shape::Enum {
+                variants: variants.into_boxed_slice(),
+                non_exhaustive: false,
+            }
+            .into(),
+            &mut allocation,
+        )
+        .unwrap();
+    builder
+        .imported_type(
+            "Slot",
+            type_def::import::Identity::new([0x62; 32]),
+            &[crate::capability::Kind::Clone],
+            Box::default(),
+            Box::default(),
+            type_def::Shape::Struct {
+                form: type_def::Form::Record,
+                constructor: Some(Selector::Unavailable),
+                fields: Box::from([
+                    field(
+                        "a",
+                        type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::I64)),
+                    ),
+                    field("b", type_ref::Type::builtin(type_ref::Builtin::Bool)),
+                ]),
+                constructible: true,
+                unsupported: None,
+                layout: None,
+            }
+            .into(),
+            &mut allocation,
+        )
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+fn crate_lowered(source: &str) -> String {
+    use crate::diagnostic::{render, Report, Source};
+    let mut engine = Engine::new();
+    engine.register_host_facade(crate_facade()).unwrap();
+    let program = crate::resolve::resolve(
+        engine.parse_unit(source).expect("the program parses"),
+        &engine.host_registry,
+    )
+    .expect("the program's headers resolve");
+    let mut allocation = crate::host::TestImportAllocation::default();
+    match super::imported(
+        &engine,
+        &program,
+        &engine.host_registry.share(),
+        &mut allocation,
+        None,
+    ) {
+        Ok(_) => String::new(),
+        Err(failure) => {
+            let error = failure.into_error();
+            let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+            render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+        }
+    }
+}
+
+/// The report `rawr` renders for `source`, which it refuses, as rustc's.
+fn rendered(source: &str) -> String {
+    use crate::diagnostic::{render, Report, Source};
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("rawr refuses this program");
+    let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+    render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+}
+
+#[test]
+fn a_match_whose_arm_rebinds_a_mut_options_name_runs() {
+    // An arm's `Some(first)` below a `first: &mut Option<_>` binds the
+    // value's `&mut`, as rustc's default binding mode does (#342).
+    let output = printed(
+        r#"
+fn bump(first: &mut Option<i32>) {
+    match first {
+        Some(first) => *first += 1,
+        None => {}
+    }
+}
+fn main() {
+    let mut o = Some(5);
+    bump(&mut o);
+    let mut items = vec![Some(1), None];
+    for item in items.iter_mut() {
+        match item {
+            Some(item) => *item *= 10,
+            None => {}
+        }
+    }
+    let mut q = Some(String::from("x"));
+    let s = &mut q;
+    match s {
+        Some(s) => s.push('y'),
+        None => {}
+    }
+    println!("{:?} {:?} {:?}", o, items, q);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Some(6) [Some(10), None] Some(\"xy\")\n");
+}
+
+#[test]
+fn an_empty_match_on_a_type_with_no_values_runs() {
+    // `Infallible` and an enum with no variants have no values, so a match
+    // on one needs no arm and an `Err` of one needs no pattern, as rustc
+    // has it (#620).
+    let output = printed(
+        r#"
+use std::convert::Infallible;
+enum Void {}
+fn never(message: Infallible) -> i32 {
+    match message {}
+}
+fn void(v: Void) -> String {
+    match v {}
+}
+fn main() {
+    let r: Result<i32, Infallible> = Ok(3);
+    let Ok(n) = r;
+    let m = match r {
+        Ok(v) => v,
+        Err(e) => match e {},
+    };
+    let only = match r {
+        Ok(v) => v,
+    };
+    let _ = never;
+    let _ = void;
+    println!("{n} {m} {only}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 3 3\n");
+    // A match with no arms on a type that isn't an enum calls the type
+    // non-empty, and a reference always has values.
+    assert_eq!(
+        rendered(r#"fn main() {
+    let x = 3;
+    match x {}
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: type `i32` is non-empty\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match x {}\n",
+        "  |           ^\n",
+        "  |\n",
+        "  = note: the matched value is of type `i32`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown\n",
+        "  |\n",
+        "3 ~     match x {\n",
+        "4 +         _ => todo!(),\n",
+        "5 ~     }\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"enum E { A }
+fn f(e: &E) -> i32 { match e {} }
+fn main() {}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: type `&E` is non-empty\n",
+        " --> main.rs:2:28\n",
+        "  |\n",
+        "2 | fn f(e: &E) -> i32 { match e {} }\n",
+        "  |                            ^\n",
+        "  |\n",
+        "note: `E` defined here\n",
+        " --> main.rs:1:6\n",
+        "  |\n",
+        "1 | enum E { A }\n",
+        "  |      ^\n",
+        "  = note: the matched value is of type `&E`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown\n",
+        "  |\n",
+        "2 ~ fn f(e: &E) -> i32 { match e {\n",
+        "3 +     _ => todo!(),\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"enum Void {}
+fn f(r: &Void) -> i32 { match r {} }
+fn main() {}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: type `&Void` is non-empty\n",
+        " --> main.rs:2:31\n",
+        "  |\n",
+        "2 | fn f(r: &Void) -> i32 { match r {} }\n",
+        "  |                               ^\n",
+        "  |\n",
+        "note: `Void` defined here\n",
+        " --> main.rs:1:6\n",
+        "  |\n",
+        "1 | enum Void {}\n",
+        "  |      ^^^^\n",
+        "  = note: the matched value is of type `&Void`\n",
+        "  = note: references are always considered inhabited\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown\n",
+        "  |\n",
+        "2 ~ fn f(r: &Void) -> i32 { match r {\n",
+        "3 +     _ => todo!(),\n",
+        "  |\n",
+    )
+    );
+}
+
+#[test]
+fn a_witness_below_a_constructor_names_rustcs_ranges() {
+    // An integer's or a `char`'s literals and ranges split its values
+    // below a constructor as at the top of a match (#1287, #1306), and each
+    // missing constructor comes before the witnesses of the parts after it.
+    assert!(rendered(
+        "fn main() {\n    let o = Some(1);\n    match o {\n        Some(1) => {}\n        \
+         None => {}\n    }\n}\n"
+    )
+    .starts_with(
+        "error[E0004]: non-exhaustive patterns: `Some(i32::MIN..=0_i32)` and \
+         `Some(2_i32..=i32::MAX)` not covered\n"
+    ));
+    assert_eq!(
+        rendered(r#"fn main() {
+    let t = (1, true);
+    match t {
+        (1, true) => {}
+        (_, false) => {}
+    }
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `(i32::MIN..=0_i32, true)` and `(2_i32..=i32::MAX, true)` not covered\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match t {\n",
+        "  |           ^ patterns `(i32::MIN..=0_i32, true)` and `(2_i32..=i32::MAX, true)` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `(i32, bool)`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern, a match arm with multiple or-patterns as shown, or multiple match arms\n",
+        "  |\n",
+        "5 ~         (_, false) => {},\n",
+        "6 +         (i32::MIN..=0_i32, true) | (2_i32..=i32::MAX, true) => todo!()\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"fn main() {
+    let mut t = (1, 3);
+    let (ref mut x, 3) = t;
+}
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:3:9\n",
+        "  |\n",
+        "3 |     let (ref mut x, 3) = t;\n",
+        "  |         ^^^^^^^^^^^^^^ patterns `(_, i32::MIN..=2_i32)` and `(_, 4_i32..=i32::MAX)` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `(i32, i32)`\n",
+        "help: you might want to use `let...else` to handle the variants that aren't matched\n",
+        "  |\n",
+        "3 |     let (ref mut x, 3) = t else { todo!() };\n",
+        "  |                            ++++++++++++++++\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"fn main() {
+    let t = (1, 'a');
+    match t {
+        (0, 'a') => {}
+        (_, 'b'..='z') => {}
+    }
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `(i32::MIN..=-1_i32, '\\0'..='a')`, `(i32::MIN..=-1_i32, '{'..='\\u{d7ff}')`, `(i32::MIN..=-1_i32, '\\u{e000}'..='\\u{10ffff}')` and 3 more not covered\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match t {\n",
+        "  |           ^ patterns `(i32::MIN..=-1_i32, '\\0'..='a')`, `(i32::MIN..=-1_i32, '{'..='\\u{d7ff}')`, `(i32::MIN..=-1_i32, '\\u{e000}'..='\\u{10ffff}')` and 3 more not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `(i32, char)`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown, or multiple match arms\n",
+        "  |\n",
+        "5 ~         (_, 'b'..='z') => {},\n",
+        "6 +         _ => todo!()\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"fn main() {
+    let x = &5u8;
+    match x {
+        &0 => {}
+        &(1..=254) => {}
+    }
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `&u8::MAX` not covered\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match x {\n",
+        "  |           ^ pattern `&u8::MAX` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `&u8`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "5 ~         &(1..=254) => {},\n",
+        "6 +         &u8::MAX => todo!()\n",
+        "  |\n",
+    )
+    );
+}
+
+#[test]
+fn a_constant_path_is_a_pattern_and_a_range_end() {
+    // A constant's path is its value in a pattern, alone or at either end
+    // of a range, as rustc reads it (#1288), and a one-name constant is no
+    // binding.
+    let output = printed(
+        r#"
+const LO: i32 = 3;
+struct W;
+impl W {
+    const TOP: i64 = 10;
+}
+fn sign(x: i32) -> i32 {
+    match x {
+        i32::MIN..=-5 => -2,
+        -4..=-1 => -1,
+        0 => 0,
+        1..LO => 1,
+        LO..=i32::MAX => 2,
+    }
+}
+fn top(x: i64) -> i64 {
+    match x {
+        0..W::TOP => 1,
+        W::TOP..=i64::MAX => 2,
+        i64::MIN..0 => 3,
+    }
+}
+fn exact(x: i32) -> i32 {
+    match x {
+        LO => 1,
+        _ => 2,
+    }
+}
+fn letter(x: char, n: u8, o: Option<i8>) -> i32 {
+    let a = match x {
+        char::MIN..='a' => 1,
+        'b'..=char::MAX => 2,
+    };
+    let b = match n {
+        u8::MAX => 10,
+        _ => 20,
+    };
+    let c = match o {
+        Some(i8::MIN..=-1) => 100,
+        Some(0..=i8::MAX) => 200,
+        None => 300,
+    };
+    a + b + c
+}
+fn main() {
+    println!("{} {} {} {} {}", sign(-9), sign(-2), sign(0), sign(2), sign(7));
+    println!("{} {} {} {} {}", top(3), top(10), top(-1), exact(3), exact(4));
+    println!("{} {}", letter('a', 255, Some(-3)), letter('z', 4, None));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "-2 -1 0 1 2\n1 2 3 1 2\n111 322\n");
+    assert_eq!(
+        rendered(r#"fn f(x: Option<i8>) -> i32 {
+    match x {
+        Some(i8::MIN..=-1) => 1,
+        None => 3,
+    }
+}
+fn main() {}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `Some(0_i8..=i8::MAX)` not covered\n",
+        " --> main.rs:2:11\n",
+        "  |\n",
+        "2 |     match x {\n",
+        "  |           ^ pattern `Some(0_i8..=i8::MAX)` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `Option<i8>`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "4 ~         None => 3,\n",
+        "5 ~         Some(0_i8..=i8::MAX) => todo!(),\n",
+        "  |\n",
+    )
+    );
+}
+
+#[test]
+fn a_struct_pattern_is_a_parameter_pattern() {
+    // A function's or a closure's parameter may be a struct's pattern, as
+    // rustc's (#1307), and one that misses some values is E0005.
+    let output = printed(
+        r#"
+struct P { x: i64, y: i64 }
+struct Style { width: i64, height: i64 }
+struct T(i64, i64);
+fn f(P { x, .. }: P) -> i64 { x }
+fn g(Style { width, height: h }: Style) -> i64 { width * h }
+fn t(T(a, b): T) -> i64 { a - b }
+fn main() {
+    let c = |P { x, y }: P| x + y;
+    println!("{} {} {} {}", f(P { x: 1, y: 2 }), g(Style { width: 3, height: 4 }), t(T(9, 4)), c(P { x: 5, y: 6 }));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 12 5 11\n");
+    assert_eq!(
+        rendered(r#"struct P { x: i64, y: i64 }
+fn f(P { x: 1, y }: P) -> i64 { y }
+fn main() {}
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in function argument\n",
+        " --> main.rs:2:6\n",
+        "  |\n",
+        "2 | fn f(P { x: 1, y }: P) -> i64 { y }\n",
+        "  |      ^^^^^^^^^^^^^ patterns `P { x: i64::MIN..=0_i64, .. }` and `P { x: 2_i64..=i64::MAX, .. }` not covered\n",
+        "  |\n",
+        "note: `P` defined here\n",
+        " --> main.rs:1:8\n",
+        "  |\n",
+        "1 | struct P { x: i64, y: i64 }\n",
+        "  |        ^\n",
+        "  = note: the matched value is of type `P`\n",
+    )
+    );
+}
+
+#[cfg(feature = "rust-import")]
+#[test]
+fn a_crate_values_patterns_cover_it_by_the_patterns_below() {
+    // A crate enum's variant is covered by the literals of its field's
+    // patterns (#812), a crate struct by its fields' patterns together
+    // (#1972), and what they miss is rustc's witnesses over every field
+    // (#1308).
+    assert_eq!(
+        crate_lowered(
+            "fn f(f: crt::Flag) -> i64 {\n    match f {\n        crt::Flag::On(true) => 1,\n        \
+             crt::Flag::On(false) => 2,\n        crt::Flag::Level(0) => 3,\n        \
+             crt::Flag::Level(i64::MIN..=-1) => 4,\n        crt::Flag::Level(1..) => 5,\n        \
+             crt::Flag::Off => 6,\n    }\n}\n0\n"
+        ),
+        ""
+    );
+    assert_eq!(
+        crate_lowered(
+            "fn f(s: crt::Slot) -> i64 {\n    match s {\n        crt::Slot { a: Some(_), .. } => 1,\n        \
+             crt::Slot { a: None, .. } => 2,\n    }\n}\n0\n"
+        ),
+        ""
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(f: crt::Flag) -> i64 {
+    match f {
+        crt::Flag::On(true) => 1,
+        crt::Flag::Level(_) => 3,
+        crt::Flag::Off => 6,
+    }
+}
+0
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `Flag::On(false)` not covered\n",
+        " --> main.rs:2:11\n",
+        "  |\n",
+        "2 |     match f {\n",
+        "  |           ^ pattern `Flag::On(false)` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `crt::Flag`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "5 ~         crt::Flag::Off => 6,\n",
+        "6 ~         Flag::On(false) => todo!(),\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(s: crt::Slot) -> i64 {
+    match s {
+        crt::Slot { a: Some(_), b: true } => 1,
+        crt::Slot { a: None, .. } => 2,
+    }
+}
+0
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `Slot { a: Some(_), b: false }` not covered\n",
+        " --> main.rs:2:11\n",
+        "  |\n",
+        "2 |     match s {\n",
+        "  |           ^ pattern `Slot { a: Some(_), b: false }` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `crt::Slot`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "4 ~         crt::Slot { a: None, .. } => 2,\n",
+        "5 ~         Slot { a: Some(_), b: false } => todo!(),\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(s: crt::Slot) -> i64 {
+    let crt::Slot { a: Some(_) | None, b: true } = s;
+    0
+}
+0
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:2:9\n",
+        "  |\n",
+        "2 |     let crt::Slot { a: Some(_) | None, b: true } = s;\n",
+        "  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ patterns `Slot { a: None, b: false }` and `Slot { a: Some(_), b: false }` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `crt::Slot`\n",
+        "help: you might want to use `let...else` to handle the variants that aren't matched\n",
+        "  |\n",
+        "2 |     let crt::Slot { a: Some(_) | None, b: true } = s else { todo!() };\n",
+        "  |                                                      ++++++++++++++++\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(f: crt::Flag) -> i64 {
+    let crt::Flag::Level(3) = f;
+    0
+}
+0
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:2:9\n",
+        "  |\n",
+        "2 |     let crt::Flag::Level(3) = f;\n",
+        "  |         ^^^^^^^^^^^^^^^^^^^ patterns `Flag::On(_)` and `Flag::Off` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `crt::Flag`\n",
+        "help: you might want to use `let...else` to handle the variants that aren't matched\n",
+        "  |\n",
+        "2 |     let crt::Flag::Level(3) = f else { todo!() };\n",
+        "  |                                 ++++++++++++++++\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(s: crt::Slot) -> i64 {
+    let (crt::Slot { a: Some(n), .. }, 1) = (s, 2);
+    n
+}
+0
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:2:9\n",
+        "  |\n",
+        "2 |     let (crt::Slot { a: Some(n), .. }, 1) = (s, 2);\n",
+        "  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ pattern `(Slot { a: None, .. }, _)` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `(crt::Slot, i32)`\n",
+        "help: you might want to use `let...else` to handle the variant that isn't matched\n",
+        "  |\n",
+        "2 |     let (crt::Slot { a: Some(n), .. }, 1) = (s, 2) else { todo!() };\n",
+        "  |                                                    ++++++++++++++++\n",
+    )
+    );
+}
+
+#[test]
+fn cfg_attr_applies_its_attributes_to_items_fields_and_variants() {
+    // `#[cfg_attr(..)]` applies what it lists where its predicate holds,
+    // a `cfg_attr` among them under its own too, on an item, a field and a
+    // variant, and `all()` and `any()` hold and fail as rustc's do (#603).
+    // The output is rustc's.
+    let output = printed(
+        r#"
+#[cfg_attr(all(), derive(Debug, Clone))]
+struct P { x: i32 }
+#[cfg_attr(all(), cfg_attr(all(), derive(Debug)))]
+struct S;
+#[derive(Debug)]
+struct F { a: i32, #[cfg(any())] b: i32, #[cfg_attr(all(), cfg(any()))] c: i32 }
+#[derive(Debug)]
+enum E { A, #[cfg(any())] B, C(#[cfg(any())] u8, i32), D { #[cfg_attr(all(), cfg(any()))] x: i32, y: i32 } }
+#[derive(Debug, Default)]
+enum G { #[cfg_attr(all(), default)] H, I }
+fn main() {
+    let n = match E::A { E::A => 0, E::C(v) => v, E::D { y } => y };
+    println!("{:?} {:?} {:?} {}", P { x: 1 }.clone(), S, F { a: 2 }, n);
+    println!("{:?} {:?} {:?} {}", E::C(3), E::D { y: 4 }, G::default(), cfg!(all()) && !cfg!(any()));
+    let _ = G::I;
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "P { x: 1 } S F { a: 2 } 0\nC(3) D { y: 4 } H true\n"
+    );
+    // A `cfg_attr` whose predicate fails applies nothing.
+    let report = refused(
+        r#"
+#[cfg_attr(all(), cfg_attr(any(), derive(Debug)))]
+struct T;
+fn main() { println!("{:?}", T); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `T` doesn't implement `Debug`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_attribute_no_derive_declares_is_rustcs_error() {
+    // A derive helper such as `#[serde(..)]` with only std's derives on the
+    // item names nothing in scope (#604).
+    for source in [
+        "#[derive(Debug)]\nstruct S { #[serde(default)] a: i32 }\nfn main() {}\nmain();\n",
+        "#[serde(rename_all = \"camelCase\")]\nstruct S;\nfn main() {}\nmain();\n",
+        "enum E { #[serde(rename = \"x\")] A }\nfn main() {}\nmain();\n",
+        "fn main() { #[derive(Debug)] struct L { #[serde(skip)] a: i32 } }\nmain();\n",
+    ] {
+        let report = refused(source);
+        assert!(
+            report.starts_with("error: cannot find attribute `serde` in this scope"),
+            "{report}"
+        );
+    }
+    // rustc's own attributes and a tool's are in scope.
+    let output = printed(
+        r#"
+#[rustfmt::skip]
+#[must_use]
+#[inline]
+#[deprecated(note = "x")]
+#[doc = "d"]
+fn f() -> i32 { 1 }
+#[repr(u8)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum E { #[default] A }
+fn main() { println!("{} {:?}", f(), E::A); }
+main();
+"#,
+    );
+    assert_eq!(output, "1 A\n");
+}
+
+#[test]
 fn every_lifetime_a_returned_value_must_outlive_is_reported() {
     // rustc reports one error for each lifetime that must outlive another,
     // the lifetimes it names numbered across them, then the help that
@@ -3548,6 +5017,31 @@ fn two_elided_lifetimes_are_given_a_named_one() {
     // rustc suggests one named lifetime for two elided ones: written in the
     // output, or else at the shorter one's reference, and at the longer
     // one's, a new one declared or the function's first reused (#2489).
+    // A store through a `&mut` parameter too.
+    signature_verdict(
+        r#"fn g(v: &mut Vec<&i32>, x: &i32) { v.push(x); }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:36
+  |
+1 | fn g(v: &mut Vec<&i32>, x: &i32) { v.push(x); }
+  |                  -         -       ^^^^^^^^^ argument requires that `'1` must outlive `'2`
+  |                  |         |
+  |                  |         let's call the lifetime of this reference `'1`
+  |                  let's call the lifetime of this reference `'2`
+  |
+  = note: requirement occurs because of a mutable reference to `Vec<&i32>`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider introducing a named lifetime parameter
+  |
+1 | fn g<'a>(v: &mut Vec<&'a i32>, x: &'a i32) { v.push(x); }
+  |     ++++              ++           ++
+"#),
+    );
     signature_verdict(
         r#"struct S;
 impl S { fn g(&self, x: &i32) -> &i32 { x } }

@@ -64,12 +64,14 @@ struct Rule {
     depths: Vec<(ImmutableString, usize)>,
 }
 
+/// One part of a rule's matcher, at the position the definition writes it.
 #[derive(Debug)]
 enum Pattern {
-    Token(Token),
-    Group(Delimiter, Vec<Pattern>),
-    Fragment(ImmutableString, Fragment),
-    Repeat(Vec<Pattern>, Option<Token>, Op),
+    Token(Token, Position),
+    Group(Delimiter, Vec<Pattern>, Position),
+    Fragment(ImmutableString, Fragment, Position),
+    /// A repetition, with its separator's position when it has one.
+    Repeat(Vec<Pattern>, Option<Token>, Op, Position),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,7 +85,7 @@ enum Op {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Fragment {
+pub(crate) enum Fragment {
     Expr,
     Ty,
     Path,
@@ -141,6 +143,16 @@ impl State {
     /// Note that a rule stops at the start of `input`.
     fn stop_at(&mut self, input: &[Tree]) {
         let at = match input.first() {
+            // A lifetime is one token to rustc.
+            Some(Tree::Leaf(Token::Apostrophe, position))
+                if let Some(Tree::Leaf(name, _)) = input.get(1) =>
+            {
+                let lifetime = format!("'{}", text(name));
+                (
+                    *position,
+                    Some(Token::Identifier(Box::new(lifetime.into()))),
+                )
+            }
             Some(Tree::Leaf(token, position)) => (*position, Some(token.clone())),
             Some(tree @ Tree::Group(_, position, ..)) => {
                 (*position, Some(first_token(tree).clone()))
@@ -216,12 +228,62 @@ impl fmt::Display for Failure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoRules(Some((token, _))) => {
-                write!(formatter, "no rules expected `{}`", text(token))
+                write!(formatter, "no rules expected {}", described(token))
             }
             Self::NoRules(None) => formatter.write_str("unexpected end of macro invocation"),
             Self::Transcription(message) => formatter.write_str(message),
         }
     }
+}
+
+/// The prefix hygiene renames a macro's local with, before its number.
+const HYGIENE_PREFIX: &str = "__rawr_macro";
+
+/// `text` with each macro's local named as the macro writes it: hygiene's
+/// `__rawr_macro3_x` is `x`.
+pub(crate) fn written(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(HYGIENE_PREFIX) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(HYGIENE_PREFIX) {
+        output.push_str(&rest[..at]);
+        let after = &rest[at + HYGIENE_PREFIX.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        match after[digits..].strip_prefix('_') {
+            Some(name) if digits > 0 => rest = name,
+            _ => {
+                output.push_str(HYGIENE_PREFIX);
+                rest = after;
+            }
+        }
+    }
+    output.push_str(rest);
+    std::borrow::Cow::Owned(output)
+}
+
+/// `token` as rustc names it in an error: a keyword says it is one.
+fn described(token: &Token) -> String {
+    const KEYWORDS: &[&str] = &[
+        "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn",
+        "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+        "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe",
+        "use", "where", "while", "async", "await", "dyn",
+    ];
+    const RESERVED: &[&str] = &[
+        "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof",
+        "unsized", "virtual", "yield", "try",
+    ];
+    let written = text(token);
+    let raw = written.starts_with("r#");
+    let kind = match written.as_str() {
+        "_" => "reserved identifier ",
+        word if !raw && KEYWORDS.contains(&word) => "keyword ",
+        word if !raw && RESERVED.contains(&word) => "reserved keyword ",
+        _ => "",
+    };
+    format!("{kind}`{written}`")
 }
 
 /// rustc's list of fragment specifiers, in its help.
@@ -345,7 +407,8 @@ fn op(token: &Token) -> Option<Op> {
 
 impl Rules {
     /// Parse `macro_rules! name { (matcher) => { transcriber }; .. }` from
-    /// its source.
+    /// its source: a dependency's, which rustc has checked under its own
+    /// crate's edition, or a definition the program's parse checked.
     pub(crate) fn parse(source: &str) -> Result<Self, ImmutableString> {
         let engine = crate::Engine::new_raw();
         let tokens = super::lower_nominal::lex_rust(&engine, source);
@@ -355,12 +418,24 @@ impl Rules {
         {
             return Err(format!("its source does not lex: {error}").into());
         }
-        Self::from_tokens(&tokens).map_err(|malformed| malformed.message)
+        Self::read(&tokens).map_err(|malformed| malformed.message)
     }
 
-    /// Parse a definition from its tokens, from `macro_rules` to its end,
-    /// with rustc's error for one it refuses.
+    /// Parse the program's definition from its tokens, from `macro_rules`
+    /// to its end, with rustc's error for one it refuses: one it cannot
+    /// read, or a fragment followed by what Rust's follow set does not
+    /// allow after it.
     pub(crate) fn from_tokens(tokens: &[(Token, Position)]) -> Result<Self, Malformed> {
+        let rules = Self::read(tokens)?;
+        for rule in &rules.rules {
+            check_follow(&rule.matcher, &[Follower::End])?;
+        }
+        Ok(rules)
+    }
+
+    /// A definition read from its tokens, from `macro_rules` to its end,
+    /// with rustc's error for one it cannot read.
+    fn read(tokens: &[(Token, Position)]) -> Result<Self, Malformed> {
         let start = tokens
             .first()
             .map_or(Position::NONE, |(_, position)| *position);
@@ -507,6 +582,7 @@ impl Rules {
                 .transcribe(&rule.transcriber, &mut Vec::new(), &mut output)
                 .map_err(Failure::Transcription)?;
             rename_locals(&mut output, hygiene);
+            resign(&mut output);
             return Ok(output
                 .into_iter()
                 .map(|(token, position, _)| (token, position))
@@ -567,13 +643,14 @@ fn patterns(trees: &[Tree]) -> Result<Vec<Pattern>, Malformed> {
                             ));
                         }
                     };
-                    patterns.push(Pattern::Fragment(text(name).into(), fragment));
+                    patterns.push(Pattern::Fragment(text(name).into(), fragment, *at));
                     index += 4;
                 }
                 Some(Tree::Group(Delimiter::Paren, _, inner, _)) => {
                     let inner = self::patterns(inner)?;
                     let (separator, op, next) = repetition(trees, index + 2)?;
-                    patterns.push(Pattern::Repeat(inner, separator, op));
+                    let separator_at = trees.get(index + 2).map_or(Position::NONE, tree_position);
+                    patterns.push(Pattern::Repeat(inner, separator, op, separator_at));
                     index = next;
                 }
                 _ => {
@@ -584,12 +661,12 @@ fn patterns(trees: &[Tree]) -> Result<Vec<Pattern>, Malformed> {
                     ));
                 }
             },
-            Tree::Leaf(token, _) => {
-                patterns.push(Pattern::Token(token.clone()));
+            Tree::Leaf(token, at) => {
+                patterns.push(Pattern::Token(token.clone(), *at));
                 index += 1;
             }
-            Tree::Group(delimiter, _, inner, _) => {
-                patterns.push(Pattern::Group(*delimiter, self::patterns(inner)?));
+            Tree::Group(delimiter, open, inner, _) => {
+                patterns.push(Pattern::Group(*delimiter, self::patterns(inner)?, *open));
                 index += 1;
             }
         }
@@ -618,12 +695,216 @@ fn repetition(trees: &[Tree], index: usize) -> Result<(Option<Token>, Op, usize)
     }
 }
 
+/// What may come after a fragment in a matcher, for rustc's follow-set
+/// check ([`check_follow`]).
+#[derive(Clone, Copy)]
+enum Follower<'a> {
+    /// The matcher's end, or a group's, which any fragment may meet.
+    End,
+    Token(&'a Token, Position),
+    Fragment(&'a str, Fragment, Position),
+    Open(Delimiter, Position),
+}
+
+/// Check that each fragment among `patterns` is followed only by what Rust
+/// allows after it, as rustc checks a definition, `after` being what may
+/// follow the sequence. A repetition's last fragment meets its separator
+/// and what follows the repetition, not its own start again, as in rustc.
+fn check_follow<'a>(patterns: &'a [Pattern], after: &[Follower<'a>]) -> Result<(), Malformed> {
+    for (index, pattern) in patterns.iter().enumerate() {
+        match pattern {
+            Pattern::Token(..) => {}
+            Pattern::Group(_, inner, _) => check_follow(inner, &[Follower::End])?,
+            Pattern::Repeat(inner, separator, _, at) => {
+                let mut within: Vec<Follower<'a>> = separator
+                    .iter()
+                    .map(|separator| Follower::Token(separator, *at))
+                    .collect();
+                within.extend(firsts(&patterns[index + 1..], after));
+                check_follow(inner, &within)?;
+            }
+            Pattern::Fragment(name, fragment, _) => {
+                let followers = firsts(&patterns[index + 1..], after);
+                let Some(follower) = followers
+                    .iter()
+                    .find(|follower| !follows(*fragment, follower))
+                else {
+                    continue;
+                };
+                let (shown, at) = match follower {
+                    Follower::End => unreachable!("any fragment may end a matcher"),
+                    Follower::Token(token, at) => (text(token), *at),
+                    Follower::Fragment(name, fragment, at) => {
+                        (format!("${name}:{}", fragment.specifier()), *at)
+                    }
+                    Follower::Open(delimiter, at) => (delimiters(*delimiter).0.to_string(), *at),
+                };
+                let counted = followers
+                    .iter()
+                    .filter(|follower| !matches!(follower, Follower::End))
+                    .count();
+                let verb = if counted == 1 { "is" } else { "may be" };
+                let specifier = fragment.specifier();
+                return Err(Malformed::new(
+                    format!(
+                        "`${name}:{specifier}` {verb} followed by `{shown}`, which is not \
+                         allowed for `{specifier}` fragments"
+                    ),
+                    fragment.not_followed(),
+                    at,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What may start `patterns`, `after` when they may match nothing.
+fn firsts<'a>(patterns: &'a [Pattern], after: &[Follower<'a>]) -> Vec<Follower<'a>> {
+    let mut found = Vec::new();
+    for pattern in patterns {
+        match pattern {
+            Pattern::Token(token, at) => {
+                found.push(Follower::Token(token, *at));
+                return found;
+            }
+            Pattern::Fragment(name, fragment, at) => {
+                found.push(Follower::Fragment(name, *fragment, *at));
+                return found;
+            }
+            Pattern::Group(delimiter, _, at) => {
+                found.push(Follower::Open(*delimiter, *at));
+                return found;
+            }
+            Pattern::Repeat(inner, _, op, _) => {
+                found.extend(firsts(inner, &[]));
+                if *op == Op::Plus {
+                    return found;
+                }
+            }
+        }
+    }
+    found.extend_from_slice(after);
+    found
+}
+
+/// Whether Rust lets `follower` come after a `fragment`: its follow set.
+fn follows(fragment: Fragment, follower: &Follower<'_>) -> bool {
+    let token = match follower {
+        Follower::End => return true,
+        Follower::Token(token, _) => Some(*token),
+        Follower::Fragment(..) | Follower::Open(..) => None,
+    };
+    let word = token.map(text);
+    let word = word.as_deref();
+    match fragment {
+        Fragment::Expr | Fragment::Stmt => {
+            matches!(
+                token,
+                Some(Token::DoubleArrow | Token::Comma | Token::SemiColon)
+            )
+        }
+        Fragment::Pat | Fragment::PatParam => {
+            matches!(
+                token,
+                Some(Token::DoubleArrow | Token::Comma | Token::Equals | Token::If | Token::In)
+            ) || fragment == Fragment::PatParam && matches!(token, Some(Token::Pipe))
+        }
+        Fragment::Path | Fragment::Ty => {
+            matches!(
+                follower,
+                Follower::Open(Delimiter::Brace | Delimiter::Bracket, _)
+                    | Follower::Fragment(_, Fragment::Block, _)
+            ) || matches!(
+                token,
+                Some(
+                    Token::DoubleArrow
+                        | Token::Comma
+                        | Token::GreaterThan
+                        | Token::RightShift
+                        | Token::Equals
+                        | Token::Colon
+                        | Token::SemiColon
+                        | Token::Pipe
+                        | Token::As
+                )
+            ) || word == Some("where")
+        }
+        Fragment::Vis => match follower {
+            Follower::Fragment(_, fragment, _) => {
+                matches!(fragment, Fragment::Ident | Fragment::Ty | Fragment::Path)
+            }
+            Follower::Open(delimiter, _) => *delimiter != Delimiter::Brace,
+            _ => {
+                let named = word.is_some_and(|word| {
+                    word.starts_with(|c: char| c.is_alphabetic() || c == '_')
+                        && word.chars().all(|c| c.is_alphanumeric() || c == '_')
+                });
+                named && word != Some("priv")
+                    || matches!(
+                        token,
+                        Some(
+                            Token::Comma
+                                | Token::Bang
+                                | Token::Multiply
+                                | Token::Ampersand
+                                | Token::And
+                                | Token::Apostrophe
+                                | Token::LessThan
+                                | Token::LeftShift
+                                | Token::DoubleColon
+                                | Token::Underscore
+                        )
+                    )
+                    || word == Some("?")
+            }
+        },
+        _ => true,
+    }
+}
+
+impl Fragment {
+    /// The specifier a matcher writes it with.
+    const fn specifier(self) -> &'static str {
+        match self {
+            Self::Expr => "expr",
+            Self::Ty => "ty",
+            Self::Path => "path",
+            Self::Ident => "ident",
+            Self::Pat => "pat",
+            Self::PatParam => "pat_param",
+            Self::Stmt => "stmt",
+            Self::Block => "block",
+            Self::Item => "item",
+            Self::Literal => "literal",
+            Self::Lifetime => "lifetime",
+            Self::Meta => "meta",
+            Self::Tt => "tt",
+            Self::Vis => "vis",
+        }
+    }
+
+    /// rustc's label under a token its follow set does not allow.
+    const fn not_followed(self) -> &'static str {
+        match self {
+            Self::Expr => "not allowed after `expr` fragments",
+            Self::Ty => "not allowed after `ty` fragments",
+            Self::Path => "not allowed after `path` fragments",
+            Self::Pat => "not allowed after `pat` fragments",
+            Self::PatParam => "not allowed after `pat_param` fragments",
+            Self::Stmt => "not allowed after `stmt` fragments",
+            Self::Vis => "not allowed after `vis` fragments",
+            _ => "",
+        }
+    }
+}
+
 fn collect_depths(patterns: &[Pattern], depth: usize, depths: &mut Vec<(ImmutableString, usize)>) {
     for pattern in patterns {
         match pattern {
-            Pattern::Token(_) => {}
-            Pattern::Group(_, inner) => collect_depths(inner, depth, depths),
-            Pattern::Fragment(name, _) => depths.push((name.clone(), depth)),
+            Pattern::Token(..) => {}
+            Pattern::Group(_, inner, _) => collect_depths(inner, depth, depths),
+            Pattern::Fragment(name, ..) => depths.push((name.clone(), depth)),
             Pattern::Repeat(inner, ..) => collect_depths(inner, depth + 1, depths),
         }
     }
@@ -645,7 +926,7 @@ fn matches(
         return then(input, indices, state);
     };
     match first {
-        Pattern::Token(token) => match input.first() {
+        Pattern::Token(token, _) => match input.first() {
             Some(Tree::Leaf(found, _)) if same(found, token) => {
                 matches(rest, &input[1..], indices, state, then)
             }
@@ -654,7 +935,7 @@ fn matches(
                 false
             }
         },
-        Pattern::Group(delimiter, inner) => match input.first() {
+        Pattern::Group(delimiter, inner, _) => match input.first() {
             Some(Tree::Group(found, _, contents, close)) if found == delimiter => {
                 let mark = (state.bound.len(), state.repeated.len());
                 let outer =
@@ -675,8 +956,8 @@ fn matches(
                 false
             }
         },
-        Pattern::Fragment(name, fragment) => {
-            let Some(length) = fragment_length(*fragment, input) else {
+        Pattern::Fragment(name, fragment, _) => {
+            let Some(length) = super::fragment::length(*fragment, input) else {
                 state.stop_at(input);
                 return false;
             };
@@ -692,7 +973,7 @@ fn matches(
             state.bound.pop();
             false
         }
-        Pattern::Repeat(inner, separator, op) => repeat(
+        Pattern::Repeat(inner, separator, op, _) => repeat(
             inner,
             separator.as_ref(),
             *op,
@@ -781,149 +1062,6 @@ fn repeat(
     }
     state.repeated.pop();
     false
-}
-
-fn is_literal(token: &Token) -> bool {
-    matches!(
-        token,
-        Token::IntegerConstant(_)
-            | Token::FloatConstant(_)
-            | Token::CharConstant(_)
-            | Token::StringConstant(_)
-            | Token::ByteStringConstant(_)
-            | Token::ByteConstant(_)
-            | Token::True
-            | Token::False
-    )
-}
-
-/// How many trees at the start of `input` a `fragment` takes, as rustc's
-/// parser reads one. A fragment followed by more of the rule stops where
-/// Rust's follow set allows the next token, so it is read greedily. None
-/// starts at such a token: an `expr` is never `,`, so `$($e:expr),* $(,)*`
-/// takes `"a", ,` as rustc does, one expression and two commas.
-fn fragment_length(fragment: Fragment, input: &[Tree]) -> Option<usize> {
-    let leaf = |index: usize| match input.get(index) {
-        Some(Tree::Leaf(token, _)) => Some(token),
-        _ => None,
-    };
-    let until = |stop: &dyn Fn(&Token) -> bool, angles: bool| {
-        let mut depth = 0_usize;
-        let mut length = 0;
-        for (index, tree) in input.iter().enumerate() {
-            if let Tree::Leaf(token, _) = tree {
-                if angles {
-                    match token {
-                        Token::LessThan => depth += 1,
-                        Token::GreaterThan if depth > 0 => {
-                            depth -= 1;
-                            length = index + 1;
-                            continue;
-                        }
-                        Token::RightShift if depth > 1 => {
-                            depth -= 2;
-                            length = index + 1;
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-                if depth == 0 && stop(token) {
-                    break;
-                }
-            } else if angles
-                && depth == 0
-                && index > 0
-                && matches!(tree, Tree::Group(Delimiter::Brace, ..))
-            {
-                break;
-            }
-            length = index + 1;
-        }
-        (length > 0).then_some(length)
-    };
-    match fragment {
-        Fragment::Tt => (!input.is_empty()).then_some(1),
-        Fragment::Ident => match leaf(0)? {
-            Token::Identifier(_) | Token::SelfValue => Some(1),
-            token
-                if text(token).chars().all(|c| c.is_alphanumeric() || c == '_')
-                    && text(token).chars().next().is_some_and(char::is_alphabetic) =>
-            {
-                Some(1)
-            }
-            _ => None,
-        },
-        Fragment::Literal => match leaf(0)? {
-            token if is_literal(token) => Some(1),
-            Token::Minus | Token::UnaryMinus
-                if matches!(
-                    leaf(1),
-                    Some(Token::IntegerConstant(_) | Token::FloatConstant(_))
-                ) =>
-            {
-                Some(2)
-            }
-            _ => None,
-        },
-        Fragment::Lifetime => match (leaf(0)?, leaf(1)) {
-            (Token::Apostrophe, Some(Token::Identifier(_))) => Some(2),
-            _ => None,
-        },
-        Fragment::Block => {
-            matches!(input.first(), Some(Tree::Group(Delimiter::Brace, ..))).then_some(1)
-        }
-        Fragment::Vis => match leaf(0) {
-            Some(Token::Pub) => Some(
-                1 + usize::from(matches!(
-                    input.get(1),
-                    Some(Tree::Group(Delimiter::Paren, ..))
-                )),
-            ),
-            _ => Some(0),
-        },
-        Fragment::Expr | Fragment::Stmt | Fragment::Meta => until(
-            &|token| matches!(token, Token::Comma | Token::SemiColon | Token::DoubleArrow),
-            false,
-        ),
-        Fragment::Ty | Fragment::Path => until(
-            &|token| {
-                matches!(
-                    token,
-                    Token::Comma
-                        | Token::SemiColon
-                        | Token::DoubleArrow
-                        | Token::Equals
-                        | Token::Pipe
-                        | Token::Colon
-                        | Token::GreaterThan
-                        | Token::RightShift
-                        | Token::As
-                ) || text(token) == "where"
-            },
-            true,
-        ),
-        Fragment::Pat | Fragment::PatParam => until(
-            &|token| {
-                matches!(
-                    token,
-                    Token::Comma | Token::DoubleArrow | Token::Equals | Token::If | Token::In
-                ) || fragment == Fragment::PatParam && matches!(token, Token::Pipe)
-            },
-            false,
-        ),
-        Fragment::Item => {
-            for (index, tree) in input.iter().enumerate() {
-                match tree {
-                    Tree::Leaf(Token::SemiColon, _) | Tree::Group(Delimiter::Brace, ..) => {
-                        return Some(index + 1);
-                    }
-                    _ => {}
-                }
-            }
-            (!input.is_empty()).then_some(input.len())
-        }
-    }
 }
 
 struct Transcription<'a> {
@@ -1114,7 +1252,7 @@ fn operand(trees: &[Tree]) -> bool {
     trees.iter().all(|tree| match tree {
         Tree::Group(..) => true,
         Tree::Leaf(token, _) => {
-            is_literal(token)
+            super::fragment::is_literal(token)
                 || matches!(
                     token,
                     Token::Identifier(_)
@@ -1144,13 +1282,23 @@ fn variables(trees: &[Tree], names: &mut BTreeSet<String>) {
 }
 
 /// Rename the local names the macro's own tokens bind (`let x`, `for x`,
-/// `|x|`) and every use of them the macro wrote, so the caller's tokens
-/// never meet them, as Rust's hygiene keeps them apart.
+/// `|x|`, a `match` arm's pattern) and every use of them the macro wrote,
+/// so the caller's tokens never meet them, as Rust's hygiene keeps them
+/// apart. A `{x}` a format string of the macro's captures is a use.
+///
+/// A field's name and a path's segment are no local's use, as Rust's
+/// hygiene leaves a field and a path alone: they are kept, and a field
+/// written by its local's name alone is written `field: local`.
 fn rename_locals(output: &mut Output, hygiene: usize) {
+    let roles = roles(output);
     let mut locals = BTreeSet::new();
     for index in 0..output.len() {
         let (token, _, own) = &output[index];
-        if !own {
+        if !own || roles[index] == Role::Field {
+            continue;
+        }
+        if matches!(token, Token::Reserved(word) if word.as_str() == "match") {
+            arm_bindings(output, &roles, index, &mut locals);
             continue;
         }
         let end: fn(&Token) -> bool = match token {
@@ -1200,6 +1348,7 @@ fn rename_locals(output: &mut Output, hygiene: usize) {
             }
             if !typed
                 && *own
+                && roles[position] != Role::Field
                 && let Token::Identifier(name) = token
                 && binding_name(name)
                 && !matches!(
@@ -1220,31 +1369,235 @@ fn rename_locals(output: &mut Output, hygiene: usize) {
     if locals.is_empty() {
         return;
     }
-    for index in 0..output.len() {
-        let after_period = index > 0 && matches!(output[index - 1].0, Token::Period);
-        let before_path = matches!(
-            output.get(index + 1).map(|(token, ..)| token),
-            Some(Token::DoubleColon | Token::Bang)
-        );
-        let (token, _, own) = &mut output[index];
-        if !*own || after_period || before_path {
-            continue;
-        }
-        if let Token::Identifier(name) = token
-            && locals.contains(name.as_str())
-        {
-            **name = format!("__rawr_macro{hygiene}_{name}").into();
+    let renamed = |name: &str| format!("{HYGIENE_PREFIX}{hygiene}_{name}");
+    let mut written = Output::with_capacity(output.len());
+    for (index, (token, position, own)) in std::mem::take(output).into_iter().enumerate() {
+        let token = match token {
+            Token::Identifier(name)
+                if own
+                    && matches!(roles[index], Role::Plain | Role::Shorthand(_))
+                    && locals.contains(name.as_str()) =>
+            {
+                if let Role::Shorthand(start) = roles[index] {
+                    // `Point { x }` is `Point { x: x }`, its local renamed.
+                    let at = written.len() - (index - start);
+                    written.insert(at, (Token::Colon, position, true));
+                    written.insert(at, (Token::Identifier(name.clone()), position, true));
+                }
+                Token::Identifier(Box::new(renamed(&name).into()))
+            }
+            Token::StringConstant(text) if own && roles[index] == Role::Format => {
+                Token::StringConstant(Box::new(captures(&text, &locals, &renamed).into()))
+            }
+            token => token,
+        };
+        written.push((token, position, own));
+    }
+    *output = written;
+}
+
+/// Note the names the arm patterns of the `match` at `index` bind among
+/// the macro's own tokens: from the body's `{` or an arm's end to its
+/// `=>` or its guard's `if`.
+fn arm_bindings(output: &Output, roles: &[Role], index: usize, locals: &mut BTreeSet<String>) {
+    let Some(open) = (index + 1..output.len()).find(|at| output[*at].0 == Token::LeftBrace) else {
+        return;
+    };
+    let mut depth = 0_usize;
+    let mut pattern = true;
+    // Whether the group open at the arms' depth is an arm's block body.
+    let mut block = false;
+    for position in open + 1..output.len() {
+        let (token, _, own) = &output[position];
+        match token {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace => {
+                if depth == 0 {
+                    block = output[position - 1].0 == Token::DoubleArrow;
+                }
+                depth += 1;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace if depth == 0 => return,
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                depth -= 1;
+                // A block arm's `}` ends it without a `,`.
+                if depth == 0
+                    && std::mem::take(&mut block)
+                    && output
+                        .get(position + 1)
+                        .is_some_and(|(next, ..)| *next != Token::Comma)
+                {
+                    pattern = true;
+                }
+            }
+            Token::DoubleArrow | Token::If if depth == 0 => pattern = false,
+            Token::Comma if depth == 0 && !pattern => pattern = true,
+            Token::Identifier(name)
+                if pattern
+                    && *own
+                    && roles[position] == Role::Plain
+                    && binding_name(name)
+                    && !matches!(
+                        output.get(position + 1).map(|(token, ..)| token),
+                        Some(Token::LeftParen | Token::LeftBrace | Token::Unit)
+                    ) =>
+            {
+                locals.insert(name.to_string());
+            }
+            _ => {}
         }
     }
 }
 
+/// What a token of an expansion is to hygiene (`rename_locals`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    /// A name that may use a local.
+    Plain,
+    /// A field's name before its `:`, in a struct's definition, expression
+    /// or pattern.
+    Field,
+    /// A field written by its binding's name alone, `Point { x }`, with its
+    /// `ref` or `mut` from the index given.
+    Shorthand(usize),
+    /// A path's segment: before `::` or `!`, or after `::` or `.`.
+    Segment,
+    /// A string a macro call reads, whose `{name}` may use a local.
+    Format,
+}
+
+/// Each token's [`Role`] in `output`.
+fn roles(output: &Output) -> Vec<Role> {
+    let mut roles = vec![Role::Plain; output.len()];
+    // For each group open around the token, whether it is a struct's
+    // braces: `Name {` or `Self {`, the name capitalised as a type's is.
+    let mut groups: Vec<bool> = Vec::new();
+    for (index, (token, ..)) in output.iter().enumerate() {
+        let previous = index.checked_sub(1).map(|before| &output[before].0);
+        match token {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace => {
+                let named = matches!(previous, Some(Token::Identifier(name))
+                    if name.chars().next().is_some_and(char::is_uppercase));
+                groups.push(*token == Token::LeftBrace && named);
+                continue;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                groups.pop();
+                continue;
+            }
+            Token::StringConstant(_)
+                if matches!(
+                    previous,
+                    Some(Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::Comma)
+                ) && called_group(output, index) =>
+            {
+                roles[index] = Role::Format;
+                continue;
+            }
+            Token::Identifier(_) => {}
+            _ => continue,
+        }
+        let next = output.get(index + 1).map(|(token, ..)| token);
+        if matches!(previous, Some(Token::Period | Token::DoubleColon))
+            || matches!(next, Some(Token::DoubleColon | Token::Bang))
+        {
+            roles[index] = Role::Segment;
+            continue;
+        }
+        if groups.last() != Some(&true) {
+            continue;
+        }
+        // The field starts at the group's `{` or after a `,`, with `ref`
+        // and `mut` before its name in a pattern.
+        let mut start = index;
+        while start > 0
+            && (matches!(output[start - 1].0, Token::Mut)
+                || matches!(&output[start - 1].0, Token::Identifier(word) if word.as_str() == "ref"))
+        {
+            start -= 1;
+        }
+        if start == 0 || !matches!(output[start - 1].0, Token::LeftBrace | Token::Comma) {
+            continue;
+        }
+        roles[index] = match next {
+            Some(Token::Colon) if start == index => Role::Field,
+            Some(Token::Comma | Token::RightBrace) => Role::Shorthand(start),
+            _ => Role::Plain,
+        };
+    }
+    roles
+}
+
+/// Whether the token at `index` is directly inside the delimited group of
+/// a macro call, `name!(..)`.
+fn called_group(output: &Output, index: usize) -> bool {
+    let mut depth = 0_usize;
+    for before in (0..index).rev() {
+        match output[before].0 {
+            Token::RightParen | Token::RightBracket | Token::RightBrace => depth += 1,
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace if depth == 0 => {
+                return before > 0 && output[before - 1].0 == Token::Bang;
+            }
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth -= 1,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// `text`, a format string, with each `{name}` that names one of `locals`
+/// naming it `renamed`, as the implicit argument it captures.
+fn captures(text: &str, locals: &BTreeSet<String>, renamed: &dyn Fn(&str) -> String) -> String {
+    let mut written = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        written.push_str(&rest[..=open]);
+        rest = &rest[open + 1..];
+        if let Some(escaped) = rest.strip_prefix('{') {
+            written.push('{');
+            rest = escaped;
+            continue;
+        }
+        let end = rest
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        if locals.contains(name) && rest[end..].starts_with(['}', ':']) {
+            written.push_str(&renamed(name));
+        } else {
+            written.push_str(name);
+        }
+        rest = &rest[end..];
+    }
+    written.push_str(rest);
+    written
+}
+
+/// Read each `+` and `-` of an expansion as unary or binary by the token
+/// before it in the expansion, as the lexer reads a written one: a
+/// transcriber's `$(+ $x)*` follows its `(` in the definition, and a
+/// binary operator where it lands after `0`.
+fn resign(output: &mut Output) {
+    for index in 0..output.len() {
+        let unary = index == 0 || output[index - 1].0.is_next_unary();
+        let signed = match output[index].0 {
+            Token::Plus | Token::UnaryPlus if unary => Token::UnaryPlus,
+            Token::Plus | Token::UnaryPlus => Token::Plus,
+            Token::Minus | Token::UnaryMinus if unary => Token::UnaryMinus,
+            Token::Minus | Token::UnaryMinus => Token::Minus,
+            _ => continue,
+        };
+        output[index].0 = signed;
+    }
+}
+
 /// A name a pattern binds: lowercase, as Rust's patterns bind (an
-/// uppercase name is a constant, a unit struct or a variant).
+/// uppercase name is a constant, a unit struct or a variant), and not the
+/// `ref` before one.
 fn binding_name(name: &str) -> bool {
     name.chars()
         .next()
         .is_some_and(|c| c.is_lowercase() || c == '_')
-        && name != "_"
+        && !matches!(name, "_" | "ref")
 }
 
 #[cfg(test)]

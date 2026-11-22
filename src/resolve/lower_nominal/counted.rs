@@ -496,6 +496,7 @@ impl Parser<'_> {
                         declared: self.declared_name(&element),
                         required_by: None,
                         formatted: None,
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
                 let source =

@@ -1086,6 +1086,31 @@ fn referent_section(referent: &resolve::Referent, source: &Source) -> Section {
 }
 
 /// The notes rustc gives `error` with places of their own, in `source`.
+/// rustc's note on the program's type a pattern on `ty` misses values of,
+/// at its name and each variant it misses, then the matched value's type.
+fn defined_here(ty: &str, uncovered: &resolve::Uncovered, source: &Source) -> Section {
+    // rustc names the type below the matched value's references.
+    let mut defined = ty;
+    while let Some(target) = defined
+        .strip_prefix("&mut ")
+        .or_else(|| defined.strip_prefix('&'))
+    {
+        defined = target;
+    }
+    let section = Section::note(format!("`{defined}` defined here")).primary(
+        source.clone(),
+        uncovered.name,
+        None,
+    );
+    uncovered
+        .variants
+        .iter()
+        .fold(section, |section, variant| {
+            section.secondary(source.clone(), *variant, Some("not covered".into()))
+        })
+        .followed(format!("the matched value is of type `{ty}`"))
+}
+
 fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
     match error {
         // What the argument makes the call's type, and the function's
@@ -1137,18 +1162,21 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
         resolve::Error::NonExhaustive {
             ty,
             uncovered: Some(uncovered),
+            uninhabited_target,
             ..
         } => {
-            let section = Section::note(format!("`{ty}` defined here")).primary(
-                source.clone(),
-                uncovered.name,
-                None,
-            );
-            let section = uncovered.variants.iter().fold(section, |section, variant| {
-                section.secondary(source.clone(), *variant, Some("not covered".into()))
-            });
-            vec![section.followed(format!("the matched value is of type `{ty}`"))]
+            let section = defined_here(ty, uncovered, source);
+            vec![if *uninhabited_target {
+                section.followed(resolve::INHABITED_REFERENCES)
+            } else {
+                section
+            }]
         }
+        resolve::Error::Refutable {
+            ty,
+            uncovered: Some(uncovered),
+            ..
+        } => vec![defined_here(ty, uncovered, source)],
         // E0364 notes the re-export it refuses at that re-export.
         resolve::Error::StdPath {
             code: "E0364",
@@ -1198,7 +1226,9 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                         Some("you could clone this value".into()),
                     ),
                 ),
-                resolve::Cloning::Clone | resolve::Cloning::None => None,
+                resolve::Cloning::Clone | resolve::Cloning::Reborrow | resolve::Cloning::None => {
+                    None
+                }
             };
             parameter.chain(derivable).collect()
         }
@@ -1209,6 +1239,7 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             capability,
             declared,
             required_by,
+            chain,
             ..
         } => {
             let help = declared
@@ -1240,7 +1271,9 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                 ),
                 _ => None,
             };
-            help.into_iter().chain(bound).collect()
+            let chain =
+                super::requirement::sections(chain.requirements(), owner, capability, source);
+            help.into_iter().chain(chain).chain(bound).collect()
         }
         // The program's own type an operator's trait has no impl for.
         resolve::Error::BinaryOperation { operation, .. } => operation
@@ -1494,6 +1527,17 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             after(*moved),
             ".clone()",
         ),
+        resolve::Error::MovedValue {
+            name,
+            moved,
+            cause: Some(cause),
+            ..
+        } if cause.cloning == resolve::Cloning::Reborrow => suggestion(
+            &format!("consider creating a fresh reborrow of `{name}` here"),
+            Style::Verbose,
+            before(*moved),
+            "&mut *",
+        ),
         resolve::Error::ArgumentCount {
             arguments: Some(arguments),
             call,
@@ -1706,9 +1750,9 @@ fn primary_label(
         }
         resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
         resolve::Error::Outlives(reports) => Some(reports.first().label().into()),
-        resolve::Error::NonExhaustive { witnesses, .. } => {
-            Some(resolve::NonExhaustive(witnesses).label().into())
-        }
+        resolve::Error::NonExhaustive { witnesses, .. } => resolve::NonExhaustive(witnesses)
+            .scrutinee_label()
+            .map(Into::into),
         resolve::Error::Refutable {
             witnesses, site, ..
         } => Some(resolve::Refutable { witnesses, site }.label().into()),
@@ -1842,7 +1886,9 @@ fn primary_label(
                     "`{owner}` cannot be formatted using `{{:?}}` because it doesn't implement \
                      `Debug`"
                 ),
-                _ => format!("`{owner}` cannot be formatted with the default formatter"),
+                "Display" => format!("`{owner}` cannot be formatted with the default formatter"),
+                // What the impl the value formats by needed of it.
+                _ => format!("the trait `{capability}` is not implemented for `{owner}`"),
             }
             .into(),
         ),
@@ -2090,28 +2136,43 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             ty,
             uncovered: None,
             sealed,
+            uninhabited_target,
             ..
-        } => sealed.iter().fold(
-            builder.note(format!("the matched value is of type `{ty}`")),
-            |builder, name| {
-                builder.note(format!(
-                    "`{name}` is marked as non-exhaustive, so a wildcard `_` is necessary to \
-                     match exhaustively"
-                ))
-            },
-        ),
+        } => {
+            let builder = sealed.iter().fold(
+                builder.note(format!("the matched value is of type `{ty}`")),
+                |builder, name| {
+                    builder.note(format!(
+                        "`{name}` is marked as non-exhaustive, so a wildcard `_` is necessary \
+                         to match exhaustively"
+                    ))
+                },
+            );
+            if *uninhabited_target {
+                builder.note(resolve::INHABITED_REFERENCES)
+            } else {
+                builder
+            }
+        }
+        // The matched type follows the type's note, when it has one
+        // (`sections`).
         resolve::Error::Refutable {
             witnesses,
             ty,
             site,
+            uncovered,
             ..
         } => {
             let refutable = resolve::Refutable { witnesses, site };
-            refutable
+            let builder = refutable
                 .notes()
                 .iter()
-                .fold(builder, |builder, note| builder.note(*note))
-                .note(format!("the matched value is of type `{ty}`"))
+                .fold(builder, |builder, note| builder.note(*note));
+            if uncovered.is_some() {
+                builder
+            } else {
+                builder.note(format!("the matched value is of type `{ty}`"))
+            }
         }
         resolve::Error::PatternFields {
             help: Some(help), ..
@@ -2160,6 +2221,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             derive,
             declared,
             required_by,
+            chain,
             ..
         } => {
             // A type the program declares in this file shows the derive as
@@ -2187,6 +2249,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 )),
                 _ => builder,
             };
+            let builder = super::requirement::lines(chain.requirements())
+                .into_iter()
+                .fold(builder, Builder::note);
             let builder = match required_by {
                 Some(resolve::Required { item, place: None }) => {
                     builder.note(format!("required by a bound in `{item}`"))
@@ -2498,8 +2563,8 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnknownTrait { name, .. } => {
             format!("cannot find trait `{name}` in this scope")
         }
-        resolve::Error::NonExhaustive { witnesses, .. } => {
-            resolve::NonExhaustive(witnesses).to_string()
+        resolve::Error::NonExhaustive { witnesses, ty, .. } => {
+            resolve::NonExhaustive(witnesses).message(ty)
         }
         resolve::Error::Refutable {
             witnesses, site, ..
@@ -2703,6 +2768,7 @@ mod tests {
             declared: None,
             required_by: None,
             formatted: None,
+            chain: crate::resolve::Chain::default(),
         };
 
         let report = Report::from_resolution(source.clone(), None, &missing("FromStr", true))

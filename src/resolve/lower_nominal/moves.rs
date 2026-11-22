@@ -261,15 +261,50 @@ impl<'a> Parser<'a> {
 
     /// `value`, a by-value use that moves a local or a part of one: what a
     /// later use of the moved value says of the move.
-    fn note_move(&mut self, value: &ParsedExpr) {
+    pub(super) fn note_move(&mut self, value: &ParsedExpr) {
         self.move_sites.insert(
             value.span.start(),
             MoveSite {
                 span: self.expression_span(value.span),
                 ty: value.ty.clone(),
                 parameter: None,
+                reborrow: false,
             },
         );
+    }
+
+    /// `argument`, passed to a parameter written `written`: a `&mut` local
+    /// given whole to a generic parameter (`generic(self)`) moves, as
+    /// rustc reborrows it only where the parameter's type is a reference.
+    pub(super) fn move_generic_reference(
+        &mut self,
+        argument: &ParsedExpr,
+        written: &type_ref::Type,
+    ) {
+        let type_ref::Type::Path(path) = written else {
+            return;
+        };
+        let generic = matches!(
+            path.target,
+            type_ref::Target::Parameter | type_ref::Target::Opaque(_)
+        ) && path.name != "Self";
+        let mutable = matches!(
+            self.inference.resolve(&argument.ty),
+            Ty::Reference { mutable: true, .. }
+        );
+        // A lone local, whose use is the reference itself.
+        let lone = argument.span.start() == argument.span.end()
+            && self
+                .flow()
+                .value_place(argument.span.start())
+                .is_some_and(|place| place.projection.is_empty());
+        if generic && mutable && lone && self.closures.is_empty() {
+            self.note_move(argument);
+            if let Some(site) = self.move_sites.get_mut(&argument.span.start()) {
+                site.reborrow = true;
+            }
+            self.flow().moved(argument.span.start());
+        }
     }
 
     /// `argument`, passed to `parameter`, a parameter of the crate's own
@@ -766,6 +801,8 @@ impl<'a> Parser<'a> {
             // rustc suggests no clone of a part.
             cloning: if partial {
                 Cloning::None
+            } else if site.reborrow {
+                Cloning::Reborrow
             } else {
                 self.cloning(&site.ty)
             },

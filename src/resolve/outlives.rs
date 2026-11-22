@@ -1,6 +1,7 @@
-//! rustc's reports of a value a function returns whose lifetimes don't
-//! relate to its own signature's as the signature's types require (T170):
-//! "lifetime may not live long enough", and E0621.
+//! rustc's reports of a value a function returns, or stores through a
+//! parameter, whose lifetimes don't relate to its own signature's as the
+//! signature's types require (T170): "lifetime may not live long enough",
+//! and E0621.
 
 use crate::{ImmutableString, Span};
 
@@ -10,8 +11,10 @@ use crate::{ImmutableString, Span};
 pub enum Report {
     /// "lifetime may not live long enough".
     NotLongEnough {
-        /// The value returned.
+        /// The value returned, or the call or assignment that stores it.
         returned: Span,
+        /// What requires the lifetimes to relate.
+        cause: Cause,
         /// What the function is.
         item: Item,
         /// The lifetime that must outlive `shorter`.
@@ -185,6 +188,8 @@ pub enum Region {
         name: ImmutableString,
         /// Where it is declared.
         declared: Span,
+        /// The function declares it, rather than its impl.
+        function: bool,
     },
     /// The elided lifetime of a reference, which rustc calls `'1`, `'2`
     /// and on in the order its reports of one function name them: the
@@ -255,6 +260,19 @@ pub enum Place {
         /// The function has generic parameters.
         listed: bool,
     },
+}
+
+/// What requires a value's lifetimes to relate to a signature's, as
+/// rustc's label says it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Cause {
+    /// The function returns the value.
+    Return,
+    /// A call stores the value through a `&mut` parameter
+    /// (`v.push(x)`).
+    Argument,
+    /// An assignment stores it there (`*r = x`).
+    Assignment,
 }
 
 /// What rustc calls the function whose body breaks its signature.
@@ -398,9 +416,20 @@ impl Report {
                 item,
                 longer,
                 shorter,
+                cause,
                 ..
             } => {
                 let [(_, longer_name), (_, shorter_name)] = names(longer, shorter);
+                let stored = match cause {
+                    Cause::Return => None,
+                    Cause::Argument => Some("argument"),
+                    Cause::Assignment => Some("assignment"),
+                };
+                if let Some(stored) = stored {
+                    return format!(
+                        "{stored} requires that `{longer_name}` must outlive `{shorter_name}`"
+                    );
+                }
                 match shorter {
                     Region::Static => format!(
                         "returning this value requires that `{longer_name}` must outlive \

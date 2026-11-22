@@ -32,7 +32,7 @@ use crate::{parse, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 17;
+const FORMAT: u32 = 18;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`), whether it
@@ -557,9 +557,9 @@ record! {
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default, lifted, constant, fixed }
-    item::Struct { header, name, generics, lifetimes, fields, form, span }
+    item::Struct { header, name, generics, where_bounds, lifetimes, fields, form, span }
     item::Field { name, ty, span, attributes, visibility }
-    item::Enum { header, name, generics, lifetimes, variants, span }
+    item::Enum { header, name, generics, where_bounds, lifetimes, variants, span }
     item::Variant {
         name, payload, fields, default, discriminant, span, attributes, field_attributes,
     }
@@ -728,6 +728,44 @@ impl Codec for item::ParameterPattern {
                 members.put(writer);
                 span.put(writer);
             }
+            Self::Struct {
+                path,
+                fields,
+                rest,
+                span,
+            } => {
+                writer.byte(5);
+                path.put(writer);
+                fields.len().put(writer);
+                for (name, pattern) in fields {
+                    name.put(writer);
+                    pattern.put(writer);
+                }
+                rest.put(writer);
+                span.put(writer);
+            }
+            Self::Literal { literal, span } => {
+                writer.byte(6);
+                match literal {
+                    item::PatternLiteral::Integer(value) => {
+                        writer.byte(0);
+                        value.put(writer);
+                    }
+                    item::PatternLiteral::Char(value) => {
+                        writer.byte(1);
+                        u32::from(*value).put(writer);
+                    }
+                    item::PatternLiteral::Bool(value) => {
+                        writer.byte(2);
+                        value.put(writer);
+                    }
+                    item::PatternLiteral::Str(value) => {
+                        writer.byte(3);
+                        value.put(writer);
+                    }
+                }
+                span.put(writer);
+            }
         }
     }
     fn get(reader: &mut Reader) -> Option<Self> {
@@ -751,6 +789,33 @@ impl Codec for item::ParameterPattern {
                 members: Codec::get(reader)?,
                 span: Codec::get(reader)?,
             },
+            5 => {
+                let path = Codec::get(reader)?;
+                let count: usize = Codec::get(reader)?;
+                let mut fields = Vec::with_capacity(count);
+                for _ in 0..count {
+                    fields.push((Codec::get(reader)?, Codec::get(reader)?));
+                }
+                Self::Struct {
+                    path,
+                    fields: fields.into_boxed_slice(),
+                    rest: Codec::get(reader)?,
+                    span: Codec::get(reader)?,
+                }
+            }
+            6 => {
+                let literal = match reader.byte()? {
+                    0 => item::PatternLiteral::Integer(Codec::get(reader)?),
+                    1 => item::PatternLiteral::Char(char::from_u32(Codec::get(reader)?)?),
+                    2 => item::PatternLiteral::Bool(Codec::get(reader)?),
+                    3 => item::PatternLiteral::Str(Codec::get(reader)?),
+                    _ => return None,
+                };
+                Self::Literal {
+                    literal,
+                    span: Codec::get(reader)?,
+                }
+            }
             _ => return None,
         })
     }

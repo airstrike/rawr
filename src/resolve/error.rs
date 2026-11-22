@@ -513,6 +513,66 @@ pub struct Required {
     pub place: Option<Box<Bound>>,
 }
 
+/// An impl that needs a trait of a type for another type to implement a
+/// trait, as rustc's E0277 notes it: "required for `Vec<Opaque>` to
+/// implement `Debug`".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Requirement {
+    /// The type the impl is for, as rustc names it: `Vec<Opaque>`.
+    pub ty: ImmutableString,
+    /// The trait the impl gives it: `Debug`.
+    pub trait_name: ImmutableString,
+    /// The impl, when the program writes it; std's has no place shown.
+    pub site: Option<Box<Site>>,
+}
+
+/// The impls an unmet bound needed, innermost first, behind one thin
+/// pointer: most errors have none, and the error stays small.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Chain(Option<Box<Box<[Requirement]>>>);
+
+impl Chain {
+    /// The chain of `requirements`, innermost first.
+    pub(crate) fn new(requirements: Box<[Requirement]>) -> Self {
+        Self((!requirements.is_empty()).then(|| Box::new(requirements)))
+    }
+
+    /// Each impl, innermost first.
+    #[must_use]
+    pub fn requirements(&self) -> &[Requirement] {
+        self.0.as_deref().map_or(&[], |requirements| requirements)
+    }
+}
+
+/// Where the program writes an impl a [`Requirement`] names.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Site {
+    /// `impl<T: Debug> Summary for Wrapper<T>`.
+    Impl {
+        /// From `impl` through its `where` clause.
+        header: Span,
+        /// The trait as the header writes it.
+        trait_path: Span,
+        /// The type the impl is for, as the header writes it: `Wrapper<T>`.
+        owner: Span,
+        /// That type as rustc names it in the help: `Wrapper<T>`.
+        written: ImmutableString,
+        /// The bound the type's argument fails: `Debug` of `T: Debug`.
+        bound: Span,
+    },
+    /// `#[derive(Debug)] struct W<T>(T);`, which bounds each parameter.
+    Derive {
+        /// The trait in the `#[derive]`.
+        derive: Span,
+        /// The type's name.
+        name: Span,
+        /// The parameter whose argument fails the trait.
+        parameter: Span,
+        /// The type as rustc names it in the help: `W<T>`.
+        written: ImmutableString,
+    },
+}
+
 impl Required {
     /// A bound of `item`, which the program doesn't write.
     pub(crate) fn by(item: impl Into<ImmutableString>) -> Self {
@@ -545,19 +605,27 @@ pub struct Placeholder {
 
 impl Error {
     /// The error with the placeholder that formats its value, where it is
-    /// the value's missing `Display` or `Debug` and `placed`, each format
-    /// argument's span, trait and placeholder, has one for the value.
+    /// the value's missing `Display` or `Debug`, or what an impl of it
+    /// needed, and `placed`, each format argument's span, trait and
+    /// placeholder, has one for the value.
     #[must_use]
     pub(crate) fn formatted(mut self, placed: &[(Span, &str, Placeholder)]) -> Self {
         if let Self::MissingCapability {
             capability,
             operation,
             formatted: formatted @ None,
+            chain,
             ..
         } = &mut self
-            && let Some((.., placeholder)) = placed
-                .iter()
-                .find(|(argument, name, _)| argument == operation && *name == capability.as_str())
+            && let Some((.., placeholder)) = placed.iter().find(|(argument, name, _)| {
+                // The trait the value is formatted with is the outermost
+                // the chain needed.
+                let formatting = chain
+                    .requirements()
+                    .last()
+                    .map_or(capability.as_str(), |outermost| &outermost.trait_name);
+                argument == operation && *name == formatting
+            })
         {
             *formatted = Some(Box::new(*placeholder));
         }
@@ -752,6 +820,9 @@ pub enum Cloning {
         /// The type's name where it is defined, in the move's source.
         name: Span,
     },
+    /// A `&mut` given to a generic parameter: "consider creating a fresh
+    /// reborrow of `r` here", with `&mut *` before it.
+    Reborrow,
     /// Neither: rustc suggests nothing.
     None,
 }
@@ -1315,6 +1386,10 @@ pub enum Error {
         /// The format string's placeholder that formats the value with the
         /// trait.
         formatted: Option<Box<Placeholder>>,
+        /// The impls that needed the trait of the type, innermost first,
+        /// when the bound is on a type that holds it: `Vec<Opaque>` of
+        /// `Opaque` in `Vec<Opaque>: Debug`.
+        chain: Chain,
     },
     /// A statically-known nominal enum match has an invalid pattern set.
     InvalidMatch {
@@ -1328,7 +1403,9 @@ pub enum Error {
     /// A `match` whose arms miss some values of its scrutinee, which rustc
     /// refuses (E0004).
     NonExhaustive {
-        /// The patterns of the values no arm matches, as rustc writes them.
+        /// The patterns of the values no arm matches, as rustc writes them;
+        /// none for a match with no arms on a type that isn't an enum, which
+        /// rustc calls non-empty instead.
         witnesses: Box<[ImmutableString]>,
         /// The matched value's type.
         ty: ImmutableString,
@@ -1342,6 +1419,9 @@ pub enum Error {
         /// The `#[non_exhaustive]` enums whose `_` the first witness holds,
         /// by name, each of which rustc notes needs a wildcard.
         sealed: Box<[ImmutableString]>,
+        /// Whether the matched value is a reference to a type with no
+        /// values, which rustc notes a reference never is.
+        uninhabited_target: bool,
     },
     /// A pattern that must match every value, in a `let` without `else`, a
     /// `for` or a parameter, which misses some, which rustc refuses
@@ -1355,6 +1435,9 @@ pub enum Error {
         site: BindingSite,
         /// The pattern.
         pattern: Span,
+        /// The program's own enum or struct the pattern matches, where the
+        /// error's file declares it, with the variants it misses.
+        uncovered: Option<Box<Uncovered>>,
     },
     /// A tuple struct or tuple variant pattern with more or fewer fields
     /// than its type declares, which rustc refuses (E0023).
@@ -2321,6 +2404,21 @@ impl NonExhaustive<'_> {
     /// The witnesses rustc names: three at most, and how many more.
     const SHOWN: usize = 3;
 
+    /// rustc's message, which for a match with no arms on a type that isn't
+    /// an enum (no witnesses) names its type `ty`.
+    pub(crate) fn message(&self, ty: &str) -> String {
+        if self.0.is_empty() {
+            return format!("non-exhaustive patterns: type `{ty}` is non-empty");
+        }
+        format!("non-exhaustive patterns: {} not covered", self.uncovered())
+    }
+
+    /// rustc's label on a match's scrutinee, which a match on a non-empty
+    /// type with no arms has none of.
+    pub(crate) fn scrutinee_label(&self) -> Option<String> {
+        (!self.0.is_empty()).then(|| self.label())
+    }
+
     /// rustc's label on the scrutinee: `pattern `A` not covered`.
     pub(crate) fn label(&self) -> String {
         let noun = if self.0.len() == 1 {
@@ -2335,6 +2433,7 @@ impl NonExhaustive<'_> {
     /// witness, the witnesses as one or-pattern, or `_` past three.
     pub(crate) fn help(&self) -> (String, String) {
         let (how, pattern) = match self.0 {
+            [] => (" as shown", "_".to_string()),
             [one] => (" or an explicit pattern as shown", one.to_string()),
             witnesses if witnesses.len() <= Self::SHOWN => (
                 ", a match arm with multiple or-patterns as shown, or multiple match arms",
@@ -2366,16 +2465,6 @@ impl NonExhaustive<'_> {
                 witnesses.len() - Self::SHOWN
             ),
         }
-    }
-}
-
-impl fmt::Display for NonExhaustive<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "non-exhaustive patterns: {} not covered",
-            self.uncovered()
-        )
     }
 }
 
@@ -2927,6 +3016,10 @@ impl fmt::Display for Uninitialized<'_> {
 /// entry (E0752).
 pub const ASYNC_MAIN: &str = "`main` function is not allowed to be `async`";
 
+/// rustc's note on E0004 when the matched value is a reference to a type
+/// with no values.
+pub const INHABITED_REFERENCES: &str = "references are always considered inhabited";
+
 /// rustc's message for an assignment to a value that is no place (E0070,
 /// E0067).
 pub const INVALID_ASSIGNEE: &str = "invalid left-hand side of assignment";
@@ -3449,9 +3542,14 @@ impl fmt::Display for Written<'_> {
             ),
             Error::NonExhaustive {
                 witnesses,
+                ty,
                 scrutinee,
                 ..
-            } => write!(formatter, "{} at {scrutinee} (E0004)", NonExhaustive(witnesses)),
+            } => write!(
+                formatter,
+                "{} at {scrutinee} (E0004)",
+                NonExhaustive(witnesses).message(ty)
+            ),
             Error::Refutable {
                 witnesses,
                 site,
