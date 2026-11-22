@@ -2569,6 +2569,8 @@
     {"t":"T2567","issue":2567,"title":"T2567: `split_first_mut`, `split_last_mut`, `chunks_exact_mut`, `rchunks_mut` and `split_mut` of a slice aren't run","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2568","issue":2568,"title":"T2568: A map's `iter_mut()` or `values_mut()` kept or given to an adaptor is refused","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2569","issue":2569,"title":"T2569: A generic trait's impls for two kinds (Scale<i64> for f32 and f64) are picked by runtime type through T","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2570","issue":2570,"title":"T2570: Argument-position `impl Iterator` without `<Item = T>` is a parse error","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2570","issue":2570,"title":"T2570: Argument-position `impl Iterator` without `<Item = T>` is a parse error","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2571","issue":2571,"title":"T2571: A source file that keeps changing during a start re-prepares the program without end, and the session shows \"building\"","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2572","issue":2572,"title":"T2572: Copying a build script panics with NotFound when another cargo rebuilds the shared target","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

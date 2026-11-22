@@ -6327,7 +6327,9 @@
     {"issue":2567,"title":"`split_first_mut`, `split_last_mut`, `chunks_exact_mut`, `rchunks_mut` and `split_mut` of a slice aren't run","state":"open","category":"Divergences from rustc"},
     {"issue":2568,"title":"A map's `iter_mut()` or `values_mut()` kept or given to an adaptor is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2569,"title":"A generic trait's impls for two kinds (Scale<i64> for f32 and f64) are picked by runtime type through T","state":"open","category":"Divergences from rustc"},
-    {"issue":2570,"title":"Argument-position `impl Iterator` without `<Item = T>` is a parse error","state":"open","category":"Divergences from rustc"}
+    {"issue":2570,"title":"Argument-position `impl Iterator` without `<Item = T>` is a parse error","state":"open","category":"Divergences from rustc"},
+    {"issue":2571,"title":"A source file that keeps changing during a start re-prepares the program without end, and the session shows \"building\"","state":"open","category":"Health"},
+    {"issue":2572,"title":"Copying a build script panics with NotFound when another cargo rebuilds the shared target","state":"open","category":"Health"}
   ],
   "groups": [
     {
