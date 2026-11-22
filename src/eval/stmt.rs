@@ -505,7 +505,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     fn collect_place(
         scope: &mut Scope,
-        this_ptr: Option<&mut Dynamic>,
+        mut this_ptr: Option<&mut Dynamic>,
         holder: &str,
         some: bool,
         pattern: &NominalPattern,
@@ -546,7 +546,6 @@ impl Engine {
             path.pop();
         }
         let (root, steps) = Self::path_parts(&path).ok_or_else(missing)?;
-        let mut this_ptr = this_ptr;
         let target = if root.is_shared() {
             // A stored `&mut` (D1113) reaches its place below its handle.
             let index = scope.search(holder).ok_or_else(missing)?;

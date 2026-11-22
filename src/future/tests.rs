@@ -442,6 +442,56 @@ fn an_async_fns_mut_parameters_are_the_callers_places_across_awaits() {
     );
 }
 
+/// A `&mut` local given new borrows in an async body, of a whole local, of
+/// a field and in a loop, across awaits: each write reaches the place it
+/// borrows then. The text is what rustc's build prints (#123).
+#[test]
+fn an_async_bodys_mut_local_takes_new_borrows_across_awaits() {
+    let future = main_of(
+        r#"
+        struct Pair { left: Vec<i64>, right: Vec<i64> }
+        async fn tick() {}
+        #[tokio::main]
+        pub async fn main() -> String {
+            let mut a = 1;
+            let mut b = 2;
+            let mut r = &mut a;
+            *r += 10;
+            tick().await;
+            r = &mut b;
+            *r += 20;
+            tick().await;
+            *r += 300;
+            let mut p = Pair { left: vec![1], right: vec![2] };
+            let mut side = &mut p.left;
+            side.push(3);
+            tick().await;
+            side = &mut p.right;
+            side.push(4);
+            let mut x = 0;
+            let mut y = 0;
+            let mut at = &mut x;
+            let mut i = 0;
+            while i < 4 {
+                *at += i;
+                tick().await;
+                if i % 2 == 0 {
+                    at = &mut y;
+                } else {
+                    at = &mut x;
+                }
+                i += 1;
+            }
+            format!("{a} {b} {:?} {:?} {x} {y}", p.left, p.right)
+        }
+        "#,
+    );
+    assert_eq!(
+        block_on(future).unwrap().into_string().unwrap(),
+        "11 322 [1, 3] [2, 4] 2 4"
+    );
+}
+
 /// A use of a place while a future that borrows it lives is refused with
 /// rustc's error: an async fn's future holds what its inputs borrow, as
 /// an `impl Trait` output does, and a use once it has ended is accepted.
