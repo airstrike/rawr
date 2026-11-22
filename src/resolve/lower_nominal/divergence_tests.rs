@@ -3119,3 +3119,652 @@ main();
     );
     assert_eq!(output, "3 Some(1) [\"a\"]\n");
 }
+
+/// A facade of a crate's `enum Flag { On(bool), Level(i64), Off }` and
+/// `struct Slot { a: Option<i64>, b: bool }`.
+#[cfg(feature = "rust-import")]
+fn crate_facade() -> crate::host::facade::Definition {
+    use crate::host::{facade, type_def, type_ref};
+    use rawr_import::surface::identity::{Form, Selector};
+    let mut builder = facade::Builder::new("crt", facade::Abi::new(1).unwrap()).unwrap();
+    let mut allocation = crate::host::TestImportAllocation::default();
+    let field = |name: &str, ty: type_ref::Type| {
+        type_def::Field::new(name.into(), ty, Selector::Unavailable)
+    };
+    let variant = |index: u32, name: &str, fields: Vec<type_def::Field>| {
+        let form = if fields.is_empty() {
+            Form::Unit
+        } else {
+            Form::Tuple { arity: 1 }
+        };
+        type_def::Variant::new(
+            name.into(),
+            fields.into_boxed_slice(),
+            true,
+            Selector::EnumVariant {
+                index,
+                name: name.into(),
+                form,
+            },
+        )
+    };
+    let variants = vec![
+        variant(
+            0,
+            "On",
+            vec![field("0", type_ref::Type::builtin(type_ref::Builtin::Bool))],
+        ),
+        variant(
+            1,
+            "Level",
+            vec![field("0", type_ref::Type::builtin(type_ref::Builtin::I64))],
+        ),
+        variant(2, "Off", Vec::new()),
+    ];
+    builder
+        .imported_type(
+            "Flag",
+            type_def::import::Identity::new([0x61; 32]),
+            &[crate::capability::Kind::Clone],
+            Box::default(),
+            Box::default(),
+            type_def::Shape::Enum {
+                variants: variants.into_boxed_slice(),
+                non_exhaustive: false,
+            }
+            .into(),
+            &mut allocation,
+        )
+        .unwrap();
+    builder
+        .imported_type(
+            "Slot",
+            type_def::import::Identity::new([0x62; 32]),
+            &[crate::capability::Kind::Clone],
+            Box::default(),
+            Box::default(),
+            type_def::Shape::Struct {
+                form: type_def::Form::Record,
+                constructor: Some(Selector::Unavailable),
+                fields: Box::from([
+                    field(
+                        "a",
+                        type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::I64)),
+                    ),
+                    field("b", type_ref::Type::builtin(type_ref::Builtin::Bool)),
+                ]),
+                constructible: true,
+                unsupported: None,
+                layout: None,
+            }
+            .into(),
+            &mut allocation,
+        )
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+/// What lowering `source`, a program on `crate_facade`'s types, reports,
+/// rendered; empty when it lowers.
+#[cfg(feature = "rust-import")]
+fn crate_lowered(source: &str) -> String {
+    use crate::diagnostic::{render, Report, Source};
+    let mut engine = Engine::new();
+    engine.register_host_facade(crate_facade()).unwrap();
+    let program = crate::resolve::resolve(
+        engine.parse_unit(source).expect("the program parses"),
+        &engine.host_registry,
+    )
+    .expect("the program's headers resolve");
+    let mut allocation = crate::host::TestImportAllocation::default();
+    match super::imported(
+        &engine,
+        &program,
+        &engine.host_registry.share(),
+        &mut allocation,
+        None,
+    ) {
+        Ok(_) => String::new(),
+        Err(failure) => {
+            let error = failure.into_error();
+            let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+            render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+        }
+    }
+}
+
+/// The report `rawr` renders for `source`, which it refuses, as rustc's.
+fn rendered(source: &str) -> String {
+    use crate::diagnostic::{render, Report, Source};
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("rawr refuses this program");
+    let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+    render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+}
+
+#[test]
+fn a_match_whose_arm_rebinds_a_mut_options_name_runs() {
+    // An arm's `Some(first)` below a `first: &mut Option<_>` binds the
+    // value's `&mut`, as rustc's default binding mode does (#342).
+    let output = printed(
+        r#"
+fn bump(first: &mut Option<i32>) {
+    match first {
+        Some(first) => *first += 1,
+        None => {}
+    }
+}
+fn main() {
+    let mut o = Some(5);
+    bump(&mut o);
+    let mut items = vec![Some(1), None];
+    for item in items.iter_mut() {
+        match item {
+            Some(item) => *item *= 10,
+            None => {}
+        }
+    }
+    let mut q = Some(String::from("x"));
+    let s = &mut q;
+    match s {
+        Some(s) => s.push('y'),
+        None => {}
+    }
+    println!("{:?} {:?} {:?}", o, items, q);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Some(6) [Some(10), None] Some(\"xy\")\n");
+}
+
+#[test]
+fn an_empty_match_on_a_type_with_no_values_runs() {
+    // `Infallible` and an enum with no variants have no values, so a match
+    // on one needs no arm and an `Err` of one needs no pattern, as rustc
+    // has it (#620).
+    let output = printed(
+        r#"
+use std::convert::Infallible;
+enum Void {}
+fn never(message: Infallible) -> i32 {
+    match message {}
+}
+fn void(v: Void) -> String {
+    match v {}
+}
+fn main() {
+    let r: Result<i32, Infallible> = Ok(3);
+    let Ok(n) = r;
+    let m = match r {
+        Ok(v) => v,
+        Err(e) => match e {},
+    };
+    let only = match r {
+        Ok(v) => v,
+    };
+    let _ = never;
+    let _ = void;
+    println!("{n} {m} {only}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 3 3\n");
+    // A match with no arms on a type that isn't an enum calls the type
+    // non-empty, and a reference always has values.
+    assert_eq!(
+        rendered(r#"fn main() {
+    let x = 3;
+    match x {}
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: type `i32` is non-empty\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match x {}\n",
+        "  |           ^\n",
+        "  |\n",
+        "  = note: the matched value is of type `i32`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown\n",
+        "  |\n",
+        "3 ~     match x {\n",
+        "4 +         _ => todo!(),\n",
+        "5 ~     }\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"enum E { A }
+fn f(e: &E) -> i32 { match e {} }
+fn main() {}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: type `&E` is non-empty\n",
+        " --> main.rs:2:28\n",
+        "  |\n",
+        "2 | fn f(e: &E) -> i32 { match e {} }\n",
+        "  |                            ^\n",
+        "  |\n",
+        "note: `E` defined here\n",
+        " --> main.rs:1:6\n",
+        "  |\n",
+        "1 | enum E { A }\n",
+        "  |      ^\n",
+        "  = note: the matched value is of type `&E`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown\n",
+        "  |\n",
+        "2 ~ fn f(e: &E) -> i32 { match e {\n",
+        "3 +     _ => todo!(),\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"enum Void {}
+fn f(r: &Void) -> i32 { match r {} }
+fn main() {}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: type `&Void` is non-empty\n",
+        " --> main.rs:2:31\n",
+        "  |\n",
+        "2 | fn f(r: &Void) -> i32 { match r {} }\n",
+        "  |                               ^\n",
+        "  |\n",
+        "note: `Void` defined here\n",
+        " --> main.rs:1:6\n",
+        "  |\n",
+        "1 | enum Void {}\n",
+        "  |      ^^^^\n",
+        "  = note: the matched value is of type `&Void`\n",
+        "  = note: references are always considered inhabited\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown\n",
+        "  |\n",
+        "2 ~ fn f(r: &Void) -> i32 { match r {\n",
+        "3 +     _ => todo!(),\n",
+        "  |\n",
+    )
+    );
+}
+
+#[test]
+fn a_witness_below_a_constructor_names_rustcs_ranges() {
+    // An integer's or a `char`'s literals and ranges split its values
+    // below a constructor as at the top of a match (#1287, #1306), and each
+    // missing constructor comes before the witnesses of the parts after it.
+    assert!(rendered(
+        "fn main() {\n    let o = Some(1);\n    match o {\n        Some(1) => {}\n        \
+         None => {}\n    }\n}\n"
+    )
+    .starts_with(
+        "error[E0004]: non-exhaustive patterns: `Some(i32::MIN..=0_i32)` and \
+         `Some(2_i32..=i32::MAX)` not covered\n"
+    ));
+    assert_eq!(
+        rendered(r#"fn main() {
+    let t = (1, true);
+    match t {
+        (1, true) => {}
+        (_, false) => {}
+    }
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `(i32::MIN..=0_i32, true)` and `(2_i32..=i32::MAX, true)` not covered\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match t {\n",
+        "  |           ^ patterns `(i32::MIN..=0_i32, true)` and `(2_i32..=i32::MAX, true)` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `(i32, bool)`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern, a match arm with multiple or-patterns as shown, or multiple match arms\n",
+        "  |\n",
+        "5 ~         (_, false) => {},\n",
+        "6 +         (i32::MIN..=0_i32, true) | (2_i32..=i32::MAX, true) => todo!()\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"fn main() {
+    let mut t = (1, 3);
+    let (ref mut x, 3) = t;
+}
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:3:9\n",
+        "  |\n",
+        "3 |     let (ref mut x, 3) = t;\n",
+        "  |         ^^^^^^^^^^^^^^ patterns `(_, i32::MIN..=2_i32)` and `(_, 4_i32..=i32::MAX)` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `(i32, i32)`\n",
+        "help: you might want to use `let...else` to handle the variants that aren't matched\n",
+        "  |\n",
+        "3 |     let (ref mut x, 3) = t else { todo!() };\n",
+        "  |                            ++++++++++++++++\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"fn main() {
+    let t = (1, 'a');
+    match t {
+        (0, 'a') => {}
+        (_, 'b'..='z') => {}
+    }
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `(i32::MIN..=-1_i32, '\\0'..='a')`, `(i32::MIN..=-1_i32, '{'..='\\u{d7ff}')`, `(i32::MIN..=-1_i32, '\\u{e000}'..='\\u{10ffff}')` and 3 more not covered\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match t {\n",
+        "  |           ^ patterns `(i32::MIN..=-1_i32, '\\0'..='a')`, `(i32::MIN..=-1_i32, '{'..='\\u{d7ff}')`, `(i32::MIN..=-1_i32, '\\u{e000}'..='\\u{10ffff}')` and 3 more not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `(i32, char)`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown, or multiple match arms\n",
+        "  |\n",
+        "5 ~         (_, 'b'..='z') => {},\n",
+        "6 +         _ => todo!()\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        rendered(r#"fn main() {
+    let x = &5u8;
+    match x {
+        &0 => {}
+        &(1..=254) => {}
+    }
+}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `&u8::MAX` not covered\n",
+        " --> main.rs:3:11\n",
+        "  |\n",
+        "3 |     match x {\n",
+        "  |           ^ pattern `&u8::MAX` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `&u8`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "5 ~         &(1..=254) => {},\n",
+        "6 +         &u8::MAX => todo!()\n",
+        "  |\n",
+    )
+    );
+}
+
+#[test]
+fn a_constant_path_is_a_pattern_and_a_range_end() {
+    // A constant's path is its value in a pattern, alone or at either end
+    // of a range, as rustc reads it (#1288), and a one-name constant is no
+    // binding.
+    let output = printed(
+        r#"
+const LO: i32 = 3;
+struct W;
+impl W {
+    const TOP: i64 = 10;
+}
+fn sign(x: i32) -> i32 {
+    match x {
+        i32::MIN..=-5 => -2,
+        -4..=-1 => -1,
+        0 => 0,
+        1..LO => 1,
+        LO..=i32::MAX => 2,
+    }
+}
+fn top(x: i64) -> i64 {
+    match x {
+        0..W::TOP => 1,
+        W::TOP..=i64::MAX => 2,
+        i64::MIN..0 => 3,
+    }
+}
+fn exact(x: i32) -> i32 {
+    match x {
+        LO => 1,
+        _ => 2,
+    }
+}
+fn letter(x: char, n: u8, o: Option<i8>) -> i32 {
+    let a = match x {
+        char::MIN..='a' => 1,
+        'b'..=char::MAX => 2,
+    };
+    let b = match n {
+        u8::MAX => 10,
+        _ => 20,
+    };
+    let c = match o {
+        Some(i8::MIN..=-1) => 100,
+        Some(0..=i8::MAX) => 200,
+        None => 300,
+    };
+    a + b + c
+}
+fn main() {
+    println!("{} {} {} {} {}", sign(-9), sign(-2), sign(0), sign(2), sign(7));
+    println!("{} {} {} {} {}", top(3), top(10), top(-1), exact(3), exact(4));
+    println!("{} {}", letter('a', 255, Some(-3)), letter('z', 4, None));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "-2 -1 0 1 2\n1 2 3 1 2\n111 322\n");
+    assert_eq!(
+        rendered(r#"fn f(x: Option<i8>) -> i32 {
+    match x {
+        Some(i8::MIN..=-1) => 1,
+        None => 3,
+    }
+}
+fn main() {}
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `Some(0_i8..=i8::MAX)` not covered\n",
+        " --> main.rs:2:11\n",
+        "  |\n",
+        "2 |     match x {\n",
+        "  |           ^ pattern `Some(0_i8..=i8::MAX)` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `Option<i8>`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "4 ~         None => 3,\n",
+        "5 ~         Some(0_i8..=i8::MAX) => todo!(),\n",
+        "  |\n",
+    )
+    );
+}
+
+#[test]
+fn a_struct_pattern_is_a_parameter_pattern() {
+    // A function's or a closure's parameter may be a struct's pattern, as
+    // rustc's (#1307), and one that misses some values is E0005.
+    let output = printed(
+        r#"
+struct P { x: i64, y: i64 }
+struct Style { width: i64, height: i64 }
+struct T(i64, i64);
+fn f(P { x, .. }: P) -> i64 { x }
+fn g(Style { width, height: h }: Style) -> i64 { width * h }
+fn t(T(a, b): T) -> i64 { a - b }
+fn main() {
+    let c = |P { x, y }: P| x + y;
+    println!("{} {} {} {}", f(P { x: 1, y: 2 }), g(Style { width: 3, height: 4 }), t(T(9, 4)), c(P { x: 5, y: 6 }));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 12 5 11\n");
+    assert_eq!(
+        rendered(r#"struct P { x: i64, y: i64 }
+fn f(P { x: 1, y }: P) -> i64 { y }
+fn main() {}
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in function argument\n",
+        " --> main.rs:2:6\n",
+        "  |\n",
+        "2 | fn f(P { x: 1, y }: P) -> i64 { y }\n",
+        "  |      ^^^^^^^^^^^^^ patterns `P { x: i64::MIN..=0_i64, .. }` and `P { x: 2_i64..=i64::MAX, .. }` not covered\n",
+        "  |\n",
+        "note: `P` defined here\n",
+        " --> main.rs:1:8\n",
+        "  |\n",
+        "1 | struct P { x: i64, y: i64 }\n",
+        "  |        ^\n",
+        "  = note: the matched value is of type `P`\n",
+    )
+    );
+}
+
+#[cfg(feature = "rust-import")]
+#[test]
+fn a_crate_values_patterns_cover_it_by_the_patterns_below() {
+    // A crate enum's variant is covered by the literals of its field's
+    // patterns (#812), a crate struct by its fields' patterns together
+    // (#1972), and what they miss is rustc's witnesses over every field
+    // (#1308).
+    assert_eq!(
+        crate_lowered(
+            "fn f(f: crt::Flag) -> i64 {\n    match f {\n        crt::Flag::On(true) => 1,\n        \
+             crt::Flag::On(false) => 2,\n        crt::Flag::Level(0) => 3,\n        \
+             crt::Flag::Level(i64::MIN..=-1) => 4,\n        crt::Flag::Level(1..) => 5,\n        \
+             crt::Flag::Off => 6,\n    }\n}\n0\n"
+        ),
+        ""
+    );
+    assert_eq!(
+        crate_lowered(
+            "fn f(s: crt::Slot) -> i64 {\n    match s {\n        crt::Slot { a: Some(_), .. } => 1,\n        \
+             crt::Slot { a: None, .. } => 2,\n    }\n}\n0\n"
+        ),
+        ""
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(f: crt::Flag) -> i64 {
+    match f {
+        crt::Flag::On(true) => 1,
+        crt::Flag::Level(_) => 3,
+        crt::Flag::Off => 6,
+    }
+}
+0
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `Flag::On(false)` not covered\n",
+        " --> main.rs:2:11\n",
+        "  |\n",
+        "2 |     match f {\n",
+        "  |           ^ pattern `Flag::On(false)` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `crt::Flag`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "5 ~         crt::Flag::Off => 6,\n",
+        "6 ~         Flag::On(false) => todo!(),\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(s: crt::Slot) -> i64 {
+    match s {
+        crt::Slot { a: Some(_), b: true } => 1,
+        crt::Slot { a: None, .. } => 2,
+    }
+}
+0
+"#),
+        concat!(
+        "error[E0004]: non-exhaustive patterns: `Slot { a: Some(_), b: false }` not covered\n",
+        " --> main.rs:2:11\n",
+        "  |\n",
+        "2 |     match s {\n",
+        "  |           ^ pattern `Slot { a: Some(_), b: false }` not covered\n",
+        "  |\n",
+        "  = note: the matched value is of type `crt::Slot`\n",
+        "help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n",
+        "  |\n",
+        "4 ~         crt::Slot { a: None, .. } => 2,\n",
+        "5 ~         Slot { a: Some(_), b: false } => todo!(),\n",
+        "  |\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(s: crt::Slot) -> i64 {
+    let crt::Slot { a: Some(_) | None, b: true } = s;
+    0
+}
+0
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:2:9\n",
+        "  |\n",
+        "2 |     let crt::Slot { a: Some(_) | None, b: true } = s;\n",
+        "  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ patterns `Slot { a: None, b: false }` and `Slot { a: Some(_), b: false }` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `crt::Slot`\n",
+        "help: you might want to use `let...else` to handle the variants that aren't matched\n",
+        "  |\n",
+        "2 |     let crt::Slot { a: Some(_) | None, b: true } = s else { todo!() };\n",
+        "  |                                                      ++++++++++++++++\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(f: crt::Flag) -> i64 {
+    let crt::Flag::Level(3) = f;
+    0
+}
+0
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:2:9\n",
+        "  |\n",
+        "2 |     let crt::Flag::Level(3) = f;\n",
+        "  |         ^^^^^^^^^^^^^^^^^^^ patterns `Flag::On(_)` and `Flag::Off` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `crt::Flag`\n",
+        "help: you might want to use `let...else` to handle the variants that aren't matched\n",
+        "  |\n",
+        "2 |     let crt::Flag::Level(3) = f else { todo!() };\n",
+        "  |                                 ++++++++++++++++\n",
+    )
+    );
+    assert_eq!(
+        crate_lowered(r#"fn f(s: crt::Slot) -> i64 {
+    let (crt::Slot { a: Some(n), .. }, 1) = (s, 2);
+    n
+}
+0
+"#),
+        concat!(
+        "error[E0005]: refutable pattern in local binding\n",
+        " --> main.rs:2:9\n",
+        "  |\n",
+        "2 |     let (crt::Slot { a: Some(n), .. }, 1) = (s, 2);\n",
+        "  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ pattern `(Slot { a: None, .. }, _)` not covered\n",
+        "  |\n",
+        "  = note: `let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with only one variant\n",
+        "  = note: for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html\n",
+        "  = note: the matched value is of type `(crt::Slot, i32)`\n",
+        "help: you might want to use `let...else` to handle the variant that isn't matched\n",
+        "  |\n",
+        "2 |     let (crt::Slot { a: Some(n), .. }, 1) = (s, 2) else { todo!() };\n",
+        "  |                                                    ++++++++++++++++\n",
+    )
+    );
+}

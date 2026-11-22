@@ -1038,6 +1038,31 @@ fn referent_section(referent: &resolve::Referent, source: &Source) -> Section {
 }
 
 /// The notes rustc gives `error` with places of their own, in `source`.
+/// rustc's note on the program's type a pattern on `ty` misses values of,
+/// at its name and each variant it misses, then the matched value's type.
+fn defined_here(ty: &str, uncovered: &resolve::Uncovered, source: &Source) -> Section {
+    // rustc names the type below the matched value's references.
+    let mut defined = ty;
+    while let Some(target) = defined
+        .strip_prefix("&mut ")
+        .or_else(|| defined.strip_prefix('&'))
+    {
+        defined = target;
+    }
+    let section = Section::note(format!("`{defined}` defined here")).primary(
+        source.clone(),
+        uncovered.name,
+        None,
+    );
+    uncovered
+        .variants
+        .iter()
+        .fold(section, |section, variant| {
+            section.secondary(source.clone(), *variant, Some("not covered".into()))
+        })
+        .followed(format!("the matched value is of type `{ty}`"))
+}
+
 fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
     match error {
         // A similar item the call can't take in place, at its definition.
@@ -1061,18 +1086,21 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
         resolve::Error::NonExhaustive {
             ty,
             uncovered: Some(uncovered),
+            uninhabited_target,
             ..
         } => {
-            let section = Section::note(format!("`{ty}` defined here")).primary(
-                source.clone(),
-                uncovered.name,
-                None,
-            );
-            let section = uncovered.variants.iter().fold(section, |section, variant| {
-                section.secondary(source.clone(), *variant, Some("not covered".into()))
-            });
-            vec![section.followed(format!("the matched value is of type `{ty}`"))]
+            let section = defined_here(ty, uncovered, source);
+            vec![if *uninhabited_target {
+                section.followed(resolve::INHABITED_REFERENCES)
+            } else {
+                section
+            }]
         }
+        resolve::Error::Refutable {
+            ty,
+            uncovered: Some(uncovered),
+            ..
+        } => vec![defined_here(ty, uncovered, source)],
         // E0364 notes the re-export it refuses at that re-export.
         resolve::Error::StdPath {
             code: "E0364",
@@ -1606,9 +1634,9 @@ fn primary_label(
         }
         resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
         resolve::Error::Outlives(report) => Some(report.label().into()),
-        resolve::Error::NonExhaustive { witnesses, .. } => {
-            Some(resolve::NonExhaustive(witnesses).label().into())
-        }
+        resolve::Error::NonExhaustive { witnesses, .. } => resolve::NonExhaustive(witnesses)
+            .scrutinee_label()
+            .map(Into::into),
         resolve::Error::Refutable {
             witnesses, site, ..
         } => Some(resolve::Refutable { witnesses, site }.label().into()),
@@ -1978,28 +2006,43 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             ty,
             uncovered: None,
             sealed,
+            uninhabited_target,
             ..
-        } => sealed.iter().fold(
-            builder.note(format!("the matched value is of type `{ty}`")),
-            |builder, name| {
-                builder.note(format!(
-                    "`{name}` is marked as non-exhaustive, so a wildcard `_` is necessary to \
-                     match exhaustively"
-                ))
-            },
-        ),
+        } => {
+            let builder = sealed.iter().fold(
+                builder.note(format!("the matched value is of type `{ty}`")),
+                |builder, name| {
+                    builder.note(format!(
+                        "`{name}` is marked as non-exhaustive, so a wildcard `_` is necessary \
+                         to match exhaustively"
+                    ))
+                },
+            );
+            if *uninhabited_target {
+                builder.note(resolve::INHABITED_REFERENCES)
+            } else {
+                builder
+            }
+        }
+        // The matched type follows the type's note, when it has one
+        // (`sections`).
         resolve::Error::Refutable {
             witnesses,
             ty,
             site,
+            uncovered,
             ..
         } => {
             let refutable = resolve::Refutable { witnesses, site };
-            refutable
+            let builder = refutable
                 .notes()
                 .iter()
-                .fold(builder, |builder, note| builder.note(*note))
-                .note(format!("the matched value is of type `{ty}`"))
+                .fold(builder, |builder, note| builder.note(*note));
+            if uncovered.is_some() {
+                builder
+            } else {
+                builder.note(format!("the matched value is of type `{ty}`"))
+            }
         }
         resolve::Error::PatternFields {
             help: Some(help), ..
@@ -2385,8 +2428,8 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnknownTrait { name, .. } => {
             format!("cannot find trait `{name}` in this scope")
         }
-        resolve::Error::NonExhaustive { witnesses, .. } => {
-            resolve::NonExhaustive(witnesses).to_string()
+        resolve::Error::NonExhaustive { witnesses, ty, .. } => {
+            resolve::NonExhaustive(witnesses).message(ty)
         }
         resolve::Error::Refutable {
             witnesses, site, ..

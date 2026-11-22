@@ -535,8 +535,8 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnknownTrait { name, .. } => {
                     write!(f, "cannot find trait `{name}` in this scope")
                 }
-                crate::resolve::Error::NonExhaustive { witnesses, .. } => {
-                    write!(f, "{}", crate::resolve::NonExhaustive(witnesses))
+                crate::resolve::Error::NonExhaustive { witnesses, ty, .. } => {
+                    f.write_str(&crate::resolve::NonExhaustive(witnesses).message(ty))
                 }
                 crate::resolve::Error::Refutable {
                     witnesses, site, ..

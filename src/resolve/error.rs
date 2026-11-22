@@ -1282,7 +1282,9 @@ pub enum Error {
     /// A `match` whose arms miss some values of its scrutinee, which rustc
     /// refuses (E0004).
     NonExhaustive {
-        /// The patterns of the values no arm matches, as rustc writes them.
+        /// The patterns of the values no arm matches, as rustc writes them;
+        /// none for a match with no arms on a type that isn't an enum, which
+        /// rustc calls non-empty instead.
         witnesses: Box<[ImmutableString]>,
         /// The matched value's type.
         ty: ImmutableString,
@@ -1296,6 +1298,9 @@ pub enum Error {
         /// The `#[non_exhaustive]` enums whose `_` the first witness holds,
         /// by name, each of which rustc notes needs a wildcard.
         sealed: Box<[ImmutableString]>,
+        /// Whether the matched value is a reference to a type with no
+        /// values, which rustc notes a reference never is.
+        uninhabited_target: bool,
     },
     /// A pattern that must match every value, in a `let` without `else`, a
     /// `for` or a parameter, which misses some, which rustc refuses
@@ -1309,6 +1314,9 @@ pub enum Error {
         site: BindingSite,
         /// The pattern.
         pattern: Span,
+        /// The program's own enum or struct the pattern matches, where the
+        /// error's file declares it, with the variants it misses.
+        uncovered: Option<Box<Uncovered>>,
     },
     /// A tuple struct or tuple variant pattern with more or fewer fields
     /// than its type declares, which rustc refuses (E0023).
@@ -2244,6 +2252,21 @@ impl NonExhaustive<'_> {
     /// The witnesses rustc names: three at most, and how many more.
     const SHOWN: usize = 3;
 
+    /// rustc's message, which for a match with no arms on a type that isn't
+    /// an enum (no witnesses) names its type `ty`.
+    pub(crate) fn message(&self, ty: &str) -> String {
+        if self.0.is_empty() {
+            return format!("non-exhaustive patterns: type `{ty}` is non-empty");
+        }
+        format!("non-exhaustive patterns: {} not covered", self.uncovered())
+    }
+
+    /// rustc's label on a match's scrutinee, which a match on a non-empty
+    /// type with no arms has none of.
+    pub(crate) fn scrutinee_label(&self) -> Option<String> {
+        (!self.0.is_empty()).then(|| self.label())
+    }
+
     /// rustc's label on the scrutinee: `pattern `A` not covered`.
     pub(crate) fn label(&self) -> String {
         let noun = if self.0.len() == 1 {
@@ -2258,6 +2281,7 @@ impl NonExhaustive<'_> {
     /// witness, the witnesses as one or-pattern, or `_` past three.
     pub(crate) fn help(&self) -> (String, String) {
         let (how, pattern) = match self.0 {
+            [] => (" as shown", "_".to_string()),
             [one] => (" or an explicit pattern as shown", one.to_string()),
             witnesses if witnesses.len() <= Self::SHOWN => (
                 ", a match arm with multiple or-patterns as shown, or multiple match arms",
@@ -2289,16 +2313,6 @@ impl NonExhaustive<'_> {
                 witnesses.len() - Self::SHOWN
             ),
         }
-    }
-}
-
-impl fmt::Display for NonExhaustive<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "non-exhaustive patterns: {} not covered",
-            self.uncovered()
-        )
     }
 }
 
@@ -2850,6 +2864,10 @@ impl fmt::Display for Uninitialized<'_> {
 /// entry (E0752).
 pub const ASYNC_MAIN: &str = "`main` function is not allowed to be `async`";
 
+/// rustc's note on E0004 when the matched value is a reference to a type
+/// with no values.
+pub const INHABITED_REFERENCES: &str = "references are always considered inhabited";
+
 /// rustc's message for an assignment to a value that is no place (E0070,
 /// E0067).
 pub const INVALID_ASSIGNEE: &str = "invalid left-hand side of assignment";
@@ -3357,9 +3375,14 @@ impl fmt::Display for Written<'_> {
             ),
             Error::NonExhaustive {
                 witnesses,
+                ty,
                 scrutinee,
                 ..
-            } => write!(formatter, "{} at {scrutinee} (E0004)", NonExhaustive(witnesses)),
+            } => write!(
+                formatter,
+                "{} at {scrutinee} (E0004)",
+                NonExhaustive(witnesses).message(ty)
+            ),
             Error::Refutable {
                 witnesses,
                 site,

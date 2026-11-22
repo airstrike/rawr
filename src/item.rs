@@ -1373,7 +1373,8 @@ pub struct Parameter {
     pub pattern: Option<ParameterPattern>,
 }
 
-/// An irrefutable parameter pattern.
+/// A parameter pattern, which the body's lowering refuses where it misses
+/// some of its parameter's values (rustc's E0005).
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub enum ParameterPattern {
@@ -1411,6 +1412,39 @@ pub enum ParameterPattern {
         /// Complete pattern span.
         span: Span,
     },
+    /// `S { a, b: p, .. }` of a struct or a struct variant, named by its
+    /// path.
+    Struct {
+        /// The struct's or variant's path segments.
+        path: Box<[Name]>,
+        /// Each written field and its pattern, `a` alone binding `a`.
+        fields: Box<[(Name, ParameterPattern)]>,
+        /// Whether `..` ends the fields.
+        rest: bool,
+        /// Complete pattern span.
+        span: Span,
+    },
+    /// `1`, `-1`, `'a'`, `true` or `"s"`.
+    Literal {
+        /// The value.
+        literal: PatternLiteral,
+        /// The literal's span, its `-` included.
+        span: Span,
+    },
+}
+
+/// A literal in a parameter pattern.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
+pub enum PatternLiteral {
+    /// An integer, negated by its `-`.
+    Integer(crate::INT),
+    /// A `char`.
+    Char(char),
+    /// A `bool`.
+    Bool(bool),
+    /// A string.
+    Str(ImmutableString),
 }
 
 impl ParameterPattern {
@@ -1422,7 +1456,9 @@ impl ParameterPattern {
             Self::Discard(span)
             | Self::Tuple { span, .. }
             | Self::Reference { span, .. }
-            | Self::TupleStruct { span, .. } => *span,
+            | Self::TupleStruct { span, .. }
+            | Self::Struct { span, .. }
+            | Self::Literal { span, .. } => *span,
         }
     }
 }
