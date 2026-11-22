@@ -1553,16 +1553,9 @@ impl<'a> Parser<'a> {
         else {
             return Ok(());
         };
-        self.generics = implementation
-            .generics
-            .iter()
-            .map(|generic| (generic.name.text.clone(), generic.bounds))
-            .collect();
+        self.read_generics(&implementation.generics);
         self.constants = const_generics(&implementation.generics);
         self.assumed = assumed_generics(&implementation.generics);
-        self.generic_traits = generic_traits(&implementation.generics);
-        self.generic_trait_arguments = generic_trait_arguments(&implementation.generics);
-        self.inference.equalities = generic_equalities(&implementation.generics);
         // `impl Named for C` needs `C: Shape` for `trait Named: Shape`
         // (E0277).
         if let Some((_, declared)) = self.models.traits.get(&trait_name.text).cloned() {

@@ -35,6 +35,45 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
+    /// The bounds of the item's type parameters `generics` and of every
+    /// function's opaque output (D1109), which a body knows only by them.
+    pub(super) fn read_generics(&mut self, generics: &[item::Generic]) {
+        let opaque = Shared::clone(&self.models.opaque_outputs);
+        let generics = generics
+            .iter()
+            .chain(opaque.values())
+            .cloned()
+            .collect::<Vec<_>>();
+        self.generics = generics
+            .iter()
+            .map(|generic| (generic.name.text.clone(), generic.bounds))
+            .collect();
+        self.generic_traits = generic_traits(&generics);
+        self.generic_trait_arguments = generic_trait_arguments(&generics);
+        self.inference.equalities = generic_equalities(&generics);
+    }
+
+    /// The body of a function whose output `output` writes opaque types
+    /// fills each with one hidden type, a fresh type whose bounds are
+    /// pending as a call's type parameters' are (D1109): every `return`
+    /// and the tail meet it, so a second hidden type is E0308.
+    pub(super) fn define_opaque_outputs(&mut self, output: &type_ref::Type) {
+        let ty = Ty::from_resolved(output);
+        let named = self
+            .models
+            .opaque_outputs
+            .iter()
+            .filter(|(name, _)| contains(&ty, &|ty| matches!(ty, Ty::Param(own) if own == *name)))
+            .map(|(_, generic)| generic.clone())
+            .collect::<Vec<_>>();
+        if named.is_empty() {
+            return;
+        }
+        let hidden = self.fresh_generics(&named, output.span());
+        self.return_ty = Some(instantiate(&ty, &hidden));
+        self.hidden_outputs = hidden;
+    }
+
     /// Fresh types for `generics` at one use, with their bounds pending.
     pub(super) fn fresh_generics(
         &mut self,
@@ -334,6 +373,14 @@ impl<'a> Parser<'a> {
 
     /// Check each pending generic bound against its now-known type.
     pub(super) fn finish_bounds(&mut self) -> Result<(), Error> {
+        // An opaque output's hidden literal is its fallback kind before its
+        // bounds are proved: `impl Display` of `42` is an `i32`.
+        for hidden in self.hidden_outputs.values().cloned().collect::<Vec<_>>() {
+            if let Some(fallback) = literal_fallback(&self.inference.resolve(&hidden)) {
+                let fits = self.unify_type(&hidden, &fallback);
+                debug_assert!(fits, "a literal unifies with its fallback kind");
+            }
+        }
         for (ty, kind, span, site) in std::mem::take(&mut self.pending_bounds) {
             let ty = self.inference.resolve(&ty);
             if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
@@ -491,6 +538,11 @@ impl<'a> Parser<'a> {
 
     /// Whether this body's generic parameter `name` has a type witness.
     pub(super) fn has_witness(&self, name: &str) -> bool {
+        // An opaque output's hidden type is its function's, which no
+        // caller is handed (D1109).
+        if crate::item::type_ref::opaque_output_text(name).is_some() {
+            return false;
+        }
         self.host_witnesses.iter().any(|host| host.as_str() == name)
             || self.constants.contains_key(name)
             || self
@@ -1283,26 +1335,42 @@ pub(super) fn static_trait(models: &Models, name: &str) -> bool {
 
 /// Every generic parameter list an item declares.
 pub(super) fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
+    // A function's opaque outputs too, which bound its body's hidden types
+    // (D1109).
+    fn functions(functions: &[item::Function]) -> Vec<&item::Generic> {
+        functions
+            .iter()
+            .flat_map(|function| function.generics.iter().chain(&function.opaque_outputs))
+            .collect()
+    }
     match kind {
         item::Kind::Struct(item) => item.generics.iter().collect(),
         item::Kind::Enum(item) => item.generics.iter().collect(),
-        item::Kind::Function(item) => item.generics.iter().collect(),
+        item::Kind::Function(item) => functions(std::slice::from_ref(item)),
         item::Kind::Impl(item) => item
             .generics
             .iter()
-            .chain(
-                item.functions
-                    .iter()
-                    .flat_map(|function| function.generics.iter()),
-            )
+            .chain(functions(&item.functions))
             .collect(),
-        item::Kind::Trait(item) => item
-            .functions
-            .iter()
-            .flat_map(|function| function.generics.iter())
-            .collect(),
+        item::Kind::Trait(item) => functions(&item.functions),
         item::Kind::Use(_) => Vec::new(),
     }
+}
+
+/// Every opaque output of the program's functions (D1109) by name, which
+/// any body reads as it reads its own type parameters.
+pub(super) fn opaque_outputs(items: &[item::Shell]) -> BTreeMap<ImmutableString, item::Generic> {
+    items
+        .iter()
+        .flat_map(|shell| match &shell.kind {
+            item::Kind::Function(function) => std::slice::from_ref(function),
+            item::Kind::Impl(own) => &own.functions[..],
+            item::Kind::Trait(own) => &own.functions[..],
+            _ => &[],
+        })
+        .flat_map(|function| function.opaque_outputs.iter())
+        .map(|generic| (generic.name.text.clone(), generic.clone()))
+        .collect()
 }
 
 /// `Iterator` and the traits whose `Item` is its own, which Rawr's iterator

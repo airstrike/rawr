@@ -365,6 +365,14 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             code::RESOLVE_NO_FIELD,
             format!("no field `{member}` on type `{}`", short(owner)),
         ),
+        // A function's `-> impl Shape` is rustc's "opaque type `impl
+        // Shape`" (D1109).
+        Member::Method if owner.starts_with("impl ") => Report::error(
+            code::RESOLVE_NO_METHOD,
+            format!(
+                "no method named `{member}` found for opaque type `{owner}` in the current scope"
+            ),
+        ),
         Member::Method => Report::error(
             code::RESOLVE_NO_METHOD,
             format!(
@@ -1656,6 +1664,12 @@ fn primary_label(
                 .undeclared()
                 .into(),
         ),
+        // Two functions' `-> impl Shape` (D1109).
+        resolve::Error::TypeMismatch {
+            expected, actual, ..
+        } if expected.starts_with("impl ") && actual.starts_with("impl ") => {
+            Some("expected opaque type, found a different opaque type".into())
+        }
         resolve::Error::TypeMismatch {
             expected, actual, ..
         }

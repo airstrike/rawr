@@ -523,6 +523,7 @@ impl<'a> Parser<'a> {
             let mut value = self.returned_place(value, block_like)?;
             end = value.span;
             self.coerce_expr(&output, &mut value)?;
+            self.tag_hidden_output(&mut value);
             self.returned(value.span, &value.ty);
             self.consume_imported_value(&value, "returned value", value.span)?;
             self.move_out_value(&mut value)?;

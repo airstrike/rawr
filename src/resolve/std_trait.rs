@@ -432,6 +432,8 @@ pub(crate) fn declarations(
         if let Some(output) = &function.output {
             objects(output, named);
         }
+        // `-> impl Display`: its opaque type's bounds (D1109).
+        generics(&function.opaque_outputs, named);
     };
     for shell in items {
         match &shell.kind {

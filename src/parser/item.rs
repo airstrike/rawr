@@ -5006,6 +5006,49 @@ fn parse_impl_bounds(
     }))
 }
 
+/// `impl Bound + Bound` (`path`, its one `impl` segment) as the anonymous
+/// type parameter `name` it stands for: its bounds, and each `Shape<Output
+/// = i64>` binding as a projection. A parameter's is lifted into its
+/// function's generics, and an output's is its opaque type (D1109).
+pub(crate) fn impl_generic(
+    path: &type_ref::Path,
+    name: crate::item::Name,
+) -> crate::item::GenericParam {
+    let mut projections = Vec::new();
+    let bounds = path.segments[0]
+        .arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            type_ref::Argument::Type(type_ref::Type::Path(bound)) => {
+                // `=Shape=Output<i64>`: a projection.
+                if let [binding] = &bound.segments[..]
+                    && let Some(rest) = binding.name.text.strip_prefix(type_ref::BINDING_PREFIX)
+                    && let Some((owner, name)) = rest.split_once('=')
+                    && let [type_ref::Argument::Type(ty)] = &binding.arguments[..]
+                {
+                    let named = |text: &str| crate::item::Name {
+                        text: text.into(),
+                        span: binding.name.span,
+                    };
+                    projections.push((named(owner), named(name), ty.clone()));
+                    return None;
+                }
+                Some(bound.clone())
+            }
+            _ => None,
+        })
+        .collect::<Box<[_]>>();
+    crate::item::GenericParam {
+        name,
+        bounds,
+        projections: projections.into_boxed_slice(),
+        default: None,
+        lifted: false,
+        constant: None,
+        fixed: None,
+    }
+}
+
 /// Each `impl Bound` in a parameter's type is an anonymous generic
 /// parameter of the function with those bounds (Rust's argument-position
 /// `impl Trait`), named `impl_Bound` (`impl_Bound2`, .. when repeated).
@@ -5017,33 +5060,15 @@ fn lift_impl_parameters(
         match ty {
             type_ref::Type::Path(path) if matches!(&path.segments[..], [segment] if segment.name.text == type_ref::IMPL_TYPE) =>
             {
-                let segment = &path.segments[0];
-                let mut projections = Vec::new();
-                let bounds = segment
-                    .arguments
-                    .iter()
-                    .filter_map(|argument| match argument {
-                        type_ref::Argument::Type(type_ref::Type::Path(bound)) => {
-                            // `=Shape=Output<i64>`: a projection.
-                            if let [binding] = &bound.segments[..]
-                                && let Some(rest) =
-                                    binding.name.text.strip_prefix(type_ref::BINDING_PREFIX)
-                                && let Some((owner, name)) = rest.split_once('=')
-                                && let [type_ref::Argument::Type(ty)] = &binding.arguments[..]
-                            {
-                                let named = |text: &str| crate::item::Name {
-                                    text: text.into(),
-                                    span: binding.name.span,
-                                };
-                                projections.push((named(owner), named(name), ty.clone()));
-                                return None;
-                            }
-                            Some(bound.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Box<[_]>>();
-                let base = bounds
+                let mut generic = impl_generic(
+                    path,
+                    crate::item::Name {
+                        text: ImmutableString::new(),
+                        span: path.segments[0].name.span,
+                    },
+                );
+                let base = generic
+                    .bounds
                     .iter()
                     .map(|bound| {
                         bound
@@ -5059,19 +5084,10 @@ fn lift_impl_parameters(
                     index += 1;
                     text = format!("impl_{base}{index}");
                 }
-                let name = crate::item::Name {
-                    text: text.as_str().into(),
-                    span: segment.name.span,
-                };
-                generics.push(crate::item::GenericParam {
-                    name: name.clone(),
-                    bounds,
-                    projections: projections.into_boxed_slice(),
-                    default: None,
-                    lifted: true,
-                    constant: None,
-                    fixed: None,
-                });
+                generic.name.text = text.as_str().into();
+                generic.lifted = true;
+                let name = generic.name.clone();
+                generics.push(generic);
                 *ty = type_ref::Type::Path(type_ref::Path {
                     span: path.span,
                     segments: Box::new([type_ref::Segment {

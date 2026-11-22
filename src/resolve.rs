@@ -2755,6 +2755,7 @@ fn resolve_item(
                 let types = scope.as_ref().unwrap_or(types);
                 let mut function = resolve_function(
                     function,
+                    source,
                     types,
                     host,
                     true,
@@ -2843,6 +2844,7 @@ fn resolve_item(
                 }
                 functions.push(resolve_function(
                     function,
+                    source,
                     &scope,
                     host,
                     true,
@@ -2959,6 +2961,7 @@ fn resolve_item(
         }
         crate::item::Parsed::Function(parsed) => item::Kind::Function(resolve_function(
             parsed,
+            source,
             types,
             host,
             false,
@@ -3007,6 +3010,7 @@ fn facade_traits(
 
 fn resolve_function(
     mut parsed: crate::item::Function,
+    source: program::source::Id,
     types: &BTreeMap<ImmutableString, type_ref::Target>,
     host: &host::Registry,
     inside_impl: bool,
@@ -3077,7 +3081,13 @@ fn resolve_function(
         });
     }
 
-    let output = parsed
+    // Each `impl Bounds` written in the output, as the type parameter it
+    // is if it resolves to an opaque output.
+    let mut written_impls = Vec::new();
+    if let Some(written) = &parsed.output {
+        impl_outputs(written, &mut written_impls);
+    }
+    let mut output = parsed
         .output
         .map(|output| {
             type_ref::resolve(
@@ -3089,6 +3099,18 @@ fn resolve_function(
             )
         })
         .transpose()?;
+    let opaque_outputs = match &mut output {
+        Some(output) if !written_impls.is_empty() => opaque_outputs(
+            written_impls,
+            output,
+            source,
+            types,
+            host,
+            #[cfg(feature = "rust-import")]
+            native,
+        )?,
+        _ => Box::default(),
+    };
 
     let mut generics = generics;
     for generic in &mut generics {
@@ -3132,8 +3154,149 @@ fn resolve_function(
             elide: None,
         },
         opaque: Box::default(),
+        opaque_outputs,
         formatter,
     })
+}
+
+/// Each `impl Bounds` written in `ty`, also inside a bound's arguments
+/// (`impl Display` of `impl Iterator<Item = impl Display>`), as the
+/// anonymous type parameter it stands for, named by nothing yet.
+fn impl_outputs(ty: &crate::item::type_ref::Type, found: &mut Vec<crate::item::GenericParam>) {
+    use crate::item::type_ref::{Argument, Type};
+    match ty {
+        Type::Unit(_) => {}
+        Type::Tuple { members, .. } => {
+            for member in members.iter() {
+                impl_outputs(member, found);
+            }
+        }
+        Type::Reference { target, .. } => impl_outputs(target, found),
+        Type::Path(path) => {
+            if matches!(&path.segments[..], [segment]
+                if segment.name.text == crate::item::type_ref::IMPL_TYPE)
+            {
+                found.push(crate::parser::item::impl_generic(
+                    path,
+                    crate::item::Name {
+                        text: ImmutableString::new(),
+                        span: path.span,
+                    },
+                ));
+            }
+            for argument in path
+                .segments
+                .iter()
+                .flat_map(|segment| segment.arguments.iter())
+            {
+                if let Argument::Type(ty) = argument {
+                    impl_outputs(ty, found);
+                }
+            }
+        }
+    }
+}
+
+/// Each `impl Bounds` of program or std traits in `output`, of the ones
+/// `written` there (`impl_outputs`, `type_ref::opaque_output`), named as
+/// its own opaque type by where `source` writes it, and with its bounds
+/// read as a type parameter's (D1109).
+fn opaque_outputs(
+    mut written: Vec<crate::item::GenericParam>,
+    output: &mut type_ref::Type,
+    source: program::source::Id,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+    host: &host::Registry,
+    #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
+) -> Result<Box<[item::Generic]>, Error> {
+    fn name_opaque(
+        ty: &mut type_ref::Type,
+        written: &mut Vec<crate::item::GenericParam>,
+        source: program::source::Id,
+        named: &mut Vec<crate::item::GenericParam>,
+    ) {
+        match ty {
+            type_ref::Type::Unit(_) => {}
+            type_ref::Type::Tuple { members, .. } => {
+                for member in members.iter_mut() {
+                    name_opaque(member, written, source, named);
+                }
+            }
+            type_ref::Type::Reference { target, .. } => {
+                name_opaque(target, written, source, named);
+            }
+            type_ref::Type::Path(path) => {
+                if path.target == type_ref::Target::Parameter
+                    && crate::item::type_ref::opaque_output_text(&path.name) == Some(&*path.name)
+                    && let Some(index) = written
+                        .iter()
+                        .position(|generic| generic.name.span == path.span)
+                {
+                    path.name =
+                        crate::item::type_ref::opaque_output(&path.name, source, path.span).into();
+                    let mut generic = written.swap_remove(index);
+                    generic.name.text = path.name.clone();
+                    named.push(generic);
+                }
+                for argument in path.arguments.iter_mut() {
+                    if let type_ref::Argument::Type(ty) = argument {
+                        name_opaque(ty, written, source, named);
+                    }
+                }
+            }
+        }
+    }
+    let mut named = Vec::new();
+    name_opaque(output, &mut written, source, &mut named);
+    if named.is_empty() {
+        return Ok(Box::default());
+    }
+    let spans = named
+        .iter()
+        .map(|generic| generic.name.span)
+        .collect::<Vec<_>>();
+    let (_, generics) = generic_scope(
+        named.into_boxed_slice(),
+        types,
+        host,
+        #[cfg(feature = "rust-import")]
+        native,
+    )?;
+    // A bound naming the function's or its impl's type parameters (`impl
+    // Into<T>`) is its opaque type at each of their instances, which a
+    // caller doesn't yet read.
+    for (generic, span) in generics.iter().zip(spans) {
+        let names_parameter = generic
+            .trait_arguments
+            .iter()
+            .flat_map(|(_, arguments)| arguments.iter())
+            .chain(generic.projections.iter().map(|(_, _, ty)| ty))
+            .any(names_type_parameter);
+        if names_parameter {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "`impl Trait` output whose bound names a generic parameter".into(),
+                source: span,
+            });
+        }
+    }
+    Ok(generics)
+}
+
+/// Whether `ty` names a type parameter, but for an opaque output's own.
+fn names_type_parameter(ty: &type_ref::Type) -> bool {
+    match ty {
+        type_ref::Type::Unit(_) => false,
+        type_ref::Type::Tuple { members, .. } => members.iter().any(names_type_parameter),
+        type_ref::Type::Reference { target, .. } => names_type_parameter(target),
+        type_ref::Type::Path(path) => {
+            (path.target == type_ref::Target::Parameter
+                && crate::item::type_ref::opaque_output_text(&path.name).is_none())
+                || path.arguments.iter().any(|argument| match argument {
+                    type_ref::Argument::Type(ty) => names_type_parameter(ty),
+                    type_ref::Argument::Lifetime(_) => false,
+                })
+        }
+    }
 }
 
 /// Whether `ty` is written `&mut Formatter`, by any path to it.
@@ -6229,6 +6392,13 @@ fn type_name_of(ty: &type_ref::Type, canonical: bool) -> String {
                 .collect::<Vec<_>>();
             let written = match &path.target {
                 type_ref::Target::Host { definition, .. } if canonical => definition.path(),
+                // An opaque output by the text it is written with, as an
+                // impl's `-> impl Shape` meets its trait's.
+                type_ref::Target::Parameter => {
+                    crate::item::type_ref::opaque_output_text(&path.name)
+                        .unwrap_or(&path.name)
+                        .to_string()
+                }
                 _ => path.name.to_string(),
             };
             if let type_ref::Target::Projection(base, _) = &path.target {

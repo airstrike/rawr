@@ -194,9 +194,8 @@ use format::PANIC_MACROS;
 use from_str::{parse_text, ParseError};
 use generics::{
     assumed_generics, bound_kinds, bounded_value, const_generics, dyn_arguments,
-    generic_conversion_call, generic_equalities, generic_trait_arguments, generic_traits,
-    host_witnesses, instantiate, is_iterator_trait, item_generics, mentions_parameter, supertraits,
-    witness_generics, PendingInstance,
+    generic_conversion_call, host_witnesses, instantiate, is_iterator_trait, item_generics,
+    mentions_parameter, opaque_outputs, supertraits, witness_generics, PendingInstance,
 };
 #[cfg(feature = "rust-import")]
 use generics::{ImplBounds, ImplProjection, Selection};
@@ -396,6 +395,10 @@ struct Parser<'a> {
     /// body's tail and `return`s are checked against in its place.
     #[cfg(feature = "rust-import")]
     revealing: Option<Ty>,
+    /// The hidden type the body gives each opaque output of its own
+    /// (D1109), by the output's name: the fresh type `return_ty` has in
+    /// its place.
+    hidden_outputs: BTreeMap<ImmutableString, Ty>,
     loops: Vec<LoopFrame>,
     closures: Vec<closure::Scope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
@@ -952,7 +955,7 @@ impl<'a> Parser<'a> {
         }
         let associated = Shared::clone(&models.associated);
 
-        Self {
+        let mut parser = Self {
             marker: std::marker::PhantomData,
             text: source,
             input: tokens.into_iter().peekable(),
@@ -992,6 +995,7 @@ impl<'a> Parser<'a> {
             recovered_types: Vec::new(),
             #[cfg(feature = "rust-import")]
             revealing: None,
+            hidden_outputs: BTreeMap::new(),
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
@@ -1163,7 +1167,9 @@ impl<'a> Parser<'a> {
             pending_structural: Vec::new(),
             #[cfg(feature = "rust-import")]
             structural_defaults: Vec::new(),
-        }
+        };
+        parser.read_generics(&[]);
+        parser
     }
 
     fn for_method(
@@ -1205,17 +1211,12 @@ impl<'a> Parser<'a> {
             && parser
                 .place_output(&Ty::from_resolved(definition.output()))
                 .is_some();
-        parser.generics = definition
-            .generics()
-            .iter()
-            .map(|generic| (generic.name.text.clone(), generic.bounds))
-            .collect();
+        parser.read_generics(definition.generics());
+        parser.define_opaque_outputs(definition.output());
         parser.constants = const_generics(definition.generics());
         parser.assumed = assumed_generics(definition.generics());
         parser.opaque = definition.opaque().clone();
-        parser.generic_traits = generic_traits(definition.generics());
         parser.host_witnesses = host_witnesses(definition.generics());
-        parser.generic_trait_arguments = generic_trait_arguments(definition.generics());
         parser.impl_instance = instance_text(definition.trait_arguments());
         // `T` of `trait Convert<T>` is the impl's argument.
         if let Some(trait_name) = definition.trait_name()
@@ -1240,7 +1241,6 @@ impl<'a> Parser<'a> {
         }
         #[cfg(feature = "rust-import")]
         parser.read_instance_conversions(definition.key(), definition.parameters());
-        parser.inference.equalities = generic_equalities(definition.generics());
         parser.copy_out = method_copied(definition, &parser.models)
             .into_iter()
             .map(|index| definition.parameters()[index].name.text.clone())
@@ -1347,17 +1347,13 @@ impl<'a> Parser<'a> {
                 .output
                 .as_ref()
                 .is_some_and(|output| parser.place_output(&Ty::from_resolved(output)).is_some());
-        parser.generics = definition
-            .generics
-            .iter()
-            .map(|generic| (generic.name.text.clone(), generic.bounds))
-            .collect();
+        parser.read_generics(&definition.generics);
+        if let Some(output) = &definition.output {
+            parser.define_opaque_outputs(output);
+        }
         parser.constants = const_generics(&definition.generics);
         parser.assumed = assumed_generics(&definition.generics);
-        parser.generic_traits = generic_traits(&definition.generics);
         parser.host_witnesses = host_witnesses(&definition.generics);
-        parser.generic_trait_arguments = generic_trait_arguments(&definition.generics);
-        parser.inference.equalities = generic_equalities(&definition.generics);
         // An instance's body reads each of its template's generic
         // parameters as the type this instance gives it (D629).
         let types = parser

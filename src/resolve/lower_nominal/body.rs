@@ -238,6 +238,12 @@ impl<'a> Parser<'a> {
         if let Some(revealing) = &self.revealing {
             return revealing.clone();
         }
+        // Each opaque output of the function's own is its hidden type.
+        if !self.hidden_outputs.is_empty()
+            && let Some(output) = &self.return_ty
+        {
+            return output.clone();
+        }
         output.map_or(Ty::Unit, Ty::from_resolved)
     }
 

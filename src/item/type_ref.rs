@@ -81,6 +81,126 @@ pub(crate) fn projection_parameter_name(parameter: &str) -> Option<String> {
     Some(format!("<{base} as {trait_name}>::{name}"))
 }
 
+/// The text of `impl Bound + Bound` as rustc prints its opaque type:
+/// `impl Shape + Debug`, `impl Named<Out = i64>`, `impl Into<String>`.
+pub(crate) fn opaque_text(path: &Path) -> String {
+    let mut bounds = Vec::<(String, Vec<String>)>::new();
+    let mut bindings = Vec::new();
+    for argument in path
+        .segments
+        .iter()
+        .flat_map(|segment| segment.arguments.iter())
+    {
+        let Argument::Type(Type::Path(bound)) = argument else {
+            continue;
+        };
+        // `=Named=Out<i64>`: the binding `Out = i64` of `Named`.
+        if let [binding] = &bound.segments[..]
+            && let Some(rest) = binding.name.text.strip_prefix(BINDING_PREFIX)
+            && let Some((owner, name)) = rest.split_once('=')
+        {
+            let value = binding
+                .arguments
+                .iter()
+                .map(argument_text)
+                .collect::<String>();
+            bindings.push((owner.to_owned(), format!("{name} = {value}")));
+            continue;
+        }
+        let Some(last) = bound.segments.last() else {
+            continue;
+        };
+        let arguments = last.arguments.iter().map(argument_text).collect();
+        bounds.push((last.name.text.to_string(), arguments));
+    }
+    for (owner, binding) in bindings {
+        if let Some((_, arguments)) = bounds.iter_mut().find(|(name, _)| *name == owner) {
+            arguments.push(binding);
+        }
+    }
+    let bounds = bounds
+        .into_iter()
+        .map(|(name, arguments)| match &arguments[..] {
+            [] => name,
+            _ => format!("{name}<{}>", arguments.join(", ")),
+        })
+        .collect::<Vec<_>>();
+    format!("{IMPL_TYPE} {}", bounds.join(" + "))
+}
+
+fn argument_text(argument: &Argument) -> String {
+    match argument {
+        Argument::Type(ty) => type_text(ty),
+        Argument::Lifetime(lifetime) => lifetime.name.text.to_string(),
+    }
+}
+
+fn type_text(ty: &Type) -> String {
+    match ty {
+        Type::Unit(_) => "()".into(),
+        Type::Tuple { members, .. } => format!(
+            "({})",
+            members.iter().map(type_text).collect::<Vec<_>>().join(", ")
+        ),
+        Type::Reference {
+            mutable, target, ..
+        } => format!(
+            "&{}{}",
+            if *mutable { "mut " } else { "" },
+            type_text(target)
+        ),
+        Type::Path(path) if matches!(&path.segments[..], [segment] if segment.name.text == IMPL_TYPE) => {
+            opaque_text(path)
+        }
+        Type::Path(path) => path
+            .segments
+            .iter()
+            .map(|segment| match &segment.arguments[..] {
+                [] => segment.name.text.to_string(),
+                arguments => format!(
+                    "{}<{}>",
+                    segment.name.text,
+                    arguments
+                        .iter()
+                        .map(argument_text)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            })
+            .collect::<Vec<_>>()
+            .join("::"),
+    }
+}
+
+/// The marker between an opaque output's text and the place that makes it
+/// its function's own (`opaque_output`). Rust spells no type with it.
+const OPAQUE_OUTPUT_MARKER: char = '#';
+
+/// The name of the opaque type `text` (`impl Shape`) a function's output
+/// writes at `span` of `source` (D1109): one type for each place an `impl`
+/// is written, as rustc's is one per defining function.
+pub(crate) fn opaque_output(text: &str, source: impl std::fmt::Debug, span: crate::Span) -> String {
+    let start = span.start();
+    format!(
+        "{text}{OPAQUE_OUTPUT_MARKER}{source:?}:{}:{}",
+        start.line().unwrap_or_default(),
+        start.position().unwrap_or_default()
+    )
+}
+
+/// The text rustc prints for a type parameter that is an opaque output
+/// ([`opaque_output`]): `impl Shape`.
+pub(crate) fn opaque_output_text(parameter: &str) -> Option<&str> {
+    if !parameter.starts_with(IMPL_TYPE) || !parameter[IMPL_TYPE.len()..].starts_with(' ') {
+        return None;
+    }
+    Some(
+        parameter
+            .rsplit_once(OPAQUE_OUTPUT_MARKER)
+            .map_or(parameter, |(text, _)| text),
+    )
+}
+
 /// The constant an array type's builtin path name names as its length.
 pub(crate) fn array_length_name(name: &str) -> Option<&str> {
     let length = name.strip_prefix(ARRAY_PREFIX)?.strip_suffix(']')?;

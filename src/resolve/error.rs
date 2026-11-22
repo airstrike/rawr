@@ -2936,6 +2936,8 @@ impl fmt::Display for Described<'_> {
             {
                 formatter.write_str("future")
             }
+            // A function's `-> impl Shape` (D1109).
+            ty if ty.starts_with("impl ") => formatter.write_str("opaque type"),
             ty => write!(formatter, "`{ty}`"),
         }
     }

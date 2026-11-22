@@ -874,6 +874,9 @@ impl Ty {
             {
                 "associated type"
             }
+            Self::Param(name) if crate::item::type_ref::opaque_output_text(name).is_some() => {
+                "opaque type"
+            }
             Self::Param(_) => "type parameter",
             _ => "type",
         }
@@ -1331,7 +1334,9 @@ impl Ty {
             )
             .into(),
             Self::Param(name) => crate::item::type_ref::projection_parameter_name(name)
-                .map_or_else(|| name.clone(), ImmutableString::from),
+                .map(ImmutableString::from)
+                .or_else(|| crate::item::type_ref::opaque_output_text(name).map(Into::into))
+                .unwrap_or_else(|| name.clone()),
             Self::Const(name) => name.clone(),
             Self::Projection(base, _, name) => format!("{}::{name}", base.name(models)).into(),
             // rustc writes a type it has yet to infer as `_`. A value of any
