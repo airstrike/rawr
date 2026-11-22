@@ -1954,8 +1954,10 @@ fn a_closure_over_a_lifetime_carrying_candidate_fills_a_selector() {
 
 /// iced_test's `ui.simulate(click())` (#1679): the opaque `impl
 /// Iterator<Item = Event>` `click()` gives fills `simulate`'s `impl
-/// IntoIterator<Item = Event>`, from a call and from a local. The output
-/// is `cargo run`'s.
+/// IntoIterator<Item = Event>`, from a call and from a local. The
+/// annotation `Simulator<'_, Message>` fills the theme and renderer from
+/// the struct's defaults, as rustc does (#459). The output is `cargo
+/// run`'s.
 #[test]
 fn an_opaque_iterator_fills_an_iterable_parameter() {
     let (rawr, cargo) = both_printed("simulated.rs", "");
