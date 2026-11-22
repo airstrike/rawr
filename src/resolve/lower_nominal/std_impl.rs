@@ -1147,8 +1147,6 @@ impl Parser<'_> {
         let (target, call) = self.deref_target(&target, mutable)?;
         let ty = match target {
             Ty::UnsizedStr if !mutable => Ty::Str,
-            // rawr has no `&mut str`.
-            Ty::UnsizedStr => return None,
             target => Ty::Reference {
                 mutable,
                 target: Box::new(target),

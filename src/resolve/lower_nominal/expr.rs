@@ -529,6 +529,12 @@ impl<'a> Parser<'a> {
                     nested.ty = (*target).clone();
                     Some(Lvalue::Nested(nested))
                 }
+                // `*s` of a `String` place is the `str` it holds there,
+                // which `&mut *s` lends as a `&mut str`.
+                (Ty::String, Some(Lvalue::Binding { binding, .. })) => Some(Lvalue::Binding {
+                    binding,
+                    ty: (*target).clone(),
+                }),
                 // `*b` of a local `Box`: the box's own place, which a use
                 // by value moves, with drop glue in the crate.
                 (Ty::Boxed(_), Some(Lvalue::Binding { binding, .. })) if self.drops() => {

@@ -1516,7 +1516,8 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if builtin.is_text()
-                || matches!(&builtin, Ty::Reference { target, .. } if target.is_text())
+                || matches!(&builtin, Ty::Reference { target, .. }
+                    if target.is_text() || **target == Ty::UnsizedStr)
                 || member == "to_string"
                     && matches!(
                         without_references(&number),

@@ -5153,3 +5153,86 @@ main();
         "{denied}"
     );
 }
+
+#[test]
+fn a_mut_str_of_a_string_has_strs_methods() {
+    // `&mut *s`, `as_mut_str()` and a `&mut String` given for a `&mut str`
+    // lend the `String`'s text, which `str`'s own changes write (#821).
+    let output = printed(
+        r#"
+fn shout(r: &mut str) {
+    r.make_ascii_uppercase();
+}
+fn main() {
+    let mut s = String::from("abc");
+    let r: &mut str = &mut *s;
+    r.make_ascii_uppercase();
+    println!("{}", s);
+    let mut t = String::from("xyz");
+    shout(&mut t);
+    t.make_ascii_lowercase();
+    let mut u = String::from("Hello");
+    u.as_mut_str().make_ascii_lowercase();
+    println!("{} {}", t, u);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "ABC\nxyz hello\n");
+    // A `str` has none of a `String`'s changes, and a `&str` changes
+    // nothing.
+    for (program, expected) in [
+        (
+            "fn f(r: &mut str) { r.push_str(\"x\"); }\nfn main() {}\n",
+            "error[E0599]: no method named `push_str` found for mutable reference `&mut str` in \
+             the current scope",
+        ),
+        (
+            "fn main() { let s = \"abc\"; s.make_ascii_uppercase(); }",
+            "error[E0596]: cannot borrow `*s` as mutable, as it is behind a `&` reference",
+        ),
+        (
+            "fn main() { let s = String::from(\"a\"); s.make_ascii_uppercase(); }",
+            "error[E0596]: cannot borrow `s` as mutable, as it is not declared as mutable",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+#[test]
+fn text_and_sequence_comparisons_are_stds_impls() {
+    // `trim` gives a `&str`, which a `String` is compared with only by
+    // `PartialEq`, and an array is no `PartialEq<Vec<U>>` (#703).
+    let output = printed(
+        r#"
+fn main() {
+    let s = String::from("abc");
+    let v = vec![1, 2];
+    let a = [1, 2];
+    println!("{} {} {}", s.as_str() < "b", s == " abc ".trim(), " abc ".trim() == s);
+    println!("{} {} {} {} {}", v == a, &v[..] == v, v[..] == v, v == &a[..], a == v[..]);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "true true true\ntrue true true true true\n");
+    for (program, expected) in [
+        (
+            "fn main() { let s = String::from(\"abc\"); println!(\"{}\", s < \" a \".trim()); }",
+            "error[E0308]: mismatched types",
+        ),
+        (
+            "fn main() { let s = String::from(\"abc\"); println!(\"{}\", \" a \".trim() < s); }",
+            "error[E0308]: mismatched types",
+        ),
+        (
+            "fn main() { let a = [1, 2]; let v = vec![1, 2]; println!(\"{}\", a == v); }",
+            "error[E0277]: can't compare `[{integer}; 2]` with `Vec<{integer}>`",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}

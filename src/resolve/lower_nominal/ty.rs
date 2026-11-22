@@ -1164,6 +1164,7 @@ impl Ty {
                     "bool" => Self::Bool,
                     "char" => Self::Char,
                     "String" => Self::String,
+                    crate::resolve::type_ref::UNSIZED_STR => Self::UnsizedStr,
                     "Ordering" => Self::Ordering,
                     "Arguments" => Self::Arguments,
                     "Duration" => Self::Time(Time::Duration),

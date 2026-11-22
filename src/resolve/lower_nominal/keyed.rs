@@ -324,7 +324,7 @@ impl Parser<'_> {
         self.mutable_use(value, value.span);
         // A change through a `&` reference: rustc's E0596, in its words for
         // a named reference or another one.
-        if let Ty::Reference { mutable: false, .. } = self.inference.resolve(&value.ty) {
+        if let Ty::Reference { mutable: false, .. } | Ty::Str = self.inference.resolve(&value.ty) {
             // The reference as written, when a local or `self` is the
             // whole receiver of the change (`r.push(1)`).
             let written = self.written_from(value.span.start()).unwrap_or_default();

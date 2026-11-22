@@ -414,11 +414,53 @@ impl<'a> Parser<'a> {
         if member.as_str() == "parse" {
             return self.parse_str_parse(value);
         }
+        // A `String`'s own changes, which a `&str` or a `&mut str` has
+        // none of: rustc's E0599 for its type.
+        let receiver_ty = self.inference.resolve(&value.ty);
+        if *without_references(&receiver_ty) != Ty::String
+            && (STR_CHANGES.contains(&member.as_str()) || member.as_str() == "as_mut_str")
+            && !member.as_str().starts_with("make_ascii_")
+        {
+            let name = receiver_ty.name(&self.models);
+            return Err(Error::NoItem {
+                owner: name.clone(),
+                member,
+                reference: member_span,
+                receiver: Box::new(crate::resolve::Receiver {
+                    kind: receiver_ty.sort(&self.models),
+                    declared: name.clone(),
+                    found: name,
+                    definition: None,
+                }),
+                similar: None,
+            });
+        }
         if matches!(member.as_str(), "drain" | "replace_range")
             && matches!(self.peek(), Token::LeftParen)
             && *without_references(&self.inference.resolve(&value.ty)) == Ty::String
         {
             return self.parse_string_range_change(value, &member);
+        }
+        // `s.as_mut_str()`: the `&mut str` of the `String` place, which a
+        // change through it writes.
+        if member.as_str() == "as_mut_str"
+            && matches!(self.peek(), Token::Unit)
+            && *without_references(&self.inference.resolve(&value.ty)) == Ty::String
+            && value.lvalue.is_some()
+        {
+            let end = self.next().1;
+            let whole = span(value.span.start(), end);
+            if let Some(error) = self.immutable_borrow(&value, whole) {
+                return Err(error);
+            }
+            self.mutable_use(&value, whole);
+            let mut value = value;
+            value.ty = Ty::Reference {
+                mutable: true,
+                target: Box::new(Ty::UnsizedStr),
+            };
+            value.span = whole;
+            return Ok(value.retain_origin());
         }
         let (mut arguments, end) =
             self.parse_std_arguments(&value.ty, &member, "string method arguments")?;
@@ -580,7 +622,7 @@ impl<'a> Parser<'a> {
                 (call, Ty::Bool)
             }
             // A `String` changed in place, by bytes, with Rust's panics.
-            ("pop" | "clear", [])
+            ("pop" | "clear" | "make_ascii_uppercase" | "make_ascii_lowercase", [])
             | ("insert" | "insert_str", [_, _])
             | ("remove" | "truncate" | "split_off", [_]) => {
                 let code = STR_CHANGES
@@ -2305,6 +2347,8 @@ pub(super) const STR_CHANGES: &[&str] = &[
     "retain",
     "drain",
     "replace_range",
+    "make_ascii_uppercase",
+    "make_ascii_lowercase",
 ];
 
 /// `STR_CHANGES`' `code` on the string taken by reference, by bytes and
@@ -2322,6 +2366,30 @@ pub(super) fn str_change(
     let name = STR_CHANGES.get(code).copied().unwrap_or_default();
     if matches!(name, "drain" | "replace_range") {
         return str_range_change(context, args[0], name, at, operand);
+    }
+    // `str`'s own changes in place, which a `String` reaches through its
+    // `DerefMut`.
+    if let Some(change) = match name {
+        "make_ascii_uppercase" => Some(str::make_ascii_uppercase as fn(&mut str)),
+        "make_ascii_lowercase" => Some(str::make_ascii_lowercase as fn(&mut str)),
+        _ => None,
+    } {
+        if let Some(place) = crate::place::get(args[0]) {
+            let mut text = crate::place::text::copied(args[0])?;
+            change(&mut text);
+            let mut operands = [Dynamic::from(ImmutableString::from(text))];
+            return match context {
+                Some(context) => {
+                    place.invoke_in(context, crate::place::Operation::Store, &mut operands)
+                }
+                None => place.invoke(crate::place::Operation::Store, &mut operands),
+            };
+        }
+        let mut text = args[0]
+            .write_lock::<ImmutableString>()
+            .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
+        change(text.make_mut());
+        return Ok(Dynamic::UNIT);
     }
     if let Some(place) = crate::place::get(args[0]) {
         use crate::place::Operation;
