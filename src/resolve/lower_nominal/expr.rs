@@ -877,6 +877,12 @@ impl<'a> Parser<'a> {
                 {
                     return self.qualified_scalar_call(&path, position);
                 }
+                // `<str as Trait>`: `str` as an impl's header reads it, so
+                // the receiver `"hi"` is `&Self`.
+                let self_ty = match self.inference.resolve(&self_ty) {
+                    Ty::UnsizedStr => Ty::Str,
+                    self_ty => self_ty,
+                };
                 if !through_crate
                     && !self.ufcs_trait(&trait_name)
                     && let Some(std_name) = crate::resolve::std_trait::anywhere(&trait_name)

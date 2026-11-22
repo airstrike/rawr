@@ -1499,10 +1499,39 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
-                if let Some(Some(input)) = expected_inputs.get(index) {
-                    self.coerce_expected_input(input, &expected, argument);
+                let called = Called {
+                    function: &function.definition,
+                    parameter,
+                    callee,
+                    call: {
+                        let mut after = end;
+                        after.advance();
+                        Span::new(call.start(), after)
+                    },
+                    declared: self.models.in_this_file(function.source),
+                };
+                // rustc coerces the argument to the type the expectation
+                // gives it, a sized one (`rvalue_hint`), and reports it there.
+                if let Some(Some(input)) = expected_inputs.get(index)
+                    && let Some(mismatch) = self.coerce_expected_input(input, &expected, argument)
+                    && !unsized_hint(&self.inference.resolve(input))
+                    && !shared_generic(&function.definition.parameters, index)
+                    && let Some(error) = called.mismatch(&mismatch, argument.span)
+                {
+                    return Err(error);
                 }
-                self.coerce_argument(&parameter.ty, &expected, argument)?;
+                // A parameter of a type the function names no generic in.
+                let fixed = !function
+                    .definition
+                    .generics
+                    .iter()
+                    .any(|generic| mentions(&parameter.ty, &generic.name.text));
+                if let Err(error) = self.coerce_argument(&parameter.ty, &expected, argument) {
+                    return Err(fixed
+                        .then(|| called.mismatch(&error, argument.span))
+                        .flatten()
+                        .unwrap_or(error));
+                }
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.move_local(argument)?;
                 self.move_generic_reference(argument, &parameter.ty);
@@ -2021,5 +2050,108 @@ impl<'a> Parser<'a> {
                 self.lend_argument(&parameter.ty, &expected, argument);
             }
         }
+    }
+}
+
+/// Whether `ty` is unsized, which rustc's expectation of an argument only
+/// hints at (`ExpectRvalueLikeUnsized`): `str`, a slice, a trait object.
+fn unsized_hint(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::UnsizedStr
+            | Ty::Dyn(..)
+            | Ty::Array {
+                kind: sequence::Kind::Slice,
+                ..
+            }
+    )
+}
+
+/// Whether the type of the parameter at `index` of `parameters` is a type
+/// another parameter's names too, whose mismatch rustc labels with what
+/// each must match.
+fn shared_generic(parameters: &[item::Parameter], index: usize) -> bool {
+    let named = |ty: &type_ref::Type| match ty {
+        type_ref::Type::Path(path) => Some(path.name.clone()),
+        _ => None,
+    };
+    let Some(name) = parameters
+        .get(index)
+        .and_then(|parameter| named(&parameter.ty))
+    else {
+        return false;
+    };
+    parameters
+        .iter()
+        .enumerate()
+        .any(|(other, parameter)| other != index && mentions(&parameter.ty, &name))
+}
+
+/// Whether `ty` names the type `name`.
+fn mentions(ty: &type_ref::Type, name: &str) -> bool {
+    match ty {
+        type_ref::Type::Path(path) => {
+            path.name == name
+                || path.arguments.iter().any(|argument| match argument {
+                    type_ref::Argument::Type(ty) => mentions(ty, name),
+                    type_ref::Argument::Lifetime(_) => false,
+                })
+        }
+        type_ref::Type::Reference { target, .. } => mentions(target, name),
+        type_ref::Type::Tuple { members, .. } => {
+            members.iter().any(|member| mentions(member, name))
+        }
+        type_ref::Type::Unit(_) => false,
+    }
+}
+
+/// A call of a program function, at one of its parameters, as rustc's
+/// E0308 at an argument marks it.
+struct Called<'a> {
+    function: &'a item::Function,
+    parameter: &'a item::Parameter,
+    /// The callee as the call writes it.
+    callee: Span,
+    /// The call, through its `)`.
+    call: Span,
+    /// The function is defined in the call's file.
+    declared: bool,
+}
+
+impl Called<'_> {
+    /// rustc's E0308 at the argument starting where `argument` does, of
+    /// the mismatch `error` reports there, or `None` for another error.
+    fn mismatch(&self, error: &Error, argument: Span) -> Option<Error> {
+        let Error::TypeMismatch {
+            expected,
+            actual,
+            expression,
+        } = error
+        else {
+            return None;
+        };
+        if expression.start() != argument.start() {
+            return None;
+        }
+        let function = self.function;
+        let output = function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved);
+        let generic = Ty::from_resolved(&self.parameter.ty);
+        let generic = matches!(&self.parameter.ty, type_ref::Type::Path(path)
+            if function.generics.iter().any(|declared| declared.name.text == path.name))
+            && contains(&output, &|ty| *ty == generic);
+        Some(Error::ArgumentMismatch(Box::new(
+            crate::resolve::ArgumentMismatch {
+                expected: expected.clone(),
+                actual: actual.clone(),
+                argument: *expression,
+                callee: self.callee,
+                call: self.call,
+                function: function.name.text.clone(),
+                generic,
+                definition: self
+                    .declared
+                    .then_some((function.name.span, self.parameter.span)),
+            },
+        )))
     }
 }

@@ -1278,8 +1278,17 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
             },
             ImportedNamespace::Type,
         )),
+        R::ArgumentMismatch(mismatch) => Some((
+            if mismatch.actual.contains("::") {
+                mismatch.actual.to_string()
+            } else {
+                mismatch.expected.to_string()
+            },
+            ImportedNamespace::Type,
+        )),
         R::DuplicateItem { .. }
         | R::DuplicateImport { .. }
+        | R::Redefined { .. }
         | R::PrivateItem { .. }
         | R::UnknownType { .. }
         | R::UnknownFunction { .. }

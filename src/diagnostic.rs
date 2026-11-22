@@ -21,7 +21,8 @@ pub use panic::{hooked, locate_panics_with, note, panic, panic_message, panicked
 pub(crate) use render::offset;
 pub use render::{render, render_with, show_paths_from, Color};
 pub use report::{
-    Builder, Category, Error, ExternalLabel, ExternalPosition, Label, LabelKind, Report, Severity,
+    Afterword, Builder, Category, Error, ExternalLabel, ExternalPosition, Label, LabelKind, Report,
+    Severity,
 };
 pub use section::Section;
 pub use source::Source;

@@ -130,6 +130,21 @@ pub fn render_with(report: &Report, color: Color) -> String {
     }
     let mut output = renderer.render(&groups);
     output.push('\n');
+    // Each follower is its own error, after a blank line, as is the help
+    // after them all.
+    for follower in report.followers() {
+        output.push('\n');
+        output.push_str(&render_with(follower, color));
+    }
+    if let Some(afterword) = report.afterword() {
+        let group = afterword.helps().iter().fold(
+            Group::with_title(Level::HELP.primary_title(afterword.message())),
+            |group, help| group.element(Level::HELP.message(help.as_str())),
+        );
+        output.push('\n');
+        output.push_str(&renderer.render(&[group]));
+        output.push('\n');
+    }
     output
 }
 

@@ -1972,26 +1972,6 @@ main();
 "#,
         Ok("2 1\n"),
     );
-    // A tuple's members swapped. This is rustc's first report: it reports
-    // `'b: 'a` after it, which rawr does not.
-    signature_verdict(
-        r#"
-fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
-fn main() { let (a, b) = (1, 2); println!("{:?}", f((&a, &b))); }
-main();
-"#,
-        Err(r#"
-error: lifetime may not live long enough
- --> <script>:2:61
-  |
-2 | fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
-  |      --  -- lifetime `'b` defined here                      ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
-  |      |
-  |      lifetime `'a` defined here
-  |
-  = help: consider adding the following bound: `'a: 'b`
-"#),
-    );
     signature_verdict(
         r#"
 fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { (x.1, x.0) }
@@ -2134,22 +2114,6 @@ error: lifetime may not live long enough
 2 | fn f<'a>(x: &'a &'a i32) -> &'a &'static i32 { x }
   |      -- lifetime `'a` defined here             ^ returning this value requires that `'a` must outlive `'static`
 "#),
-    );
-    // rustc marks the branch's `x`, and rawr the whole `if`.
-    let report = refused(
-        r#"
-fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
-fn main() { let (a, b) = (1, 2); println!("{:?}", f(Some(&a), &b)); }
-main();
-"#,
-    );
-    assert!(
-        report.starts_with("error: lifetime may not live long enough"),
-        "{report}"
-    );
-    assert!(
-        report.contains("function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`"),
-        "{report}"
     );
     // rustc's E0621 where the parameter's lifetime is elided.
     signature_verdict(
@@ -3747,6 +3711,7 @@ main();
   |             |
   |             required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
  --> <script>:7:1
   |
@@ -3792,6 +3757,7 @@ main();
   |                              |
   |                              required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
  --> <script>:6:1
   |
@@ -3942,6 +3908,7 @@ note: required by a bound in `show`
   |             |
   |             required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
   = note: required for `({integer}, Opaque)` to implement `Debug`
   = note: 1 redundant requirement hidden
   = note: required for `Option<({integer}, Opaque)>` to implement `Debug`
@@ -3974,6 +3941,7 @@ note: required by a bound in `show`
     assert!(
         report.contains(
             r#"  = help: the trait `Debug` is not implemented for `Opaque`
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 note: required for `W<Opaque>` to implement `Debug`
  --> <script>:5:8
   |
@@ -5459,4 +5427,774 @@ main();
         report.starts_with("error[E0503]: cannot use `x` because it was mutably borrowed"),
         "{report}"
     );
+}
+
+#[test]
+fn every_lifetime_a_returned_value_must_outlive_is_reported() {
+    // rustc reports one error for each lifetime that must outlive another,
+    // the lifetimes it names numbered across them, then the help that
+    // relates them (#2487).
+    signature_verdict(
+        r#"fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+fn main() { let (a, b) = (1, 2); println!("{:?}", f((&a, &b))); }
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:61
+  |
+1 | fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+  |      --  -- lifetime `'b` defined here                      ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+
+error: lifetime may not live long enough
+ --> <script>:1:61
+  |
+1 | fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+  |      --  -- lifetime `'b` defined here                      ^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+
+help: `'a` and `'b` must be the same: replace one with the other
+"#),
+    );
+    signature_verdict(
+        r#"use std::cell::Cell;
+fn f<'a, 'b>(x: Cell<&'a i32>) -> Cell<&'b i32> { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:51
+  |
+2 | fn f<'a, 'b>(x: Cell<&'a i32>) -> Cell<&'b i32> { x }
+  |      --  -- lifetime `'b` defined here            ^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+  = note: requirement occurs because of the type `Cell<&i32>`, which makes the generic argument `&i32` invariant
+  = note: the struct `Cell<T>` is invariant over the parameter `T`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+ --> <script>:2:51
+  |
+2 | fn f<'a, 'b>(x: Cell<&'a i32>) -> Cell<&'b i32> { x }
+  |      --  -- lifetime `'b` defined here            ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of the type `Cell<&i32>`, which makes the generic argument `&i32` invariant
+  = note: the struct `Cell<T>` is invariant over the parameter `T`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+help: `'b` and `'a` must be the same: replace one with the other
+"#),
+    );
+    signature_verdict(
+        r#"fn f<'a, 'b, 'c>(x: &'a i32, y: &'b i32) -> (&'c i32, &'c i32) { (x, y) }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:66
+  |
+1 | fn f<'a, 'b, 'c>(x: &'a i32, y: &'b i32) -> (&'c i32, &'c i32) { (x, y) }
+  |      --      -- lifetime `'c` defined here                       ^^^^^^ function was supposed to return data with lifetime `'c` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'c`
+
+error: lifetime may not live long enough
+ --> <script>:1:66
+  |
+1 | fn f<'a, 'b, 'c>(x: &'a i32, y: &'b i32) -> (&'c i32, &'c i32) { (x, y) }
+  |          --  -- lifetime `'c` defined here                       ^^^^^^ function was supposed to return data with lifetime `'c` but it is returning data with lifetime `'b`
+  |          |
+  |          lifetime `'b` defined here
+  |
+  = help: consider adding the following bound: `'b: 'c`
+
+help: the following changes may resolve your lifetime errors
+  |
+  = help: add bound `'a: 'c`
+  = help: add bound `'b: 'c`
+"#),
+    );
+    signature_verdict(
+        r#"fn f<'a, 'b, 'c>(x: &'a i32) -> (&'b i32, &'c i32) { (x, x) }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:54
+  |
+1 | fn f<'a, 'b, 'c>(x: &'a i32) -> (&'b i32, &'c i32) { (x, x) }
+  |      --  -- lifetime `'b` defined here               ^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &Vec<&i32>) -> &Vec<&i32> { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:53
+  |
+2 | impl S { fn g(&self, x: &Vec<&i32>) -> &Vec<&i32> { x } }
+  |               -         -                           ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &'a Vec<&'a i32>) -> &'a Vec<&'a i32> { x } }
+  |              ++++            ++      ++           ++      ++
+
+error: lifetime may not live long enough
+ --> <script>:2:53
+  |
+2 | impl S { fn g(&self, x: &Vec<&i32>) -> &Vec<&i32> { x } }
+  |               -              -                      ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'3`
+  |               |              |
+  |               |              let's call the lifetime of this reference `'3`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &Vec<&'a i32>) -> &'a Vec<&'a i32> { x } }
+  |              ++++                 ++           ++      ++
+"#),
+    );
+}
+
+#[test]
+fn a_returned_branch_is_marked_where_it_borrows() {
+    // rustc marks the branch of an `if` or a `match` the value takes its
+    // borrow from (#2488).
+    signature_verdict(
+        r#"fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
+fn main() { let (a, b) = (1, 2); println!("{:?}", f(Some(&a), &b)); }
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:79
+  |
+1 | fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
+  |      --  -- lifetime `'b` defined here                                        ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { match y { 0 => Some(y), _ => x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:96
+  |
+1 | fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { match y { 0 => Some(y), _ => x } }
+  |      --  -- lifetime `'b` defined here                                                         ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    signature_verdict(
+        r#"fn g<'a, 'b>(x: &'a i32, y: &'b i32, c: bool) -> (&'b i32, &'a i32) { if c { (x, y) } else { (y, x) } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:78
+  |
+1 | fn g<'a, 'b>(x: &'a i32, y: &'b i32, c: bool) -> (&'b i32, &'a i32) { if c { (x, y) } else { (y, x) } }
+  |      --  -- lifetime `'b` defined here                                       ^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+
+error: lifetime may not live long enough
+ --> <script>:1:78
+  |
+1 | fn g<'a, 'b>(x: &'a i32, y: &'b i32, c: bool) -> (&'b i32, &'a i32) { if c { (x, y) } else { (y, x) } }
+  |      --  -- lifetime `'b` defined here                                       ^^^^^^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+
+help: `'a` and `'b` must be the same: replace one with the other
+"#),
+    );
+}
+
+#[test]
+fn two_elided_lifetimes_are_given_a_named_one() {
+    // rustc suggests one named lifetime for two elided ones: written in the
+    // output, or else at the shorter one's reference, and at the longer
+    // one's, a new one declared or the function's first reused (#2489).
+    // A store through a `&mut` parameter too.
+    signature_verdict(
+        r#"fn g(v: &mut Vec<&i32>, x: &i32) { v.push(x); }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:36
+  |
+1 | fn g(v: &mut Vec<&i32>, x: &i32) { v.push(x); }
+  |                  -         -       ^^^^^^^^^ argument requires that `'1` must outlive `'2`
+  |                  |         |
+  |                  |         let's call the lifetime of this reference `'1`
+  |                  let's call the lifetime of this reference `'2`
+  |
+  = note: requirement occurs because of a mutable reference to `Vec<&i32>`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider introducing a named lifetime parameter
+  |
+1 | fn g<'a>(v: &mut Vec<&'a i32>, x: &'a i32) { v.push(x); }
+  |     ++++              ++           ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &i32) -> &i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:41
+  |
+2 | impl S { fn g(&self, x: &i32) -> &i32 { x } }
+  |               -         -               ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &'a i32) -> &'a i32 { x } }
+  |              ++++            ++          ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g<T>(&self, x: &i32, _t: T) -> &i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:51
+  |
+2 | impl S { fn g<T>(&self, x: &i32, _t: T) -> &i32 { x } }
+  |                  -         -                      ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |                  |         |
+  |                  |         let's call the lifetime of this reference `'1`
+  |                  let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a, T>(&self, x: &'a i32, _t: T) -> &'a i32 { x } }
+  |               +++               ++                 ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &'_ i32) -> &'_ i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:47
+  |
+2 | impl S { fn g(&self, x: &'_ i32) -> &'_ i32 { x } }
+  |               -         -                     ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 - impl S { fn g(&self, x: &'_ i32) -> &'_ i32 { x } }
+2 + impl S { fn g<'a>(&self, x: &'a i32) -> &'a i32 { x } }
+  |
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: &Vec<&i32>) -> &i32 { x[0] } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:47
+  |
+2 | impl S { fn g(&self, x: &Vec<&i32>) -> &i32 { x[0] } }
+  |               -              -                ^^^^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |              |
+  |               |              let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &Vec<&'a i32>) -> &'a i32 { x[0] } }
+  |              ++++                 ++           ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g<'b>(&self, x: &i32, _y: &'b i32) -> &i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:58
+  |
+2 | impl S { fn g<'b>(&self, x: &i32, _y: &'b i32) -> &i32 { x } }
+  |                   -         -                            ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |                   |         |
+  |                   |         let's call the lifetime of this reference `'1`
+  |                   let's call the lifetime of this reference `'2`
+  |
+help: consider reusing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'b>(&self, x: &'b i32, _y: &'b i32) -> &'b i32 { x } }
+  |                              ++                       ++
+"#),
+    );
+    signature_verdict(
+        r#"struct S;
+impl S { fn g(&self, x: & i32) -> & i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:43
+  |
+2 | impl S { fn g(&self, x: & i32) -> & i32 { x } }
+  |               -         -                 ^ method was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+  |               |         |
+  |               |         let's call the lifetime of this reference `'1`
+  |               let's call the lifetime of this reference `'2`
+  |
+help: consider introducing a named lifetime parameter and update trait if needed
+  |
+2 | impl S { fn g<'a>(&self, x: &'a  i32) -> &'a  i32 { x } }
+  |              ++++            ++           ++
+"#),
+    );
+}
+
+#[test]
+fn a_use_of_a_declared_name_is_e0255() {
+    // rustc's E0255 at the second of a `use` and a declaration of one name
+    // (#2497).
+    signature_verdict(
+        r#"mod a { pub mod inner {} pub use self::inner; }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `inner` is defined multiple times
+ --> <script>:1:34
+  |
+1 | mod a { pub mod inner {} pub use self::inner; }
+  |         -------------            ^^^^^^^^^^^ `inner` reimported here
+  |         |
+  |         previous definition of the module `inner` here
+  |
+  = note: `inner` must be defined only once in the type namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+1 | mod a { pub mod inner {} pub use self::inner as other_inner; }
+  |                                              ++++++++++++++
+"#),
+    );
+    signature_verdict(
+        r#"mod a { pub use self::inner; pub mod inner {} }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `inner` is defined multiple times
+ --> <script>:1:30
+  |
+1 | mod a { pub use self::inner; pub mod inner {} }
+  |                 -----------  ^^^^^^^^^^^^^ `inner` redefined here
+  |                 |
+  |                 previous import of the module `inner` here
+  |
+  = note: `inner` must be defined only once in the type namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+1 | mod a { pub use self::inner as other_inner; pub mod inner {} }
+  |                             ++++++++++++++
+"#),
+    );
+    signature_verdict(
+        r#"mod m { pub fn f() {} }
+use m::f;
+fn f() {}
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `f` is defined multiple times
+ --> <script>:3:1
+  |
+2 | use m::f;
+  |     ---- previous import of the value `f` here
+3 | fn f() {}
+  | ^^^^^^ `f` redefined here
+  |
+  = note: `f` must be defined only once in the value namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+2 | use m::f as other_f;
+  |          ++++++++++
+"#),
+    );
+    signature_verdict(
+        r#"mod m { pub struct S; }
+use m::S;
+pub struct S<T>(T);
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0255]: the name `S` is defined multiple times
+ --> <script>:3:1
+  |
+2 | use m::S;
+  |     ---- previous import of the type `S` here
+3 | pub struct S<T>(T);
+  | ^^^^^^^^^^^^^^^^^^^ `S` redefined here
+  |
+  = note: `S` must be defined only once in the type namespace of this module
+help: you can use `as` to change the binding name of the import
+  |
+2 | use m::S as OtherS;
+  |          +++++++++
+"#),
+    );
+}
+
+#[test]
+fn a_mismatched_argument_is_marked_at_the_argument() {
+    // rustc's E0308 at the argument, the callee labelled, where the
+    // expectation gives a generic call's parameter its type or the
+    // parameter's type is the function's own (#2498).
+    signature_verdict(
+        r#"trait Shape { fn area(&self) -> f64; }
+struct Sq(f64);
+struct Ci(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+impl Shape for Ci { fn area(&self) -> f64 { self.0 } }
+fn id<T: Shape>(t: T) -> T { t }
+fn main() { let mut x = id(Sq(1.0)); x = id(Ci(2.0)); println!("{}", x.area()); }
+main();
+"#,
+        Err(r#"
+error[E0308]: mismatched types
+ --> <script>:7:45
+  |
+7 | fn main() { let mut x = id(Sq(1.0)); x = id(Ci(2.0)); println!("{}", x.area()); }
+  |                                          -- ^^^^^^^ expected `Sq`, found `Ci`
+  |                                          |
+  |                                          arguments to this function are incorrect
+  |
+help: the return type of this call is `Ci` due to the type of the argument passed
+ --> <script>:7:42
+  |
+7 | fn main() { let mut x = id(Sq(1.0)); x = id(Ci(2.0)); println!("{}", x.area()); }
+  |                                          ^^^-------^
+  |                                             |
+  |                                             this argument influences the return type of `id`
+note: function defined here
+ --> <script>:6:4
+  |
+6 | fn id<T: Shape>(t: T) -> T { t }
+  |    ^^           ----
+"#),
+    );
+    signature_verdict(
+        r#"struct Sq(f64);
+struct Ci(f64);
+fn wrap<T>(t: T) -> Vec<T> { vec![t] }
+fn main() { let _v: Vec<Sq> = wrap(Ci(2.0)); }
+main();
+"#,
+        Err(r#"
+error[E0308]: mismatched types
+ --> <script>:4:36
+  |
+4 | fn main() { let _v: Vec<Sq> = wrap(Ci(2.0)); }
+  |                               ---- ^^^^^^^ expected `Sq`, found `Ci`
+  |                               |
+  |                               arguments to this function are incorrect
+  |
+help: the return type of this call is `Ci` due to the type of the argument passed
+ --> <script>:4:31
+  |
+4 | fn main() { let _v: Vec<Sq> = wrap(Ci(2.0)); }
+  |                               ^^^^^-------^
+  |                                    |
+  |                                    this argument influences the return type of `wrap`
+note: function defined here
+ --> <script>:3:4
+  |
+3 | fn wrap<T>(t: T) -> Vec<T> { vec![t] }
+  |    ^^^^    ----
+"#),
+    );
+    signature_verdict(
+        r#"struct Sq(f64);
+struct Ci(f64);
+fn take(t: Sq) -> Sq { t }
+fn main() { let _s = take(Ci(2.0)); }
+main();
+"#,
+        Err(r#"
+error[E0308]: mismatched types
+ --> <script>:4:27
+  |
+4 | fn main() { let _s = take(Ci(2.0)); }
+  |                      ---- ^^^^^^^ expected `Sq`, found `Ci`
+  |                      |
+  |                      arguments to this function are incorrect
+  |
+note: function defined here
+ --> <script>:3:4
+  |
+3 | fn take(t: Sq) -> Sq { t }
+  |    ^^^^ -----
+"#),
+    );
+}
+
+#[test]
+fn an_untyped_closure_adds_at_the_type_its_call_gives() {
+    // `a + b` of two closure parameters nothing has typed waits for the
+    // call, as rustc's obligation does, and is checked at that kind
+    // (#2512). The output is rustc's.
+    let output = printed(
+        r#"
+fn main() {
+    let f = |a, b| a + b;
+    let g = |a, b| a * b;
+    println!("{} {} {}", (|a, b| a + b)(3, 3), f(3, 3), g(2.5, 2.0));
+    println!("{} {}", (|a, b| a - b)(7u8, 2), (|a, b| a + b)(1.5f32, 0.1));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 6 5\n5 1.6\n");
+    let error = Engine::new()
+        .run("fn main() { let f = |a, b| a + b; let x: i8 = f(100i8, 100); println!(\"{}\", x); }\nmain();\n")
+        .expect_err("an `i8` sum past 127 panics");
+    assert!(
+        error.to_string().contains("attempt to add with overflow"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_program_traits_generic_method_through_its_path_takes_its_turbofish() {
+    // `Conv::conv::<u16>(&s)` and `<S as Conv>::conv` of a generic method
+    // run the impl's body at the call's type (#2513). The output is
+    // rustc's.
+    let output = printed(
+        r#"
+struct S(u8);
+trait Conv { fn conv<T: From<u8>>(&self) -> T; }
+impl Conv for S { fn conv<T: From<u8>>(&self) -> T { T::from(self.0) } }
+fn main() {
+    let s = S(3);
+    let b: f64 = Conv::conv(&s);
+    println!("{} {:?} {}", Conv::conv::<u16>(&s), b, <S as Conv>::conv::<u32>(&s));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 3.0 3\n");
+}
+
+#[test]
+fn a_trait_for_str_is_called_through_its_path_on_a_str() {
+    // `Shout::shout("hi")` takes `"hi"` as `&Self` of `impl Shout for str`,
+    // as `<str as ToString>::to_string("x")` does std's (#2514). The
+    // output is rustc's.
+    let output = printed(
+        r#"
+trait Shout { fn shout(&self) -> String; }
+impl Shout for str { fn shout(&self) -> String { self.to_uppercase() } }
+impl Shout for i32 { fn shout(&self) -> String { format!("{}!", self) } }
+fn main() {
+    println!("{} {} {}", Shout::shout("hi"), Shout::shout(&5), <str as Shout>::shout("x"));
+    println!("{}", <str as ToString>::to_string("y"));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "HI 5! X\ny\n");
+}
+
+#[test]
+fn an_iterator_parameter_with_no_item_written_has_its_methods() {
+    // `I: Iterator` with no `Item = T` has `I::Item` as a parameter of its
+    // own, so `i.count()` and `i.collect()` are the iterator's (#2507).
+    // The output is rustc's.
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+fn count<I: Iterator>(i: I) -> usize { i.count() }
+fn listed<I>(i: I) -> Vec<I::Item> where I: Iterator, I::Item: Debug { i.collect() }
+fn first<I: IntoIterator>(i: I) -> Option<I::Item> { i.into_iter().next() }
+fn main() {
+    println!("{} {:?} {:?}", count([1, 2].iter()), listed(vec![3, 4].into_iter()), first(vec!["a"]));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 [3, 4] Some(\"a\")\n");
+}
+
+#[test]
+fn a_method_whose_impl_bounds_fail_exists_but_is_e0599() {
+    // rustc's probe finds `show` of `impl<T: Debug> S<T>` and refuses it
+    // for `S<Opaque>` (#2504).
+    let report = refused(
+        r#"use std::fmt::Debug;
+struct Opaque;
+struct S<T>(T);
+impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+fn main() { S(Opaque).show(); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            r#"error[E0599]: the method `show` exists for struct `S<Opaque>`, but its trait bounds were not satisfied
+ --> <script>:5:23
+  |
+2 | struct Opaque;
+  | ------------- doesn't satisfy `Opaque: Debug`
+3 | struct S<T>(T);
+  | ----------- method `show` not found for this struct
+4 | impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+5 | fn main() { S(Opaque).show(); }
+  |                       ^^^^ method cannot be called on `S<Opaque>` due to unsatisfied trait bounds
+  |
+note: trait bound `Opaque: Debug` was not satisfied
+ --> <script>:4:9
+  |
+4 | impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+  |         ^^^^^  ----
+  |         |
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+"#
+        ),
+        "{report}"
+    );
+    // Two bounds of one type are listed together, and the derive names
+    // both.
+    let report = refused(
+        r#"use std::fmt::Debug;
+struct Opaque;
+struct S<T>(T);
+impl<T: Debug + Clone> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+fn main() { let s = S(Opaque); let r = &s; r.show(); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            r#"error[E0599]: the method `show` exists for reference `&S<Opaque>`, but its trait bounds were not satisfied
+ --> <script>:5:46
+  |
+2 | struct Opaque;
+  | ------------- doesn't satisfy `Opaque: Clone` or `Opaque: Debug`
+...
+5 | fn main() { let s = S(Opaque); let r = &s; r.show(); }
+  |                                              ^^^^ method cannot be called on `&S<Opaque>` due to unsatisfied trait bounds
+  |
+note: the following trait bounds were not satisfied:
+      `Opaque: Clone`
+      `Opaque: Debug`
+ --> <script>:4:9
+  |
+4 | impl<T: Debug + Clone> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+  |         ^^^^^   ^^^^^  ----
+  |         |       |
+  |         |       unsatisfied trait bound introduced here
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Clone, Debug)]`
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_traits_bounds_on_its_parameters_are_checked_at_its_impls() {
+    // `impl Show<Opaque> for A` of `trait Show<T> where T: Debug` is
+    // refused at its header, as rustc refuses it (#2505).
+    for (bound, column) in [("<T> where T: Debug", 24), ("<T: Debug>", 15)] {
+        let report = refused(&format!(
+            "use std::fmt::Debug;\nstruct Opaque;\nstruct A;\ntrait Show{bound} {{ fn show(&self) {{}} }}\nimpl Show<Opaque> for A {{}}\nfn main() {{}}\nmain();\n"
+        ));
+        let expected = format!(
+            r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:5:6
+  |
+5 | impl Show<Opaque> for A {{}}
+  |      ^^^^^^^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
+note: required by a bound in `Show`
+ --> <script>:4:{column}
+"#
+        );
+        assert!(report.starts_with(&expected), "{report}");
+        assert!(
+            report.contains("required by this bound in `Show`\nhelp: consider annotating `Opaque` with `#[derive(Debug)]`\n"),
+            "{report}"
+        );
+    }
 }

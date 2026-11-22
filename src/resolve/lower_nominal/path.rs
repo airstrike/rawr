@@ -1462,6 +1462,7 @@ impl<'a> Parser<'a> {
                 reference: member_span,
                 receiver: Box::new(this.receiver(owner_id, &Ty::Script(owner_id, Box::default()))),
                 similar,
+                unsatisfied: None,
             }
         };
         let Nominal::Enum { definition, item } = model else {

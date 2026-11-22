@@ -11,6 +11,9 @@ pub enum Category {
     DuplicateItem,
     /// Two imports bound one name in one namespace (rustc's E0252).
     DuplicateImport,
+    /// An import and a declaration bound one name in one namespace
+    /// (rustc's E0255).
+    Redefined,
     /// A type path in an item header could not be resolved.
     UnknownType,
     /// A compile-time import path is not present in static host metadata.
@@ -152,6 +155,7 @@ impl fmt::Display for Category {
         match self {
             Self::DuplicateItem => formatter.write_str("duplicate item"),
             Self::DuplicateImport => formatter.write_str("duplicate import"),
+            Self::Redefined => formatter.write_str("redefined import"),
             Self::UnknownType => formatter.write_str("unknown type"),
             Self::UnknownImport => formatter.write_str("unknown import"),
             Self::InvalidImport => formatter.write_str("invalid import"),
@@ -629,14 +633,16 @@ impl Error {
     }
 }
 
-/// A bound the program writes on a function's generic parameter, and the
-/// call whose argument doesn't meet it, as rustc's E0277 marks them.
+/// A bound the program writes on a function's or a trait's generic
+/// parameter, and the call argument or impl header that doesn't meet it,
+/// as rustc's E0277 marks them.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Bound {
     /// The bound: `Display` of `T: Display`.
     pub bound: Span,
-    /// The callee as the call names it.
-    pub callee: Span,
+    /// The callee as the call names it, or `None` for an impl header's
+    /// trait path, which no call needs.
+    pub callee: Option<Span>,
     /// The argument whose type the parameter is.
     pub argument: Span,
 }
@@ -723,6 +729,30 @@ pub struct Missing {
     pub placeholder: ImmutableString,
     /// The parameter where the program declares it, in the call's file.
     pub declared: Option<Span>,
+}
+
+/// An argument of a call whose type is not the one its parameter takes,
+/// as rustc's E0308 marks it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ArgumentMismatch {
+    /// The type the parameter takes.
+    pub expected: ImmutableString,
+    /// The argument's type.
+    pub actual: ImmutableString,
+    /// The argument.
+    pub argument: Span,
+    /// The callee as the call writes it.
+    pub callee: Span,
+    /// The call, from its callee through its `)`.
+    pub call: Span,
+    /// The function's name.
+    pub function: ImmutableString,
+    /// The parameter's type is a type parameter of the function its
+    /// output names, which the argument's type then gives the call's.
+    pub generic: bool,
+    /// The function's name and the parameter where the program defines
+    /// them, when that is in the call's file.
+    pub definition: Option<(Span, Span)>,
 }
 
 /// rustc's E0061 and E0057 message: "this function takes 2 arguments but 1
@@ -852,6 +882,21 @@ pub enum Error {
         declaration: Box<Import>,
         /// The first import.
         previous_declaration: Box<Import>,
+    },
+    /// An import bound a name in one of Rust's namespaces that a
+    /// declaration of the module binds there, rustc's E0255.
+    Redefined {
+        /// The name both bind.
+        name: ImmutableString,
+        /// The namespace they bind it in: `type`, `value` or `macro`.
+        namespace: &'static str,
+        /// The import, boxed to keep the error small.
+        import: Box<Import>,
+        /// The declaration's name.
+        definition: Span,
+        /// The import comes before the declaration, which rustc then
+        /// reports as the second: "redefined here".
+        imported_first: bool,
     },
     /// A trait name nothing in scope declares: rustc's E0405 "cannot find
     /// trait `Display` in this scope".
@@ -1066,7 +1111,7 @@ pub enum Error {
     /// A value a function returns whose lifetimes don't relate to its own
     /// signature's as the signature's types require, as rustc's borrow
     /// checker reports it (T170).
-    Outlives(Box<super::outlives::Report>),
+    Outlives(Box<super::outlives::Reports>),
     /// A `&mut` borrow of a place that a local not declared `mut` owns,
     /// which rustc refuses (E0596 "cannot borrow `c` as mutable, as it is
     /// not declared as mutable"), suggesting `mut` where the local is
@@ -1104,6 +1149,10 @@ pub enum Error {
         /// An item of the type whose name is like `member`, which rustc
         /// suggests.
         similar: Option<Box<Similar>>,
+        /// The impl's bounds the receiver's type arguments don't meet,
+        /// where the impl has the method: rustc's "the method exists but
+        /// its trait bounds were not satisfied".
+        unsatisfied: Option<Box<UnmetBounds>>,
     },
     /// A path names no item of a module that exists, as rustc's E0425
     /// "cannot find function `load` in module `google`": an item the crate
@@ -1169,6 +1218,9 @@ pub enum Error {
         /// Expression or assignment span.
         expression: Span,
     },
+    /// An argument whose type is not the one its parameter takes, rustc's
+    /// E0308 at the argument: "arguments to this function are incorrect".
+    ArgumentMismatch(Box<ArgumentMismatch>),
     /// A type mismatch where one type or both are a function's opaque
     /// output (D1109), which rustc's label describes as "opaque type".
     OpaqueMismatch {
@@ -1772,15 +1824,16 @@ impl Error {
         self
     }
 
-    /// The import `declaration` of `name`, the name at `named`, bound in
-    /// `namespace` where `previous` bound it before: rustc's E0252 when an
-    /// import did, a duplicate item at the name when a declaration did.
+    /// The import `declaration` of `name` bound in `namespace` where
+    /// `previous` bound it before: rustc's E0252 when an import did, and
+    /// its E0255 when a declaration of the module did, the declaration's
+    /// name in the import's source where `same_source`.
     pub(crate) fn duplicate(
         name: ImmutableString,
-        named: Span,
         namespace: &'static str,
         declaration: Import,
         previous: (Span, Option<Import>),
+        same_source: bool,
     ) -> Self {
         match previous {
             (_, Some(previous_declaration)) => Self::DuplicateImport {
@@ -1789,10 +1842,12 @@ impl Error {
                 declaration: Box::new(declaration),
                 previous_declaration: Box::new(previous_declaration),
             },
-            (previous_declaration, None) => Self::DuplicateItem {
+            (definition, None) => Self::Redefined {
                 name,
-                declaration: named,
-                previous_declaration,
+                namespace,
+                imported_first: same_source && declaration.written.start() < definition.start(),
+                import: Box::new(declaration),
+                definition,
             },
         }
     }
@@ -1913,6 +1968,7 @@ impl Error {
         match self {
             Self::DuplicateItem { .. } => Category::DuplicateItem,
             Self::DuplicateImport { .. } => Category::DuplicateImport,
+            Self::Redefined { .. } => Category::Redefined,
             Self::UnknownType { .. } => Category::UnknownType,
             Self::UnknownImport { .. } | Self::UnknownImports { .. } => Category::UnknownImport,
             Self::InvalidImport { .. } => Category::InvalidImport,
@@ -1936,9 +1992,10 @@ impl Error {
                 Category::BorrowConflict
             }
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
-            Self::TypeMismatch { .. } | Self::OpaqueMismatch { .. } | Self::Unboxed { .. } => {
-                Category::TypeMismatch
-            }
+            Self::TypeMismatch { .. }
+            | Self::ArgumentMismatch(_)
+            | Self::OpaqueMismatch { .. }
+            | Self::Unboxed { .. } => Category::TypeMismatch,
             Self::IfWithoutElse { .. } => Category::IfWithoutElse,
             Self::ReturnWithoutValue { .. } => Category::ReturnWithoutValue,
             Self::ImmutableBinding { .. } => Category::ImmutableBinding,
@@ -1990,6 +2047,7 @@ impl Error {
         match self {
             Self::DuplicateItem { name, .. }
             | Self::DuplicateImport { name, .. }
+            | Self::Redefined { name, .. }
             | Self::UnknownType { name, .. }
             | Self::UnknownFunction { name, .. }
             | Self::UnknownVariable { name, .. }
@@ -2000,7 +2058,7 @@ impl Error {
             Self::BorrowConflict { message, .. } | Self::ImmutableBorrow { message, .. } => {
                 message.as_str()
             }
-            Self::Outlives(report) => report.name(),
+            Self::Outlives(reports) => reports.first().name(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::UnknownImports { imports } => imports[0].name(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
@@ -2031,6 +2089,7 @@ impl Error {
             | Self::OpaqueMismatch { expected, .. }
             | Self::Unboxed { expected, .. }
             | Self::IfWithoutElse { expected, .. } => expected.as_str(),
+            Self::ArgumentMismatch(mismatch) => mismatch.expected.as_str(),
             Self::ReturnWithoutValue { output, .. } => output.as_str(),
             Self::ImmutableBinding { binding, .. } => binding.as_str(),
             Self::InvalidImplOwner { owner, .. }
@@ -2066,6 +2125,18 @@ impl Error {
         match self {
             Self::DuplicateItem { declaration, .. } => *declaration,
             Self::DuplicateImport { declaration, .. } => declaration.written,
+            Self::Redefined {
+                import,
+                definition,
+                imported_first,
+                ..
+            } => {
+                if *imported_first {
+                    *definition
+                } else {
+                    import.written
+                }
+            }
             Self::UnknownType { reference, .. } => *reference,
             Self::UnknownImport { reference, .. }
             | Self::InvalidImport { reference, .. }
@@ -2092,12 +2163,13 @@ impl Error {
             | Self::WrongKind { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } | Self::ImmutableBorrow { access, .. } => *access,
-            Self::Outlives(report) => report.returned(),
+            Self::Outlives(reports) => reports.first().returned(),
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. }
             | Self::OpaqueMismatch { expression, .. }
             | Self::Unboxed { expression, .. }
             | Self::IfWithoutElse { expression, .. } => *expression,
+            Self::ArgumentMismatch(mismatch) => mismatch.argument,
             Self::ReturnWithoutValue { at, .. } => *at,
             Self::ImmutableBinding { mutation, .. } => *mutation,
             Self::InvalidImplOwner { reference, .. } => *reference,
@@ -2150,6 +2222,16 @@ impl Error {
                 previous_declaration,
                 ..
             } => Some(previous_declaration.written),
+            Self::Redefined {
+                import,
+                definition,
+                imported_first,
+                ..
+            } => Some(if *imported_first {
+                import.written
+            } else {
+                *definition
+            }),
             Self::InvalidDerive { declaration, .. } => Some(*declaration),
             Self::ExpansionRequired { .. } => None,
             Self::DuplicateMember {
@@ -2230,6 +2312,7 @@ impl Error {
             | Self::ArgumentSignature { .. }
             | Self::OverflowingLiteral { .. }
             | Self::KnownPanic { .. } => None,
+            Self::ArgumentMismatch(mismatch) => Some(mismatch.callee),
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -2299,6 +2382,31 @@ pub struct Similar {
     pub declared: Span,
     /// How rustc shows it.
     pub shown: Shown,
+}
+
+/// The impl bounds a method's receiver doesn't meet, as rustc's E0599
+/// notes them.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UnmetBounds {
+    /// The impl's self type: `S<T>` of `impl<T: Debug> S<T>`.
+    pub owner: Span,
+    /// Each bound unmet, in the order the impl writes them.
+    pub bounds: Box<[UnmetBound]>,
+}
+
+/// An impl's bound a type argument doesn't meet: `Opaque: Debug`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UnmetBound {
+    /// The type argument, as rustc names it.
+    pub ty: ImmutableString,
+    /// The bound's trait.
+    pub trait_name: ImmutableString,
+    /// Where the impl writes the bound.
+    pub bound: Span,
+    /// The type argument's name where the program declares it.
+    pub declared: Option<Span>,
+    /// Whether the trait derives for it, as rustc suggests.
+    pub derive: bool,
 }
 
 /// How rustc shows a [`Similar`] item.
@@ -3121,6 +3229,16 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "duplicate item `{name}` at {declaration}; first declared at {previous_declaration}"
             ),
+            Error::Redefined {
+                name,
+                import,
+                definition,
+                ..
+            } => write!(
+                formatter,
+                "the name `{name}` is defined multiple times at {}; declared at {definition}",
+                import.written
+            ),
             Error::DuplicateImport {
                 name,
                 declaration,
@@ -3311,12 +3429,12 @@ impl fmt::Display for Written<'_> {
             Error::ImmutableBorrow {
                 message, access, ..
             } => write!(formatter, "{message} at {access} (E0596)"),
-            Error::Outlives(report) => write!(
+            Error::Outlives(reports) => write!(
                 formatter,
                 "{} at {} ({})",
-                report.message(),
-                report.returned(),
-                report.code()
+                reports.first().message(),
+                reports.first().returned(),
+                reports.first().code()
             ),
             Error::InvalidConstruction {
                 owner,
@@ -3345,6 +3463,11 @@ impl fmt::Display for Written<'_> {
             } => write!(
                 formatter,
                 "mismatched types at {expression}: expected `{expected}`, found `{actual}` (E0308)"
+            ),
+            Error::ArgumentMismatch(mismatch) => write!(
+                formatter,
+                "mismatched types at {}: expected `{}`, found `{}` (E0308)",
+                mismatch.argument, mismatch.expected, mismatch.actual
             ),
             Error::IfWithoutElse {
                 expected,

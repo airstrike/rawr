@@ -304,6 +304,24 @@ pub(crate) struct Names {
     /// Why each of the output's invariant positions is so, as rustc's
     /// notes say.
     pub(crate) variances: Vec<(signature::Invariance, super::outlives::Variance)>,
+    /// What rustc's suggestion of a named lifetime reads of the signature.
+    pub(crate) naming: Naming,
+}
+
+/// What rustc's suggestion of one named lifetime for two reads of a
+/// function's own signature.
+#[derive(Clone, Debug)]
+pub(crate) struct Naming {
+    /// Each elided lifetime, by its number less one.
+    pub(crate) elisions: Vec<signature::Elision>,
+    /// How many of them the inputs elide: the output's follow.
+    pub(crate) input_elided: usize,
+    /// The function's first lifetime parameter, which it reuses.
+    pub(crate) first: Option<ImmutableString>,
+    /// Where it declares a new one otherwise.
+    pub(crate) introduced: Option<super::item::Introduced>,
+    /// The function is in an impl.
+    pub(crate) implemented: bool,
 }
 
 impl Body {
@@ -397,7 +415,7 @@ pub(crate) struct Conflict {
     pub(crate) borrow: Span,
     /// rustc's report of a returned value that breaks the function's own
     /// signature, which says more than the conflict.
-    pub(crate) report: Option<Box<super::outlives::Report>>,
+    pub(crate) report: Option<Box<super::outlives::Reports>>,
 }
 
 /// The first borrow error in `body` under `rule`, in the order the body
