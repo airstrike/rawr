@@ -474,8 +474,9 @@ struct Parser<'a> {
     /// as values that are not `Copy` do.
     owning_closures: BTreeSet<crate::item::Key>,
     /// The closures that move out a capture: `FnOnce`, so a call moves
-    /// the closure.
-    once_closures: BTreeSet<crate::item::Key>,
+    /// the closure. Each has where it is written, and the capture it first
+    /// moves out whole and where.
+    once_closures: BTreeMap<crate::item::Key, (Span, Option<(ImmutableString, Span)>)>,
     /// The `Copy` closures that change what they captured by value, with
     /// those captures: a copy of one has its own (`KEYWORD_COPY_CLOSURE`).
     copied_state: BTreeMap<crate::item::Key, Vec<ImmutableString>>,
@@ -1068,7 +1069,7 @@ impl<'a> Parser<'a> {
             destructuring: BTreeSet::new(),
             index_mut_elements: BTreeSet::new(),
             owning_closures: BTreeSet::new(),
-            once_closures: BTreeSet::new(),
+            once_closures: BTreeMap::new(),
             copied_state: BTreeMap::new(),
             shared_call_fns: BTreeSet::new(),
             closure_count: 0,

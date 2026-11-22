@@ -8,6 +8,30 @@
   },
   "releases": [
     {
+      "version": "0.5.18",
+      "date": "2026-11-22",
+      "entries": [
+        {"text":"A pattern naming a float constant matches its value, and a suffixed number can end a match or if head.","issues":[2508]},
+        {"text":"A parameter pattern's literal takes its suffix, and a literal of one integer or float type no longer matches another.","issues":[2510]},
+        {"text":"match x { ref v => .. } and ref mut arms bind a borrow of the matched value for every type.","issues":[194]},
+        {"text":"An element borrow past the end panics where the borrow is made, as rustc's does.","issues":[410]},
+        {"text":"A primitive op= through a RefCell borrow evaluates its right side first, as rustc does.","issues":[3]},
+        {"text":"A whole Option<&mut T> binding beside &mut bindings of its value works for a call's value.","issues":[166]},
+        {"text":"A part with drop glue moves out below a field or a member, and the rest drops where rustc drops it.","issues":[196]},
+        {"text":"`<T>::f(..)`, a qualified path without a trait, runs as `T::f(..)`.","issues":[378]},
+        {"text":"A generic trait's associated type bound may name the trait's parameters (`type Out: Iterator<Item = T>`), and an impl that breaks such a bound is rustc's E0271.","issues":[382]},
+        {"text":"A turbofish counts a parameter bounded by `Fn` or `Iterator<Item = T>`, and a wrong count is rustc's E0107.","issues":[408]},
+        {"text":"A closure argument is read after the argument that fixes its parameter types, as rustc checks closures last.","issues":[409]},
+        {"text":"`where Self: Sized` on a trait method parses and keeps the method out of `dyn Trait`. In a free function it is E0411.","issues":[802]},
+        {"text":"`?` converts an error through std's `From` impls, such as `&str` into `String`.","issues":[1034]},
+        {"text":"An `Err(e)` arm where a `Result<_, Box<dyn Error>>` is expected is rustc's E0308 instead of being boxed.","issues":[1430]},
+        {"text":"A prelude type imported under another name (`use std::string::String as Text;`) works in bodies, and `pub use inner::*;` re-exports inner's names, each no further than its item reaches.","issues":[810,1349]},
+        {"text":"A Read, Write or BufRead method of Stdin, Stdout, Stderr, File or Cursor needs its trait in scope, with rustc's E0599 and its `use` help, and a Cursor's lines run.","issues":[1427]},
+        {"text":"std::iter's repeat, repeat_n, repeat_with, once, once_with, empty, from_fn and successors run, as far as the chain pulls.","issues":[2593]},
+        {"text":"std's io::BufReader runs over a File, Stdin or Cursor, and io::BufWriter over a File, flushing when it is dropped.","issues":[2580]}
+      ]
+    },
+    {
       "version": "0.5.17",
       "date": "2026-11-22",
       "entries": [

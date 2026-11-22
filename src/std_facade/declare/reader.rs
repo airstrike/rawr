@@ -150,8 +150,12 @@ impl<'a> Reader<'a> {
             // What a `Cow` holds is copied out: the type its `ToOwned`
             // makes.
             "alloc::borrow::Cow" => {
-                let owned =
-                    solve::associated("alloc::borrow::ToOwned", arguments.first()?, "Owned")?;
+                let owned = solve::associated(
+                    "alloc::borrow::ToOwned",
+                    arguments.first()?,
+                    "Owned",
+                    self.parameters,
+                )?;
                 // A `Cow<str>` is std's own, as a program's is.
                 return match self.host(&owned)? {
                     owned if matches!(owned.shape(), Shape::Builtin(Builtin::String)) => {
@@ -189,12 +193,21 @@ impl<'a> Reader<'a> {
         if !self.output {
             return None;
         }
+        // `Lines<Self>` is the lines of the type `Self` stands for.
         let written = Written::Path {
             path,
-            arguments: arguments.to_vec(),
+            arguments: arguments
+                .iter()
+                .map(|argument| solve::substitute(argument, &self.names))
+                .collect(),
             bindings: Vec::new(),
         };
-        let item = solve::associated("core::iter::traits::iterator::Iterator", &written, "Item")?;
+        let item = solve::associated(
+            "core::iter::traits::iterator::Iterator",
+            &written,
+            "Item",
+            self.parameters,
+        )?;
         Some(Type::iterator(self.host(&item)?))
     }
 
@@ -319,7 +332,7 @@ impl<'a> Reader<'a> {
         };
         let slots = arguments.into_iter().map(Slot::Known).collect::<Vec<_>>();
         let mut types = Vec::<Written>::new();
-        for ty in solve::solve(trait_, &Slot::Unknown, &slots, solve::DEPTH) {
+        for ty in solve::solve(trait_, &Slot::Unknown, &slots, &[], solve::DEPTH) {
             let ty = match ty {
                 Written::Reference { target, .. } => Written::Reference {
                     mutable: false,

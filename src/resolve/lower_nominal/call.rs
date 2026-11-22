@@ -711,7 +711,7 @@ impl<'a> Parser<'a> {
         }
         // A closure that moves out a capture is `FnOnce`: its call moves it.
         if let Ty::FnItem { key, .. } = &ty
-            && self.once_closures.contains(&**key)
+            && self.once_closures.contains_key(&**key)
             && matches!(binding.kind, BindingKind::Local)
         {
             let declaration = binding.declaration;
@@ -1530,6 +1530,7 @@ impl<'a> Parser<'a> {
                         .flatten()
                         .unwrap_or(error));
                 }
+                self.closure_kind_needed(&parameter.ty, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.store_argument(&parameter.ty, argument)?;
                 self.move_local(argument)?;
@@ -1771,57 +1772,53 @@ impl<'a> Parser<'a> {
         let mut hints = std::mem::take(&mut self.closure_hints).into_iter();
         let mut outputs = std::mem::take(&mut self.closure_outputs).into_iter();
         let mut returns = std::mem::take(&mut self.closure_returns).into_iter();
+        // Closures whose parameter types a later argument fixes, read after
+        // the others, as rustc checks closure arguments last.
+        let mut postponed = Vec::new();
         while !matches!(self.peek(), Token::RightParen) {
             if self.element_left_out()? {
                 continue;
             }
-            let outer = std::mem::replace(&mut self.no_struct, false);
-            self.closure_hint = hints.next().flatten();
-            if self.closure_hint.is_none()
+            let mut argument = Argument {
+                index: arguments.len() + postponed.len(),
+                tokens: Vec::new(),
+                hint: hints.next().flatten(),
+                output: outputs.next().flatten(),
+                returns: returns.next().flatten(),
+                expected: expected.next().flatten(),
+                generic: generic.next(),
+            };
+            if argument.hint.is_none()
                 && let Some((items, receiver)) = &deferred
             {
-                self.closure_hint =
-                    self.overload_closure_hint(items, receiver.as_ref(), &arguments);
+                argument.hint = self.overload_closure_hint(items, receiver.as_ref(), &arguments);
             }
-            self.closure_output = outputs.next().flatten();
-            self.closure_return = returns.next().flatten();
-            let expected = expected.next().flatten();
-            let generic = generic.next();
-            // A closure where a crate function takes `impl Fn(f32) -> C`
-            // has those parameter types, as in Rust.
-            if self.closure_hint.is_none()
-                && let Some(Ty::Fn { inputs, .. }) = expected
+            if argument.hint.is_none()
+                && argument.expected.is_none()
+                && let Some(Ty::Fn { inputs, .. }) = argument
+                    .generic
                     .as_ref()
-                    .or(generic.as_ref())
-                    .map(|expected| self.inference.resolve(expected))
-                && !inputs.iter().any(contains_inference)
+                    .map(|generic| self.inference.resolve(generic))
+                && inputs.iter().any(contains_inference)
+                && let Some(tokens) = self.take_closure_argument()
             {
-                self.closure_hint = Some(inputs);
+                argument.tokens = tokens;
+                postponed.push(argument);
+                continue;
             }
-            self.script_callable = script_callables;
-            let argument = self.parse_expr_expecting(expected.as_ref());
-            // An argument of a generic function fixes the parameters its
-            // type gives, unless it is one a coercion takes, which the call
-            // checks once all are read.
-            if let (Ok(argument), Some(generic)) = (&argument, &generic) {
-                let checkpoint = self.inference.checkpoint();
-                if self.unify_type(generic, &argument.ty) {
-                    self.inference.commit(checkpoint);
-                } else {
-                    self.inference.rollback(checkpoint);
-                }
-            }
-            self.script_callable = false;
-            self.closure_hint = None;
-            self.closure_output = None;
-            self.closure_return = None;
-            self.no_struct = outer;
-            arguments.push(argument?);
+            let parsed = self.parse_argument(argument, script_callables)?;
+            arguments.push(parsed);
             if matches!(self.peek(), Token::Comma) {
                 self.next();
             } else if !matches!(self.peek(), Token::RightParen) {
                 return Err(self.unsupported(context));
             }
+        }
+        for mut argument in postponed {
+            self.splice_tokens(std::mem::take(&mut argument.tokens));
+            let index = argument.index;
+            let parsed = self.parse_argument(argument, script_callables)?;
+            arguments.insert(index, parsed);
         }
         let end = self.expect(Token::RightParen, "')' after call arguments")?;
         let operands: Vec<_> = arguments
@@ -1830,6 +1827,115 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow().call_operands(&operands, end);
         Ok((arguments, end))
+    }
+
+    /// One call argument, read with what the call expects of it.
+    fn parse_argument(
+        &mut self,
+        argument: Argument,
+        script_callables: bool,
+    ) -> Result<ParsedExpr, Error> {
+        let outer = std::mem::replace(&mut self.no_struct, false);
+        self.closure_hint = argument.hint;
+        self.closure_output = argument.output;
+        self.closure_return = argument.returns;
+        // A closure where a crate function takes `impl Fn(f32) -> C`
+        // has those parameter types, as in Rust.
+        if self.closure_hint.is_none()
+            && let Some(Ty::Fn { inputs, .. }) = argument
+                .expected
+                .as_ref()
+                .or(argument.generic.as_ref())
+                .map(|expected| self.inference.resolve(expected))
+            && !inputs.iter().any(contains_inference)
+        {
+            self.closure_hint = Some(inputs);
+        }
+        self.script_callable = script_callables;
+        let parsed = self.parse_expr_expecting(argument.expected.as_ref());
+        // An argument of a generic function fixes the parameters its
+        // type gives, unless it is one a coercion takes, which the call
+        // checks once all are read.
+        if let (Ok(parsed), Some(generic)) = (&parsed, &argument.generic) {
+            let checkpoint = self.inference.checkpoint();
+            if self.unify_type(generic, &parsed.ty) {
+                self.inference.commit(checkpoint);
+            } else {
+                self.inference.rollback(checkpoint);
+            }
+        }
+        self.script_callable = false;
+        self.closure_hint = None;
+        self.closure_output = None;
+        self.closure_return = None;
+        self.no_struct = outer;
+        parsed
+    }
+
+    /// The tokens of the closure the next argument is, with the `,` after
+    /// it consumed, when another argument follows it; `None`, consuming
+    /// nothing, for any other argument.
+    fn take_closure_argument(&mut self) -> Option<Vec<(Token, Position)>> {
+        let mut ahead = self.input.clone().map(|(token, _)| token).peekable();
+        let mut length = 1_usize;
+        let mut head = ahead.next()?;
+        if matches!(&head, Token::Identifier(name) if name.as_str() == "move") {
+            head = ahead.next()?;
+            length += 1;
+        }
+        // The parameters: up to the `|` that closes them.
+        match head {
+            Token::Or => {}
+            Token::Pipe => {
+                let mut depth = 0_usize;
+                loop {
+                    length += 1;
+                    match ahead.next()? {
+                        Token::Pipe if depth == 0 => break,
+                        Token::LeftParen | Token::LeftBracket | Token::LessThan => depth += 1,
+                        Token::RightParen | Token::RightBracket | Token::GreaterThan => {
+                            depth = depth.checked_sub(1)?;
+                        }
+                        Token::RightShift => depth = depth.checked_sub(2)?,
+                        Token::EOF => return None,
+                        _ => {}
+                    }
+                }
+            }
+            _ => return None,
+        }
+        // The body: up to the `,` after it, past any a bracket or a
+        // turbofish holds.
+        let mut depth = 0_usize;
+        let mut angles = 0_usize;
+        let mut previous = Token::EOF;
+        loop {
+            let token = ahead.next()?;
+            match &token {
+                Token::Comma if depth == 0 && angles == 0 => break,
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen if depth == 0 => return None,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.checked_sub(1)?;
+                }
+                Token::LessThan if angles > 0 || previous == Token::DoubleColon => angles += 1,
+                Token::GreaterThan if angles > 0 => angles -= 1,
+                Token::RightShift if angles > 0 => angles = angles.saturating_sub(2),
+                Token::EOF => return None,
+                _ => {}
+            }
+            length += 1;
+            previous = token;
+        }
+        if matches!(ahead.peek(), Some(Token::RightParen | Token::EOF) | None) {
+            return None;
+        }
+        let tokens = (0..length).map(|_| self.next()).collect();
+        // The `,` after it.
+        self.next();
+        Some(tokens)
     }
 
     pub(super) fn require_arguments(
@@ -1873,6 +1979,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
+            self.closure_kind_needed(&parameter.ty, argument)?;
             self.store_argument(&parameter.ty, argument)?;
             self.move_local(argument)?;
             self.move_generic_reference(argument, &parameter.ty);
@@ -2160,4 +2267,19 @@ impl Called<'_> {
             },
         )))
     }
+}
+
+/// A call argument and what the call expects of it: its place among the
+/// arguments, the closure parameter types and output it is given, its
+/// expected type, and its generic parameter's type. A closure read after
+/// the arguments that follow it keeps its tokens.
+struct Argument {
+    index: usize,
+    tokens: Vec<(Token, Position)>,
+    hint: Option<Box<[Ty]>>,
+    output: Option<closure::Output>,
+    /// The return type std's `Fn` bound gives a closure argument (#804).
+    returns: Option<Ty>,
+    expected: Option<Ty>,
+    generic: Option<Ty>,
 }

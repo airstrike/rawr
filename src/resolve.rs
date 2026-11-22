@@ -781,6 +781,7 @@ fn resolve_with_evidence_and_namespace(
         .map_err(LocatedError::into_error)?;
     let (methods, builtin_methods, std_traits) =
         resolve_methods(&mut items, &definitions, host).map_err(LocatedError::into_error)?;
+    elided_lifetimes(&items).map_err(LocatedError::into_error)?;
     resolve_functions(&mut items).map_err(LocatedError::into_error)?;
 
     let program = Program {
@@ -1001,7 +1002,7 @@ pub(crate) fn lower_resolved(
 /// variant's payload, where no elision gives it one: rustc's E0106. A
 /// function type's or a trait object's own references may leave it out.
 fn missing_lifetime(ty: &crate::item::type_ref::Type) -> Result<(), Error> {
-    use crate::item::type_ref::{Argument, Type, DYN_SEGMENT, FN_MUT_TYPE, FN_TYPE};
+    use crate::item::type_ref::{is_fn_type, Argument, Type, DYN_SEGMENT};
     match ty {
         Type::Unit(_) => Ok(()),
         Type::Tuple { members, .. } => members.iter().try_for_each(missing_lifetime),
@@ -1018,10 +1019,7 @@ fn missing_lifetime(ty: &crate::item::type_ref::Type) -> Result<(), Error> {
         Type::Reference { target, .. } => missing_lifetime(target),
         Type::Path(path)
             if path.segments.first().is_some_and(|segment| {
-                matches!(
-                    segment.name.text.as_str(),
-                    FN_TYPE | FN_MUT_TYPE | DYN_SEGMENT
-                )
+                is_fn_type(&segment.name.text) || segment.name.text == DYN_SEGMENT
             }) =>
         {
             Ok(())
@@ -2579,6 +2577,7 @@ fn resolve_item(
             );
             let mut fields = Vec::with_capacity(parsed.fields.len());
             let mut names = BTreeMap::new();
+            let mut unnamed = Vec::new();
 
             for field in parsed.fields.into_vec() {
                 if let Some(previous_declaration) =
@@ -2592,6 +2591,7 @@ fn resolve_item(
                     });
                 }
                 missing_lifetime(&field.ty)?;
+                unnamed_lifetimes(&field.ty, types, &mut unnamed);
                 let shared_str = matches!(
                     &field.ty,
                     crate::item::type_ref::Type::Reference { mutable: false, target, .. }
@@ -2623,6 +2623,7 @@ fn resolve_item(
                 where_bounds,
                 lifetimes: parsed.lifetimes.params.len(),
                 regions,
+                unnamed: unnamed.into_boxed_slice(),
                 fields: fields.into_boxed_slice(),
                 form: parsed.form,
             })
@@ -2647,6 +2648,7 @@ fn resolve_item(
             );
             let mut variants = Vec::with_capacity(parsed.variants.len());
             let mut names = BTreeMap::new();
+            let mut unnamed = Vec::new();
 
             for variant in parsed.variants.into_vec() {
                 if let Some(previous_declaration) =
@@ -2663,6 +2665,7 @@ fn resolve_item(
 
                 for ty in variant.payload.into_vec() {
                     missing_lifetime(&ty)?;
+                    unnamed_lifetimes(&ty, types, &mut unnamed);
                     payload.push(type_ref::resolve(
                         ty,
                         types,
@@ -2693,6 +2696,7 @@ fn resolve_item(
                 where_bounds,
                 lifetimes: parsed.lifetimes.params.len(),
                 regions,
+                unnamed: unnamed.into_boxed_slice(),
                 variants: variants.into_boxed_slice(),
             })
         }
@@ -2953,17 +2957,6 @@ fn resolve_item(
                         .collect::<Result<Box<[_]>, _>>()
                 })
                 .collect::<Result<Box<[_]>, _>>()?;
-            // A projection does not carry its trait's arguments, which such
-            // an equality's type may name.
-            if !trait_generics.is_empty()
-                && let Some((_, name, _)) = associated_equalities.iter().flatten().next()
-            {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "an equality in the bounds of a generic trait's associated type"
-                        .into(),
-                    source: name.span,
-                });
-            }
             item::Kind::Trait(item::Trait {
                 header: parsed.header,
                 name: parsed.name,
@@ -3048,6 +3041,15 @@ fn resolve_function(
         return Err(Error::SelfOutsideImpl {
             reference,
             parameter: true,
+        });
+    }
+    // `fn f() where Self: Sized`: no `Self` outside an impl or a trait.
+    if !inside_impl && let Some(reference) = parsed.sized_self {
+        return Err(Error::UnknownType {
+            name: "Self".into(),
+            reference,
+            path: false,
+            imports: Box::default(),
         });
     }
     erase_trait_generics(&mut parsed, types, host);
@@ -3185,6 +3187,7 @@ fn resolve_function(
         opaque: Box::default(),
         opaque_outputs,
         formatter,
+        sized_self: parsed.sized_self,
     })
 }
 
@@ -5439,6 +5442,89 @@ fn trait_impl_functions(
     Ok(implemented)
 }
 
+/// A field's or a payload's type that names one of the program's types
+/// declaring lifetimes with none of them (`w: Wrapper` of `Wrapper<'a>`):
+/// rustc's E0106, at the type's name.
+fn elided_lifetimes(items: &[item::Shell]) -> Result<(), LocatedError> {
+    let lifetimes = items
+        .iter()
+        .filter_map(|shell| match &shell.kind {
+            item::Kind::Struct(own) => Some((own.definition, own.lifetimes)),
+            item::Kind::Enum(own) => Some((own.definition, own.lifetimes)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    for shell in items {
+        let unnamed = match &shell.kind {
+            item::Kind::Struct(own) => &own.unnamed,
+            item::Kind::Enum(own) => &own.unnamed,
+            _ => continue,
+        };
+        if let Some((_, span)) = unnamed
+            .iter()
+            .find(|(definition, _)| lifetimes.get(definition).is_some_and(|count| *count > 0))
+        {
+            return Err(LocatedError::primary(
+                shell.source,
+                Error::BorrowConflict {
+                    code: "E0106",
+                    message: "missing lifetime specifier".into(),
+                    access: *span,
+                    borrow: Span::NONE,
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Each type `ty` names by one segment with no lifetime argument that
+/// `types` says is one of the program's, with where its name is: one
+/// declaring a lifetime leaves it out ([`elided_lifetimes`]). A function
+/// type's or a trait object's own arguments may leave it out.
+fn unnamed_lifetimes(
+    ty: &crate::item::type_ref::Type,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+    unnamed: &mut Vec<(type_def::Id, Span)>,
+) {
+    use crate::item::type_ref::{is_fn_type, Argument, Type, DYN_SEGMENT};
+    match ty {
+        Type::Unit(_) => {}
+        Type::Tuple { members, .. } => {
+            for member in members {
+                unnamed_lifetimes(member, types, unnamed);
+            }
+        }
+        Type::Reference { target, .. } => unnamed_lifetimes(target, types, unnamed),
+        Type::Path(path) => {
+            if path.segments.first().is_some_and(|segment| {
+                is_fn_type(&segment.name.text) || segment.name.text == DYN_SEGMENT
+            }) {
+                return;
+            }
+            if let [segment] = &path.segments[..]
+                && !segment
+                    .arguments
+                    .iter()
+                    .any(|argument| matches!(argument, Argument::Lifetime(_)))
+                && let Some(type_ref::Target::Script { definition, .. }) =
+                    types.get(segment.name.text.as_str())
+            {
+                unnamed.push((*definition, segment.name.span));
+            }
+            for argument in path
+                .segments
+                .iter()
+                .flat_map(|segment| segment.arguments.iter())
+            {
+                if let Argument::Type(ty) = argument {
+                    unnamed_lifetimes(ty, types, unnamed);
+                }
+            }
+        }
+    }
+}
+
 fn resolve_functions(items: &mut [item::Shell]) -> Result<(), LocatedError> {
     for shell in items {
         let item::Kind::Function(function) = &mut shell.kind else {
@@ -5729,13 +5815,8 @@ fn resolve_bounds_with_arguments(
             // impl's or fn's, which rawr erases as rustc's borrow check
             // has already judged them.
             if let [segment] = &bound.segments[..]
-                && !matches!(
-                    segment.name.text.as_str(),
-                    "Fn" | "FnMut"
-                        | "FnOnce"
-                        | crate::item::type_ref::FN_TYPE
-                        | crate::item::type_ref::FN_MUT_TYPE
-                )
+                && !matches!(segment.name.text.as_str(), "Fn" | "FnMut" | "FnOnce")
+                && !crate::item::type_ref::is_fn_type(&segment.name.text)
             {
                 traits.push(segment.name.clone());
                 let arguments = type_arguments(segment);
@@ -6153,7 +6234,12 @@ fn dyn_own_incompatibility(
             reference: span,
         });
     }
-    for function in &declared.functions {
+    // A method `where Self: Sized` is no method of `dyn Trait`.
+    for function in declared
+        .functions
+        .iter()
+        .filter(|function| function.sized_self.is_none())
+    {
         let member = &function.name.text;
         if function.body.constant {
             return Some(error(member, "it contains this associated const"));
@@ -6582,13 +6668,8 @@ fn borrows_mutably(ty: &type_ref::Type) -> bool {
         } => *mutable || borrows_mutably(target),
         type_ref::Type::Tuple { members, .. } => members.iter().any(borrows_mutably),
         type_ref::Type::Path(path)
-            if matches!(
-                path.name.as_str(),
-                "Fn" | "FnMut"
-                    | "FnOnce"
-                    | crate::item::type_ref::FN_TYPE
-                    | crate::item::type_ref::FN_MUT_TYPE
-            ) =>
+            if matches!(path.name.as_str(), "Fn" | "FnMut" | "FnOnce")
+                || crate::item::type_ref::is_fn_type(&path.name) =>
         {
             false
         }

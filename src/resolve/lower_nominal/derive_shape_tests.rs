@@ -153,7 +153,10 @@ fn a_method_turbofish_names_the_methods_own_parameters() {
         "struct S; impl S { fn get<T: Default>(&self) -> T { T::default() } } \
          pub fn run() -> String { let n: i64 = S.get::<i64, i64>(); format!(\"{n}\") } run()",
     );
-    assert!(error.contains("expected 1, found 2"), "{error}");
+    assert!(
+        error.contains("method takes 1 generic argument but 2 generic arguments were supplied"),
+        "{error}"
+    );
 }
 
 #[test]

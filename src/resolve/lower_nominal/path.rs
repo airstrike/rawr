@@ -4,6 +4,69 @@
 use super::*;
 
 impl<'a> Parser<'a> {
+    /// The tokens of `<Type>::item` after its `<`, spelled as the path
+    /// `Type::item` it means, with a turbofish where `Type` has arguments
+    /// (`<Vec<i32>>::new` is `Vec::<i32>::new`). `None` when the angle
+    /// brackets hold `as Trait`, or a type that is not a path. With the
+    /// path comes the number of tokens it replaces, its closing `>` included.
+    pub(super) fn inherent_qualified_path(&self) -> Option<(usize, Vec<(Token, Position)>)> {
+        let mut ahead = self.input.clone();
+        let mut written = Vec::new();
+        let mut depth = 1_usize;
+        let mut replaced = 0_usize;
+        loop {
+            let (token, position) = ahead.next()?;
+            replaced += 1;
+            match token {
+                Token::As if depth == 1 => return None,
+                Token::LessThan => depth += 1,
+                Token::GreaterThan => depth -= 1,
+                Token::RightShift if depth >= 2 => {
+                    depth -= 2;
+                    if depth == 0 {
+                        // The first `>` closes the type's own arguments.
+                        written.push((Token::GreaterThan, position));
+                    }
+                }
+                Token::RightShift => return None,
+                Token::EOF | Token::SemiColon | Token::LeftBrace | Token::RightBrace => {
+                    return None;
+                }
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            written.push((token, position));
+        }
+        if !matches!(written.first(), Some((Token::Identifier(_), _)))
+            || !matches!(ahead.peek(), Some((Token::DoubleColon, _)))
+        {
+            return None;
+        }
+        // The path's own arguments take a turbofish. Those nested in them
+        // are a type's and keep their spelling.
+        let mut path = Vec::with_capacity(written.len() + 2);
+        let mut depth = 0_usize;
+        for (token, position) in written {
+            match token {
+                Token::LessThan => {
+                    if depth == 0 && !matches!(path.last(), Some((Token::DoubleColon, _))) {
+                        path.push((Token::DoubleColon, position));
+                    }
+                    depth += 1;
+                }
+                Token::GreaterThan => depth = depth.saturating_sub(1),
+                Token::RightShift => depth = depth.saturating_sub(2),
+                Token::Identifier(_) | Token::DoubleColon => {}
+                _ if depth == 0 => return None,
+                _ => {}
+            }
+            path.push((token, position));
+        }
+        Some((replaced, path))
+    }
+
     /// A path expression from its first segment. One that names a std
     /// item Rawr can't run yet says so (D712.1). An unknown name in the
     /// path's arguments, as one in `thread::spawn`'s closure, is that name's

@@ -591,16 +591,61 @@ export function siteData(plan) {
     })),
     groups: groups.map((g) => ({
       ...g,
-      rows: g.rows.map((r) => ({
-        ...r,
-        note: text(r.note),
-        issues: r.issues.map((n) => {
-          const i = items.get(n);
-          return { number: n, title: i ? title(i) : `#${n}`, state: i?.state ?? "open" };
-        }),
-      })),
+      rows: g.rows.flatMap((r) =>
+        milestoneSlices(r, items, milestoneOf(version)).map(({ milestone, ...slice }) => ({
+          ...Object.fromEntries(Object.entries(r).filter(([key]) => key !== "milestone")),
+          ...slice,
+          ...(milestone ? { milestone } : {}),
+          note: text(r.note),
+          issues: slice.issues.map((n) => {
+            const i = items.get(n);
+            return { number: n, title: i ? title(i) : `#${n}`, state: i?.state ?? "open" };
+          }),
+        })),
+      ),
     })),
   };
+}
+
+const versionOrder = (a, b) => {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  return x[0] - y[0] || x[1] - y[1];
+};
+
+// A row as the milestones its issues belong to. An issue that shipped
+// belongs to its release's milestone, and every other issue to the
+// milestone the row aims at (the one under way when that already shipped,
+// none when the row has none), so a shipped milestone holds only what
+// shipped in it and never gains work. A closed issue with no release
+// predates releases and belongs to the row's own milestone. A row with no
+// issues is history and keeps its milestone. A slice in a shipped milestone
+// is done, its bar is its share of the row, and its id names the milestone
+// so the page's anchors stay unique.
+export function milestoneSlices(row, items, current) {
+  if (!row.issues.length) return [{ milestone: row.milestone ?? current, issues: [] }];
+  const own = row.milestone && versionOrder(row.milestone, current) < 0 ? row.milestone : current;
+  // Open work: the milestone the row aims at, the one under way for a row
+  // whose milestone already shipped, and none (Unplaced) for a row with none.
+  const aim = !row.milestone ? undefined : versionOrder(row.milestone, current) < 0 ? current : row.milestone;
+  const by = new Map();
+  for (const n of row.issues) {
+    const item = items.get(n);
+    const milestone = item?.release ? milestoneOf(item.release) : item && item.state !== "open" ? own : aim;
+    by.set(milestone, [...(by.get(milestone) ?? []), n]);
+  }
+  const order = [...by.keys()].sort((a, b) => (a === undefined) - (b === undefined) || (a && b ? versionOrder(a, b) : 0));
+  return order.map((milestone) => {
+    const issues = by.get(milestone);
+    const shipped = milestone !== undefined && versionOrder(milestone, current) < 0;
+    const open = issues.some((n) => (items.get(n)?.state ?? "open") === "open");
+    return {
+      ...(order.length > 1 && milestone !== aim ? { id: `${row.id}-${(milestone ?? "none").replace(".", "-")}` } : {}),
+      ...(milestone ? { milestone } : {}),
+      issues,
+      state: shipped || !open ? "done" : row.state === "done" ? "now" : row.state,
+      size: order.length > 1 ? Math.max(0.5, Math.round((row.size * issues.length * 10) / row.issues.length) / 10) : row.size,
+    };
+  });
 }
 
 // `before` is the CHANGELOG.md an apply started from. If the file changed on

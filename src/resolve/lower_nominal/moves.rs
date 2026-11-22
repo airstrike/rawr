@@ -107,7 +107,7 @@ impl<'a> Parser<'a> {
         if let Some(scope) = self.closures.last_mut()
             && scope.outer.get(name.as_str()) == Some(&declaration)
         {
-            scope.consumed.insert(name.clone());
+            scope.consumed.entry(name.clone()).or_insert(value.span);
         }
         // The use starting here is the local's own: the binding a scope
         // frame's call is read through (`scoped_call`) starts where the
@@ -137,7 +137,7 @@ impl<'a> Parser<'a> {
     /// is partly moved, which the move check follows (T155). An element, or
     /// a part behind a reference, can't be moved out of (rustc's E0508 and
     /// E0507), nor a part of a value whose type implements `Drop` (E0509).
-    pub(super) fn move_part(&mut self, value: &ParsedExpr) -> Result<(), Error> {
+    pub(super) fn move_part(&mut self, value: &mut ParsedExpr) -> Result<(), Error> {
         let root = match &value.lvalue {
             Some(Lvalue::Place { binding, .. }) => binding.clone(),
             // A place a call gives (`v.last_mut()`, a `RefCell` borrow) is
@@ -236,16 +236,74 @@ impl<'a> Parser<'a> {
             });
         }
         if self.needs_drop(&value.ty, value.span)? {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "a move out of a member or of a field below a field, whose type has \
-                            drop glue: not supported in Rawr yet"
-                    .into(),
-                source: value.span,
-            });
+            // The part moves out: `()` is left at its path in the local,
+            // whose own drop then passes over it, as a field's move leaves
+            // (`move_field`).
+            let Some(slots) = self.cleared_slots(value, &root) else {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a move out of a member or of a field below a field, whose type \
+                                has drop glue: not supported in Rawr yet"
+                        .into(),
+                    source: value.span,
+                });
+            };
+            let moved = self.temporary("moved");
+            let mut source = origin::Fragment::plain(format!("{{ let {moved} = "));
+            source.push(std::mem::take(&mut value.source));
+            source.push_text(format!("; {}({root}", crate::engine::KEYWORD_CLEAR));
+            for slot in slots {
+                source.push_text(format!(", {slot}"));
+            }
+            source.push_text(format!("); {moved} }}"));
+            value.source = source;
         }
         self.note_move(value);
         self.flow().moved(value.span.start());
         Ok(())
+    }
+
+    /// The slots of the fields and members from the local `root` down to
+    /// `value`, a part of it reached through them alone, which a move out
+    /// of it clears. `None` for a part reached otherwise, or of a local a
+    /// closure captures.
+    fn cleared_slots(&self, value: &ParsedExpr, root: &ImmutableString) -> Option<Vec<usize>> {
+        if !value.prelude.is_empty() {
+            return None;
+        }
+        let slots = match value.lvalue.as_ref()? {
+            // `t.1.0`: the members' slots, `t[1][0]`.
+            Lvalue::Place { place, .. } => {
+                let mut rest = place.as_str().strip_prefix(root.as_str())?;
+                let mut slots = Vec::new();
+                while !rest.is_empty() {
+                    let (slot, after) = rest.strip_prefix('[')?.split_once(']')?;
+                    slots.push(slot.parse().ok()?);
+                    rest = after;
+                }
+                slots
+            }
+            Lvalue::Nested(nested) if nested.base.as_str() == root.as_str() => nested
+                .steps
+                .iter()
+                .map(|step| match step {
+                    PlaceStep::Field { slot } => Some(*slot),
+                    PlaceStep::Member(member) => Some(*member),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?,
+            _ => return None,
+        };
+        let binding = self.bindings.get(root.as_str())?;
+        let owned_self = matches!(binding.kind, BindingKind::Receiver { .. })
+            && !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. });
+        let captured = self
+            .closures
+            .last()
+            .is_some_and(|scope| scope.outer.get(root.as_str()) == Some(&binding.declaration));
+        let held = !captured
+            && (matches!(binding.kind, BindingKind::Local)
+                || owned_self && self.closures.is_empty());
+        held.then_some(slots)
     }
 
     /// `error`, from the operand of the borrow starting at `start`: when
@@ -590,7 +648,7 @@ impl<'a> Parser<'a> {
         if let Some(scope) = self.closures.last_mut()
             && scope.outer.get(name.as_str()) == Some(&declaration)
         {
-            scope.consumed.insert(name.clone());
+            scope.consumed.entry(name.clone()).or_insert(at);
         }
         if let Some(binding) = self.bindings.get_mut(name.as_str()) {
             binding.available = false;

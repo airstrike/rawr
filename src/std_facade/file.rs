@@ -64,7 +64,7 @@ impl File {
     }
 
     /// The file, lent to `visit`.
-    fn with<R>(&self, visit: impl FnOnce(&mut std::fs::File) -> R) -> R {
+    pub(super) fn with<R>(&self, visit: impl FnOnce(&mut std::fs::File) -> R) -> R {
         visit(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }

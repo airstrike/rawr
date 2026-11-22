@@ -95,7 +95,7 @@ fn cursor(value: &Dynamic) -> Result<Cursor<Dynamic>, Box<EvalAltResult>> {
 
 /// Run `read` on the bytes the cursor in `value` holds, from its position,
 /// which then moves past what it read: std's `Read` of a `T: AsRef<[u8]>`.
-fn reading<R>(
+pub(super) fn reading<R>(
     value: &mut Dynamic,
     read: impl FnOnce(&mut Cursor<&[u8]>) -> R,
 ) -> Result<R, Box<EvalAltResult>> {
@@ -128,7 +128,7 @@ fn count(value: usize) -> Dynamic {
 }
 
 /// The bytes `value` holds, as the program's `Vec<u8>`.
-fn bytes(value: &[u8]) -> Dynamic {
+pub(super) fn bytes(value: &[u8]) -> Dynamic {
     Dynamic::from(
         value
             .iter()
@@ -220,6 +220,21 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
             reading(value, |bytes| bytes.read_line(text))
                 .unwrap_or_else(|failure| Err(std::io::Error::other(failure.to_string())))
         })
+    });
+    // `BufRead::lines`, which takes the cursor: each line it has left.
+    bind("io::Cursor::lines", |args| {
+        let lines = reading(args[0], |bytes| {
+            bytes
+                .lines()
+                .map(|line| match line {
+                    Ok(line) => {
+                        crate::result::ok(Dynamic::from(crate::ImmutableString::from(line)))
+                    }
+                    Err(failure) => crate::result::err(super::io::made(failure)),
+                })
+                .collect::<crate::Array>()
+        })?;
+        Ok(Dynamic::from(lines))
     });
     bind("io::Cursor::seek", |args| {
         let from = seek_from(args[1])?;

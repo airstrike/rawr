@@ -835,7 +835,9 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                     {
                         let Some(length) = values.get(name).and_then(|value| match value {
                             constant::Value::Integer(value) => usize::try_from(*value).ok(),
-                            constant::Value::Bool(_) | constant::Value::Char(_) => None,
+                            constant::Value::Bool(_)
+                            | constant::Value::Char(_)
+                            | constant::Value::Float(_) => None,
                         }) else {
                             return Err(PERR::MissingSymbol(format!(
                                 "an array length `{name}` that names a `const` of an integer"
@@ -3518,6 +3520,10 @@ fn parse_function_rest(
         &mut lifetimes,
         Some(&mut others),
     )?;
+    let sized_self = others.iter().find_map(|bound| match bound.subject {
+        Subject::SizedSelf(span) => Some(span),
+        _ => None,
+    });
     lift_where_bounds(&mut generics, &mut lifetimes, others)?;
     lift_impl_parameters(&mut generics, &mut parameters);
     erase_fn_bounds(
@@ -3548,6 +3554,7 @@ fn parse_function_rest(
             constant: false,
             static_item: false,
             asynchronous: false,
+            sized_self,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -3573,6 +3580,7 @@ fn parse_function_rest(
         constant: false,
         static_item: false,
         asynchronous: false,
+        sized_self,
         span,
     })
 }
@@ -3741,6 +3749,31 @@ fn parse_bounds_with(
         }
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             lifetimes.push(parse_lifetime(input)?.name);
+        } else if let Some((Token::Reserved(symbol), position)) = input.peek()
+            && symbol.as_str() == "?"
+        {
+            // `T: ?Sized`: the default `Sized` bound relaxed, which bounds
+            // nothing. rustc relaxes no other trait.
+            let position = *position;
+            input.next();
+            let mut split = None;
+            let relaxed = parse_path_bindings(input, &mut split, None)?;
+            if !is_sized_trait(&relaxed) {
+                return Err(PERR::Unexpected {
+                    message: "bound modifier `?` can only be applied to `Sized`".into(),
+                    label: String::new(),
+                    help: None,
+                    span: Span::new(position, relaxed.span.end()),
+                }
+                .into_err(position));
+            }
+            match closing.as_deref_mut() {
+                Some(closing) if split.is_some() => {
+                    *closing = split;
+                    return Ok(bounds);
+                }
+                _ => reject_split(split)?,
+            }
         } else if skip_precise_capture(input, closing.as_deref_mut())?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
@@ -3748,9 +3781,9 @@ fn parse_bounds_with(
         {
             // `F: Fn(A) -> B`: a function type bound.
             let start = *position;
-            let mutable = name.as_str() != "Fn";
+            let kind = fn_trait_type(name);
             input.next();
-            bounds.push(parse_fn_signature(input, start, mutable, false)?);
+            bounds.push(parse_fn_signature(input, start, kind, false)?);
         } else {
             let mut split = None;
             let mut bindings = Vec::new();
@@ -3916,6 +3949,28 @@ fn parse_where_with(
                 continue;
             }
         };
+        // A method's `where Self: Sized`: it is no method of `dyn Trait`.
+        if name.text == "Self"
+            && self_bounds.is_none()
+            && projections.is_empty()
+            && bounded.is_empty()
+            && bounds.iter().any(is_sized_trait)
+            && bounds
+                .iter()
+                .all(|bound| is_sized_trait(bound) || is_auto_trait(bound))
+            && let Some(others) = others.as_deref_mut()
+        {
+            others.push(WhereBound {
+                subject: Subject::SizedSelf(name.span),
+                bounds,
+                projections,
+                lifetimes: bounded,
+            });
+            if matches!(input.peek(), Some((Token::Comma, _))) {
+                input.next();
+            }
+            continue;
+        }
         outlives.extend(bounded.into_iter().map(|lifetime| (name.clone(), lifetime)));
         if name.text == "Self"
             && let Some(supertraits) = self_bounds.as_deref_mut()
@@ -4036,6 +4091,9 @@ enum Subject {
     },
     /// Any other type: `Vec<T>`, `&'a T`, `i32`.
     Type(type_ref::Type),
+    /// `Self` of a function's `where Self: Sized`, bounded only by `Sized`
+    /// and auto traits, where it is written.
+    SizedSelf(Span),
 }
 
 /// The parameter, the written trait and the associated type of `predicate`
@@ -4138,6 +4196,8 @@ fn lift_where_bounds(
                 name,
             } => associated_parameter(generics, &base, trait_name, &name)?,
             Subject::Type(ty) => fixed_parameter(generics, ty),
+            // `Self` is no parameter of the function's.
+            Subject::SizedSelf(_) => continue,
         };
         let generic = &mut generics[parameter];
         let mut bounds = generic.bounds.to_vec();
@@ -4398,13 +4458,30 @@ fn parse_parameter_literal(input: &mut TokenStream) -> ParseResult<crate::item::
         input.next();
     }
     let (token, position) = input.next().expect("token streams always end with EOF");
-    let end = after(position, token.to_string().len());
+    let mut end = after(position, token.to_string().len());
     let literal = match token {
         Token::IntegerConstant(value) => {
-            crate::item::PatternLiteral::Integer(if negative { -value } else { value })
+            let suffix = match input.peek() {
+                Some((token @ Token::Identifier(name), position)) if literal_suffix(token) => {
+                    end = after(*position, name.len());
+                    Some(crate::ImmutableString::from(name.as_str()))
+                }
+                _ => None,
+            };
+            if suffix.is_some() {
+                input.next();
+            }
+            crate::item::PatternLiteral::Integer {
+                value: if negative { -value } else { value },
+                suffix,
+            }
         }
-        Token::CharConstant(value) if !negative => crate::item::PatternLiteral::Char(value),
+        Token::CharConstant(value) if !negative => {
+            end = after(position, format!("{value:?}").len());
+            crate::item::PatternLiteral::Char(value)
+        }
         Token::StringConstant(value) if !negative => {
+            end = after(position, format!("{:?}", value.as_str()).len());
             crate::item::PatternLiteral::Str(value.as_str().into())
         }
         Token::True if !negative => crate::item::PatternLiteral::Bool(true),
@@ -4571,6 +4648,7 @@ fn parse_associated_const(
             constant: true,
             static_item: false,
             asynchronous: false,
+            sized_self: None,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -4623,6 +4701,7 @@ fn finish_associated_const(
         constant: true,
         static_item: false,
         asynchronous: false,
+        sized_self: None,
         span,
     })
 }
@@ -4672,6 +4751,7 @@ fn parse_const_rest(
         constant: true,
         static_item: false,
         asynchronous: false,
+        sized_self: None,
         span,
     })
 }
@@ -4996,9 +5076,9 @@ fn parse_type_split(
         if let Some((Token::Identifier(name) | Token::Reserved(name), _)) = input.peek()
             && is_fn_trait(name)
         {
-            let mutable = name.as_str() != "Fn";
+            let kind = fn_trait_type(name);
             input.next();
-            let mut path = parse_fn_signature(input, start, mutable, false)?;
+            let mut path = parse_fn_signature(input, start, kind, false)?;
             erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
@@ -5129,8 +5209,8 @@ fn parse_type_split(
     // `fn(A) -> B`, `impl Fn(A) -> B` and `dyn Fn(A) -> B`: Rawr's one
     // function type; `impl Iterator<Item = T>`.
     match fn_type_start(input)? {
-        Some(ImplStart::Fn(start, mutable, binder, pointer)) => {
-            let mut path = parse_fn_signature(input, start, mutable, pointer)?;
+        Some(ImplStart::Fn(start, kind, binder, pointer)) => {
+            let mut path = parse_fn_signature(input, start, kind, pointer)?;
             erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
@@ -5246,10 +5326,10 @@ fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
 
 /// What a type starting with `fn` or `impl` is.
 enum ImplStart {
-    /// `fn(..)` or `impl Fn*(..)`, its head consumed, whether its call
-    /// takes it `&mut` (`FnMut`, `FnOnce`), the lifetimes a `for<'a>`
-    /// after `impl` binds, and whether it is a `fn` pointer.
-    Fn(Position, bool, Vec<crate::item::Name>, bool),
+    /// `fn(..)` or `impl Fn*(..)`, its head consumed, its builtin name
+    /// ([`fn_trait_type`]), the lifetimes a `for<'a>` after `impl` binds,
+    /// and whether it is a `fn` pointer.
+    Fn(Position, &'static str, Vec<crate::item::Name>, bool),
     /// `impl Iterator` (or another iterator trait), its builtin name.
     Iterator(&'static str, Position),
     /// `impl Bound + Bound` of other traits, after `impl`, and the
@@ -5264,7 +5344,12 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
         Some((Token::Fn, position)) => {
             let position = *position;
             input.next();
-            return Ok(Some(ImplStart::Fn(position, false, Vec::new(), true)));
+            return Ok(Some(ImplStart::Fn(
+                position,
+                type_ref::FN_POINTER_TYPE,
+                Vec::new(),
+                true,
+            )));
         }
         Some((Token::Impl, position)) => *position,
         _ => return Ok(None),
@@ -5274,9 +5359,9 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
     let binder = parse_binder(input)?;
     let iterator = match input.peek() {
         Some((Token::Identifier(name) | Token::Reserved(name), _)) if is_fn_trait(name) => {
-            let mutable = name.as_str() != "Fn";
+            let kind = fn_trait_type(name);
             input.next();
-            return Ok(Some(ImplStart::Fn(start, mutable, binder, false)));
+            return Ok(Some(ImplStart::Fn(start, kind, binder, false)));
         }
         Some((Token::Identifier(name), _)) if binder.is_empty() => iterator_trait(name),
         _ => None,
@@ -5559,6 +5644,16 @@ fn is_fn_trait(name: &str) -> bool {
     matches!(name, "Fn" | "FnMut" | "FnOnce")
 }
 
+/// The builtin path name of the function type an `Fn`, `FnMut` or `FnOnce`
+/// bound is.
+fn fn_trait_type(name: &str) -> &'static str {
+    match name {
+        "Fn" => type_ref::FN_TYPE,
+        "FnMut" => type_ref::FN_MUT_TYPE,
+        _ => type_ref::FN_ONCE_TYPE,
+    }
+}
+
 /// `(A, B) -> C` after a function type's head: the builtin path `fn` whose
 /// arguments are the inputs, then the output (`()` when omitted). A `fn`
 /// pointer's output may be `!`; an `Fn` trait's is its `Output` type,
@@ -5566,7 +5661,7 @@ fn is_fn_trait(name: &str) -> bool {
 fn parse_fn_signature(
     input: &mut TokenStream,
     start: Position,
-    mutable: bool,
+    kind: &'static str,
     pointer: bool,
 ) -> ParseResult<type_ref::Path> {
     let mut arguments = Vec::new();
@@ -5602,12 +5697,7 @@ fn parse_fn_signature(
     Ok(type_ref::Path {
         segments: Box::new([type_ref::Segment {
             name: crate::item::Name {
-                text: if mutable {
-                    type_ref::FN_MUT_TYPE
-                } else {
-                    type_ref::FN_TYPE
-                }
-                .into(),
+                text: kind.into(),
                 span: token_span(start, "fn"),
             },
             arguments: arguments.into_boxed_slice(),
@@ -5621,7 +5711,7 @@ fn parse_fn_signature(
 /// A generic parameter bounded by `Fn(A) -> B` is that function type, as
 /// Rawr has one function type: each use of the parameter in the signature
 /// is replaced by it, bounded by the parameter's `outlives` bounds, and the
-/// parameter is dropped.
+/// parameter is fixed to it.
 fn erase_fn_bounds(
     generics: &mut Vec<crate::item::GenericParam>,
     parameters: &mut [crate::item::Parameter],
@@ -5658,7 +5748,7 @@ fn erase_fn_bounds(
                 .expect("`associated_parameter` fails only for a bound naming no trait");
         }
     }
-    generics.retain(|generic| {
+    for generic in generics.iter_mut() {
         // `I: Iterator<Item = T>` (or `IntoIterator`): `impl Iterator<Item =
         // T>` wherever `I` is written, and `T` for `I::Item`.
         let iterator = generic.bounds.iter().find_map(|bound| {
@@ -5672,7 +5762,7 @@ fn erase_fn_bounds(
             })?;
             modules.then(|| iterator_type(name, item.clone(), bound.span))
         });
-        if let Some(replacement) = iterator {
+        let replacement = if let Some(replacement) = iterator {
             let type_ref::Type::Path(path) = &replacement else {
                 unreachable!("an iterator type is a path");
             };
@@ -5687,35 +5777,41 @@ fn erase_fn_bounds(
                 replace_item_projection(ty, &generic.name.text, item);
                 replace_named(ty, &generic.name.text, &replacement);
             }
-            return false;
-        }
-        let Some(bound) = generic.bounds.iter().find(|bound| {
-            matches!(&bound.segments[..], [segment] if type_ref::is_fn_type(&segment.name.text))
-        }) else {
-            return true;
+            replacement
+        } else {
+            let Some(bound) = generic.bounds.iter().find(|bound| {
+                matches!(&bound.segments[..], [segment] if type_ref::is_fn_type(&segment.name.text))
+            }) else {
+                continue;
+            };
+            let mut bound = bound.clone();
+            for (_, lifetime) in outlives
+                .iter()
+                .filter(|(parameter, _)| parameter.text == generic.name.text)
+            {
+                bound_fn_type(
+                    &mut bound,
+                    type_ref::Lifetime {
+                        name: lifetime.clone(),
+                        span: lifetime.span,
+                    },
+                );
+            }
+            let replacement = type_ref::Type::Path(bound);
+            for parameter in parameters.iter_mut() {
+                replace_named(&mut parameter.ty, &generic.name.text, &replacement);
+            }
+            if let Some(output) = output {
+                replace_named(output, &generic.name.text, &replacement);
+            }
+            replacement
         };
-        let mut bound = bound.clone();
-        for (_, lifetime) in outlives
-            .iter()
-            .filter(|(parameter, _)| parameter.text == generic.name.text)
-        {
-            bound_fn_type(
-                &mut bound,
-                type_ref::Lifetime {
-                    name: lifetime.clone(),
-                    span: lifetime.span,
-                },
-            );
-        }
-        let replacement = type_ref::Type::Path(bound);
-        for parameter in parameters.iter_mut() {
-            replace_named(&mut parameter.ty, &generic.name.text, &replacement);
-        }
-        if let Some(output) = output {
-            replace_named(output, &generic.name.text, &replacement);
-        }
-        false
-    });
+        // The parameter stays a slot of the turbofish, as rustc counts it
+        // (`each::<usize, _>(..)`), which the replacement fills.
+        generic.bounds = Box::default();
+        generic.projections = Box::default();
+        generic.fixed = Some(replacement);
+    }
 }
 
 /// Replace each path `name::Item` in `ty` with `item`.
@@ -6055,6 +6151,9 @@ fn parse_body_syntax(
     // Whether the last token is `::` or `.`, after which a name goes on a
     // path or names a field or method.
     let mut after_path = false;
+    // Whether the last token is a number, which a type's name after it
+    // suffixes (`3u8`, `1.5f32`).
+    let mut after_number = false;
     let mut visibility = None;
     // The delimiter depths inside the braces of open struct literals, as
     // `S { x: 1 }`, which ends an expression as `1` does.
@@ -6272,6 +6371,7 @@ fn parse_body_syntax(
             })
             && let Some((token, position)) = input.peek()
             && begins_operand(token)
+            && !(after_number && literal_suffix(token))
         {
             return Err(unexpected(
                 format!("expected `{{`, found {}", found(token)),
@@ -6326,6 +6426,7 @@ fn parse_body_syntax(
                 };
             after_pub = matches!(token, Token::Pub);
             after_path = matches!(token, Token::DoubleColon | Token::Period);
+            after_number = matches!(token, Token::IntegerConstant(_) | Token::FloatConstant(_));
             after_extern = matches!(token, Token::Identifier(name) if name.as_str() == "extern");
             let depth = scan.delimiter_depth;
             match token {
@@ -6713,6 +6814,16 @@ fn begins_operand(token: &Token) -> bool {
     }
 }
 
+/// A numeric type's name, which suffixes the number before it.
+fn literal_suffix(token: &Token) -> bool {
+    matches!(token, Token::Identifier(name) if matches!(
+        name.as_str(),
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+            | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+            | "f32" | "f64"
+    ))
+}
+
 /// A private top-level `fn`: a typed item, as in Rust.
 fn parse_private_function(
     input: &mut TokenStream,
@@ -6793,6 +6904,9 @@ pub(super) fn body_token(token: Token, position: Position) -> crate::item::BodyT
         Token::True => (Kind::Value(crate::item::constant::Value::Bool(true)), 4),
         Token::False => (Kind::Value(crate::item::constant::Value::Bool(false)), 5),
         Token::CharConstant(value) => (Kind::Value(crate::item::constant::Value::Char(value)), 0),
+        Token::FloatConstant(value) => {
+            (Kind::Value(crate::item::constant::Value::Float(value.0)), 0)
+        }
         Token::Plus | Token::UnaryPlus => (Kind::Operator(crate::item::constant::Operator::Add), 1),
         Token::Minus | Token::UnaryMinus => {
             (Kind::Operator(crate::item::constant::Operator::Subtract), 1)

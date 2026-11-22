@@ -543,6 +543,9 @@ impl Parser<'_> {
         match (member.as_str(), arguments.as_mut_slice()) {
             ("borrow" | "borrow_mut" | "get_mut", []) => {
                 let mutable = member.as_str() != "borrow";
+                if member.as_str() != "get_mut" {
+                    self.cell_borrowed(&value, call);
+                }
                 let flag: origin::Fragment = if mutable { "true" } else { "false" }.into();
                 let borrow = self.prelude_op(PreludeOp::CellBorrow, [cell.clone(), flag]);
                 // A change borrows the cell where the place is read
@@ -812,6 +815,17 @@ impl Parser<'_> {
         rendered
     }
 
+    /// The locals among `declared` bound to a cell's borrow, by
+    /// declaration: each drops its guard, a `Ref` or a `RefMut` whose `Drop`
+    /// uses the borrow, where it ends.
+    pub(super) fn cell_guard_drops(&self, declared: &[Span]) -> Vec<Span> {
+        self.cell_guards
+            .values()
+            .map(|(declaration, ..)| *declaration)
+            .filter(|declaration| declared.contains(declaration))
+            .collect()
+    }
+
     /// The local bound to a borrow that `drop(..)`'s arguments name alone,
     /// before they are parsed: `drop(guard)`.
     pub(super) fn dropped_cell_guard(&self) -> Option<ImmutableString> {
@@ -857,6 +871,7 @@ impl Parser<'_> {
         binding.available = false;
         let declaration = binding.declaration;
         self.moved_at.insert(declaration, at);
+        self.flow().moved(at.start());
         Some(self.prelude_op(PreludeOp::CellRelease, [taken]))
     }
 

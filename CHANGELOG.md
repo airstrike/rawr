@@ -6,6 +6,27 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.18 (2026-11-22)
+
+- A pattern naming a float constant matches its value, and a suffixed number can end a match or if head. (#2508)
+- A parameter pattern's literal takes its suffix, and a literal of one integer or float type no longer matches another. (#2510)
+- match x { ref v => .. } and ref mut arms bind a borrow of the matched value for every type. (#194)
+- An element borrow past the end panics where the borrow is made, as rustc's does. (#410)
+- A primitive op= through a RefCell borrow evaluates its right side first, as rustc does. (#3)
+- A whole Option<&mut T> binding beside &mut bindings of its value works for a call's value. (#166)
+- A part with drop glue moves out below a field or a member, and the rest drops where rustc drops it. (#196)
+- `<T>::f(..)`, a qualified path without a trait, runs as `T::f(..)`. (#378)
+- A generic trait's associated type bound may name the trait's parameters (`type Out: Iterator<Item = T>`), and an impl that breaks such a bound is rustc's E0271. (#382)
+- A turbofish counts a parameter bounded by `Fn` or `Iterator<Item = T>`, and a wrong count is rustc's E0107. (#408)
+- A closure argument is read after the argument that fixes its parameter types, as rustc checks closures last. (#409)
+- `where Self: Sized` on a trait method parses and keeps the method out of `dyn Trait`. In a free function it is E0411. (#802)
+- `?` converts an error through std's `From` impls, such as `&str` into `String`. (#1034)
+- An `Err(e)` arm where a `Result<_, Box<dyn Error>>` is expected is rustc's E0308 instead of being boxed. (#1430)
+- A prelude type imported under another name (`use std::string::String as Text;`) works in bodies, and `pub use inner::*;` re-exports inner's names, each no further than its item reaches. (#810, #1349)
+- A Read, Write or BufRead method of Stdin, Stdout, Stderr, File or Cursor needs its trait in scope, with rustc's E0599 and its `use` help, and a Cursor's lines run. (#1427)
+- std::iter's repeat, repeat_n, repeat_with, once, once_with, empty, from_fn and successors run, as far as the chain pulls. (#2593)
+- std's io::BufReader runs over a File, Stdin or Cursor, and io::BufWriter over a File, flushing when it is dropped. (#2580)
+
 ## 0.5.17 (2026-11-22)
 
 - A `&mut` view of a collection's elements kept past its statement reaches them as rustc's does: `&mut v[a..b]`, `as_mut_slice()`, `make_contiguous()`, `split_at_mut`'s halves (side by side, from closures and scoped threads), `chunks_mut`'s chunks, `first_mut` and `last_mut` of a view, and a kept `iter_mut()` walked, zipped, reversed, enumerated, filtered, collected into a `Vec<&mut T>` or passed to a function. rustc's E0499 and E0502 hold while a view lives, and a view out of bounds panics with std's message. (#800, #806, #805)

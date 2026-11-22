@@ -67,6 +67,14 @@ impl<'a> Parser<'a> {
         self.generic_traits = generic_traits(generics);
         self.generic_trait_arguments = generic_trait_arguments(generics);
         self.inference.equalities = generic_equalities(generics);
+        self.inference.trait_arguments = self
+            .generic_trait_arguments
+            .iter()
+            .filter_map(|(key, lists)| match &lists[..] {
+                [arguments] => Some((key.clone(), arguments.clone())),
+                _ => None,
+            })
+            .collect();
     }
 
     /// The bounds of the opaque output `opaque` (D1109), which every body
@@ -420,12 +428,7 @@ impl<'a> Parser<'a> {
         if let Some(arguments) = self.pending_turbofish.take() {
             let expected = written(generics).count();
             if arguments.len() != expected {
-                return Err(Error::InvalidTypeArguments {
-                    ty: "function".into(),
-                    expected,
-                    actual: arguments.len(),
-                    reference: span,
-                });
+                return Err(generic_count("function", expected, arguments.len(), span));
             }
             for (generic, argument) in written(generics).zip(arguments) {
                 let fresh = substitution[&generic.name.text].clone();
@@ -1251,12 +1254,7 @@ impl<'a> Parser<'a> {
         if let Some(arguments) = self.pending_turbofish.take() {
             let expected = written(definition.own_generics()).count();
             if arguments.len() != expected {
-                return Err(Error::InvalidTypeArguments {
-                    ty: "method".into(),
-                    expected,
-                    actual: arguments.len(),
-                    reference: call,
-                });
+                return Err(generic_count("method", expected, arguments.len(), call));
             }
             for (generic, argument) in written(definition.own_generics()).zip(arguments) {
                 let fresh = substitution[&generic.name.text].clone();
@@ -1331,6 +1329,28 @@ impl<'a> Parser<'a> {
                 bounds: bounds.into_boxed_slice(),
             })),
         })
+    }
+}
+
+/// rustc's E0107 for a turbofish on the `kind` (`function`, `method`) at
+/// `reference` that gives `found` types for its `expected` parameters.
+fn generic_count(kind: &str, expected: usize, found: usize, reference: Span) -> Error {
+    let plural = |count: usize| match count {
+        1 => "1 generic argument".to_owned(),
+        count => format!("{count} generic arguments"),
+    };
+    let supplied = if found == 1 { "was" } else { "were" };
+    Error::StdPath {
+        code: "E0107",
+        message: format!(
+            "{kind} takes {} but {} {supplied} supplied",
+            plural(expected),
+            plural(found)
+        )
+        .into(),
+        label: Some(format!("expected {}", plural(expected)).into()),
+        note: None,
+        reference,
     }
 }
 

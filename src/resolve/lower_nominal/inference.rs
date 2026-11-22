@@ -24,6 +24,9 @@ pub(super) struct Inference {
     /// `T::Output = i64` of the bounds in scope (`T: Shape<Output = i64>`),
     /// by parameter, trait and name.
     pub(super) equalities: BTreeMap<(ImmutableString, ImmutableString, ImmutableString), Ty>,
+    /// The arguments of each generic trait a parameter in scope is bounded
+    /// by once, by parameter and trait: `[u32]` of `C: Conv<u32>`.
+    pub(super) trait_arguments: BTreeMap<(ImmutableString, ImmutableString), Box<[Ty]>>,
     /// Every function's opaque output (D1109), whose written bindings
     /// (`impl Named<Out = i64>`) its projections are.
     pub(super) opaque_outputs: Shared<BTreeMap<type_ref::Opaque, item::OpaqueOutput>>,
@@ -52,6 +55,10 @@ pub(super) struct AssociatedTypes {
     /// and name, in the trait's `Self`: `(Iterator, Item, Self::For)` of
     /// `type Fore: Iterator<Item = Self::For>;`.
     pub(super) equalities: BTreeMap<(ImmutableString, ImmutableString), Box<[AssociatedEquality]>>,
+    /// The type parameters of each generic trait with such equalities,
+    /// which they may name: `T` of `trait Conv<T> { type Out: Iterator<Item
+    /// = T>; }`.
+    pub(super) trait_parameters: BTreeMap<ImmutableString, Box<[ImmutableString]>>,
     /// The traits whose impl for `&T` (or, `true`, `&mut T`) forwards to
     /// `T`'s (`resolve::forward`): `<&T as For>::Fore` is `T`'s.
     pub(super) reference_forwards: BTreeSet<(ImmutableString, bool)>,
@@ -450,6 +457,17 @@ impl Inference {
         name: &ImmutableString,
     ) -> Ty {
         match &base {
+            // Rawr's iterator type: `<I as Iterator>::Item` is its item,
+            // unless the item is the opaque `<I as Iterator>::Item` that
+            // `type Fore: Iterator;` gives, which is this projection itself.
+            Ty::Iter(item, _, _)
+                if is_iterator_trait(trait_name)
+                    && name.as_str() == "Item"
+                    && !matches!(&**item, Ty::Projection(_, bound, own)
+                        if is_iterator_trait(bound) && own.as_str() == "Item") =>
+            {
+                return self.resolve(item);
+            }
             Ty::Script(id, arguments) => {
                 // `Self::Item` names no trait: the one trait of the type's
                 // that has the type, as rustc finds it.
@@ -634,7 +652,18 @@ impl Inference {
         let (_, _, ty) = equalities
             .iter()
             .find(|(written, equal, _)| bound(written) && equal == item)?;
-        let substitution = BTreeMap::from([(ImmutableString::from("Self"), base.clone())]);
+        let mut substitution = BTreeMap::from([(ImmutableString::from("Self"), base.clone())]);
+        // A generic trait's equality names its parameters, which are the
+        // arguments `base`'s one bound by the trait gives.
+        if let Some(parameters) = self.associated.trait_parameters.get(trait_name) {
+            let Ty::Param(parameter, Parameter::Declared) = base else {
+                return None;
+            };
+            let arguments = self
+                .trait_arguments
+                .get(&(parameter.clone(), trait_name.into()))?;
+            substitution.extend(parameters.iter().cloned().zip(arguments.iter().cloned()));
+        }
         Some(self.resolve(&instantiate(&Ty::from_resolved(ty), &substitution)))
     }
 

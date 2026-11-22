@@ -340,6 +340,9 @@ pub(crate) struct Struct {
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
     pub regions: TypeRegions,
+    /// Each type its fields name by one segment with no lifetime argument,
+    /// with where its name is: E0106 if it declares one.
+    pub unnamed: Box<[(type_def::Id, Span)]>,
     pub fields: Box<[Field]>,
     pub form: crate::item::StructForm,
 }
@@ -373,6 +376,9 @@ pub(crate) struct Enum {
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
     pub regions: TypeRegions,
+    /// Each type its fields name by one segment with no lifetime argument,
+    /// with where its name is: E0106 if it declares one.
+    pub unnamed: Box<[(type_def::Id, Span)]>,
     pub variants: Box<[Variant]>,
 }
 
@@ -502,6 +508,9 @@ pub(crate) struct Function {
     /// The parameter written `&mut fmt::Formatter`, through any path to
     /// it, whose body writes into it as a `fmt` body does.
     pub formatter: Option<crate::ImmutableString>,
+    /// `Self` of `where Self: Sized`: a trait's method that `dyn Trait`
+    /// does not have.
+    pub sized_self: Option<Span>,
 }
 
 /// An `impl Bounds` a function's output writes (D1109): the type parameter

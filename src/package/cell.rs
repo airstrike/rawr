@@ -32,7 +32,7 @@ use crate::{parse, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 19;
+const FORMAT: u32 = 21;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`), whether it
@@ -570,7 +570,7 @@ record! {
     }
     item::Function {
         header, name, generics, lifetimes, receiver_lifetime, receiver, parameters, output,
-        body_span, body_syntax, constant, static_item, asynchronous, span,
+        body_span, body_syntax, constant, static_item, asynchronous, sized_self, span,
     }
     item::Lifetimes { params, bounds }
     item::TypeAlias { header, name, generics, target, span }
@@ -747,9 +747,10 @@ impl Codec for item::ParameterPattern {
             Self::Literal { literal, span } => {
                 writer.byte(6);
                 match literal {
-                    item::PatternLiteral::Integer(value) => {
+                    item::PatternLiteral::Integer { value, suffix } => {
                         writer.byte(0);
                         value.put(writer);
+                        suffix.put(writer);
                     }
                     item::PatternLiteral::Char(value) => {
                         writer.byte(1);
@@ -805,7 +806,10 @@ impl Codec for item::ParameterPattern {
             }
             6 => {
                 let literal = match reader.byte()? {
-                    0 => item::PatternLiteral::Integer(Codec::get(reader)?),
+                    0 => item::PatternLiteral::Integer {
+                        value: Codec::get(reader)?,
+                        suffix: Codec::get(reader)?,
+                    },
                     1 => item::PatternLiteral::Char(char::from_u32(Codec::get(reader)?)?),
                     2 => item::PatternLiteral::Bool(Codec::get(reader)?),
                     3 => item::PatternLiteral::Str(Codec::get(reader)?),
@@ -881,6 +885,7 @@ impl Codec for item::BodyToken {
                     item::constant::Value::Integer(value) => (0, *value),
                     item::constant::Value::Bool(value) => (1, i128::from(*value)),
                     item::constant::Value::Char(value) => (2, i128::from(u32::from(*value))),
+                    item::constant::Value::Float(value) => (3, i128::from(value.to_bits())),
                 };
                 writer.byte(kind);
                 writer.0.extend_from_slice(&payload.to_le_bytes());
@@ -935,6 +940,9 @@ impl Codec for item::BodyToken {
                     0 => item::constant::Value::Integer(payload),
                     1 => item::constant::Value::Bool(payload != 0),
                     2 => item::constant::Value::Char(char::from_u32(u32::try_from(payload).ok()?)?),
+                    3 => item::constant::Value::Float(
+                        crate::FLOAT::from_bits(u64::try_from(payload).ok()?).into(),
+                    ),
                     _ => return None,
                 })
             }

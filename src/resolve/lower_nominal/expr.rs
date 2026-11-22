@@ -132,7 +132,9 @@ impl<'a> Parser<'a> {
             self.array_hint = None;
             return statement;
         }
-        let expected = expected.filter(|_| self.peek_block_like() && self.block_like_ends_block());
+        let expected = expected.filter(|_| {
+            (self.peek_block_like() && self.block_like_ends_block()) || self.call_ends_block()
+        });
         let Some(expected) = expected else {
             return self.parse_statement();
         };
@@ -175,6 +177,38 @@ impl<'a> Parser<'a> {
                 {
                     return false;
                 }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Whether the expression ahead is a call by a path that ends its
+    /// block, as `Err(MyErr) }` or `Fail::fail("z") }`: the tail whose
+    /// arguments the block's expected type reaches.
+    pub(super) fn call_ends_block(&mut self) -> bool {
+        let mut ahead = self.input.clone().map(|(token, _)| token);
+        loop {
+            if !matches!(ahead.next(), Some(Token::Identifier(_))) {
+                return false;
+            }
+            match ahead.next() {
+                Some(Token::DoubleColon) => {}
+                Some(Token::LeftParen) => break,
+                _ => return false,
+            }
+        }
+        let mut depth = 1_usize;
+        while let Some(token) = ahead.next() {
+            match token {
+                Token::LeftBracket | Token::LeftParen | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightBracket | Token::RightParen | Token::RightBrace if depth > 1 => {
+                    depth -= 1;
+                }
+                Token::RightParen => return matches!(ahead.next(), Some(Token::RightBrace)),
+                Token::RightBracket | Token::RightBrace | Token::EOF => return false,
                 _ => {}
             }
         }
@@ -827,6 +861,15 @@ impl<'a> Parser<'a> {
                 self.models.global_head = outer;
                 value
             }
+            // `<Vec<i32>>::new()`: the path `Vec::<i32>::new()`, as rustc
+            // reads a qualified path without a trait.
+            Token::LessThan if let Some((replaced, path)) = self.inherent_qualified_path() => {
+                for _ in 0..replaced {
+                    self.next();
+                }
+                self.splice_tokens(path);
+                self.parse_primary()
+            }
             // `<T as Trait>::f(..)`: a trait's function for the type `T`.
             Token::LessThan => {
                 let self_ty = self.parse_local_type()?;
@@ -1219,6 +1262,15 @@ impl<'a> Parser<'a> {
                 tokens.push((Token::Identifier(Box::new(segment.into())), at));
             }
             self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
+        // `Text::from(..)` after `use std::string::String as Text;` is
+        // `String::from(..)` (#810).
+        if let Some(spelling) = self.prelude_alias(&name) {
+            self.splice_tokens(vec![(
+                Token::Identifier(Box::new(spelling.into())),
+                name_span.start(),
+            )]);
             return self.parse_primary();
         }
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {

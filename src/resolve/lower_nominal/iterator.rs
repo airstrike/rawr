@@ -111,6 +111,37 @@ pub(super) enum Source {
     Items { values: origin::Fragment },
 }
 
+/// One of std::iter's functions that make an iterator of values or of what
+/// closures give (`Parser::parse_iterator_source`).
+#[derive(Clone, Copy)]
+pub(super) enum Constructor {
+    Empty,
+    Once,
+    OnceWith,
+    Repeat,
+    RepeatN,
+    RepeatWith,
+    FromFn,
+    Successors,
+}
+
+impl Constructor {
+    /// The function std defines at `definition`, when it is one of them.
+    pub(super) fn of(definition: &str) -> Option<Self> {
+        Some(match definition.strip_prefix("core::iter::sources::")? {
+            "empty::empty" => Self::Empty,
+            "once::once" => Self::Once,
+            "once_with::once_with" => Self::OnceWith,
+            "repeat::repeat" => Self::Repeat,
+            "repeat_n::repeat_n" => Self::RepeatN,
+            "repeat_with::repeat_with" => Self::RepeatWith,
+            "from_fn::from_fn" => Self::FromFn,
+            "successors::successors" => Self::Successors,
+            _ => return None,
+        })
+    }
+}
+
 /// The `Cast` code of a code point to its `char`, which a char range's
 /// items are made by; one between the surrogates fails.
 pub(super) const CHAR_OF_CODE: &str = "15";
@@ -796,7 +827,16 @@ impl Parser<'_> {
         let unwrapped = self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]);
         entry.push(unwrapped);
         entry.push_text("; ");
-        Ok(Pipeline {
+        let mut pipeline = Self::loop_pipeline(item);
+        pipeline.segments[0].entry = entry;
+        Ok(pipeline)
+    }
+
+    /// A chain of one `loop` with no code yet, whose item is `item`: a
+    /// source that makes each item by code of its own, and ends with a
+    /// `break` of that code.
+    fn loop_pipeline(item: String) -> Pipeline {
+        Pipeline {
             setup: origin::Fragment::default(),
             names: Vec::new(),
             outer: Vec::new(),
@@ -804,7 +844,7 @@ impl Parser<'_> {
             segments: vec![Segment {
                 guards: Vec::new(),
                 header: vec![Part::Text("loop".into())],
-                entry,
+                entry: origin::Fragment::default(),
                 exit: String::new(),
             }],
             item,
@@ -813,7 +853,189 @@ impl Parser<'_> {
             reversible: None,
             exact: false,
             traits: ty::Traits::ANY,
-        })
+        }
+    }
+
+    /// The call of `constructor`, one of std::iter's functions that make
+    /// an iterator, written `written` at `reference`, its name read: a
+    /// chain whose source is its values or closures, which runs them as
+    /// Rust's iterator does, as far as the chain pulls.
+    pub(super) fn parse_iterator_source(
+        &mut self,
+        constructor: Constructor,
+        written: &str,
+        reference: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let item = self.inference.fresh();
+        // `empty::<u8>()`: the item first, then a closure's type, which
+        // is `_` where a program writes it.
+        if let Some(arguments) = self.pending_turbofish.take() {
+            let expected = match constructor {
+                Constructor::Empty
+                | Constructor::Once
+                | Constructor::Repeat
+                | Constructor::RepeatN => 1,
+                _ => 2,
+            };
+            if arguments.len() != expected {
+                return Err(Error::InvalidTypeArguments {
+                    ty: "function".into(),
+                    expected,
+                    actual: arguments.len(),
+                    reference,
+                });
+            }
+            self.require_type(&item, &arguments[0], reference)?;
+        }
+        let option = Ty::Option(Box::new(item.clone()));
+        let function = |inputs: Vec<Ty>, output: Ty| Ty::Fn {
+            inputs: inputs.into_boxed_slice(),
+            output: Box::new(output),
+        };
+        // What std declares each argument to be: the closure's `F: FnMut(&T)
+        // -> Option<T>`, after `first: Option<T>`, which fixes `T` for it.
+        let expected = match constructor {
+            Constructor::Empty => Vec::new(),
+            Constructor::Once | Constructor::Repeat => vec![item.clone()],
+            Constructor::RepeatN => vec![item.clone(), Ty::Int(Int::Usize)],
+            Constructor::OnceWith | Constructor::RepeatWith => {
+                vec![function(Vec::new(), item.clone())]
+            }
+            Constructor::FromFn => vec![function(Vec::new(), option.clone())],
+            Constructor::Successors => vec![
+                option.clone(),
+                function(
+                    vec![Ty::Reference {
+                        mutable: false,
+                        target: Box::new(item.clone()),
+                    }],
+                    option.clone(),
+                ),
+            ],
+        };
+        self.closure_hints = expected
+            .iter()
+            .map(|ty| match ty {
+                Ty::Fn { inputs, .. } => Some(inputs.clone()),
+                _ => None,
+            })
+            .collect();
+        self.generic_argument_hints = expected
+            .iter()
+            .take_while(|ty| !matches!(ty, Ty::Fn { .. }))
+            .cloned()
+            .collect();
+        let parsed = self.parse_call_arguments(&format!("`{written}` arguments"));
+        self.closure_hints = Vec::new();
+        self.generic_argument_hints = Vec::new();
+        let (mut arguments, end) = parsed?;
+        let call = span(reference.start(), end);
+        if arguments.len() != expected.len() {
+            return Err(Error::argument_count(
+                crate::resolve::Callee::Function,
+                written.to_owned(),
+                expected.len(),
+                arguments.len(),
+                call,
+            ));
+        }
+        for (argument, ty) in arguments.iter_mut().zip(&expected) {
+            self.coerce_expr(ty, argument)?;
+            self.move_local(argument)?;
+        }
+        // `repeat<T: Clone>` and `repeat_n<T: Clone>` clone their value.
+        if let (Constructor::Repeat | Constructor::RepeatN, Some(value)) =
+            (constructor, arguments.first())
+        {
+            self.pending_bounds
+                .push((item.clone(), capability::Kind::Clone, value.span, None));
+        }
+        let values = arguments
+            .iter()
+            .map(ParsedExpr::rendered_source)
+            .collect::<Vec<_>>();
+        let next = self.temporary("item");
+        let mut pipeline = match constructor {
+            Constructor::Empty | Constructor::Once => {
+                let mut array = origin::Fragment::plain("[");
+                array.push(origin::Fragment::join(values, ", "));
+                array.push_text("]");
+                self.source_pipeline(Source::Values {
+                    values: array,
+                    array: true,
+                })
+            }
+            // `repeat_n(v, n)`: `n` clones of `v`, counted by a range.
+            Constructor::RepeatN => {
+                let mut pipeline = self.source_pipeline(Source::Range {
+                    low: "0".into(),
+                    high: Some(values[1].clone()),
+                    inclusive: false,
+                    char: false,
+                });
+                let value = self.bind(&mut pipeline, "value", values[0].clone());
+                pipeline.item = next.clone();
+                Self::item_stage(
+                    &mut pipeline,
+                    &format!("let {next} = {value}; ").into(),
+                    false,
+                );
+                pipeline.exact = true;
+                pipeline
+            }
+            Constructor::Repeat
+            | Constructor::OnceWith
+            | Constructor::RepeatWith
+            | Constructor::FromFn
+            | Constructor::Successors => {
+                let mut pipeline = Self::loop_pipeline(next.clone());
+                let mut values = values.into_iter();
+                let first = values.next().unwrap_or_default();
+                let bound = self.bind(&mut pipeline, "source", first);
+                let entry = match constructor {
+                    Constructor::Repeat => format!("let {next} = {bound}; ").into(),
+                    Constructor::RepeatWith => {
+                        format!("let {next} = {bound}.__rawr_call(); ").into()
+                    }
+                    Constructor::OnceWith => {
+                        let done = self.bind_state(&mut pipeline, "done", "false".into());
+                        format!(
+                            "if {done} {{ break; }} {done} = true; let {next} = {bound}.__rawr_call(); "
+                        )
+                        .into()
+                    }
+                    // `successors(first, f)`: each item, after `f` of it
+                    // makes the one after, as std's `next` does.
+                    Constructor::Successors => {
+                        let succ =
+                            self.bind(&mut pipeline, "function", values.next().unwrap_or_default());
+                        let state = self.bind_state(&mut pipeline, "next", bound.as_str().into());
+                        let mut entry = origin::Fragment::plain("if !");
+                        entry.push(self.prelude_op(PreludeOp::IsSome, [state.as_str().into()]));
+                        entry.push_text(format!(" {{ break; }} let {next} = "));
+                        entry.push(self.prelude_op(PreludeOp::Unwrap, [state.as_str().into()]));
+                        entry.push_text(format!("; {state} = {succ}.__rawr_call({next}); "));
+                        entry
+                    }
+                    _ => {
+                        let option = self.temporary("option");
+                        let mut entry = origin::Fragment::plain(format!(
+                            "let {option} = {bound}.__rawr_call(); if !"
+                        ));
+                        entry.push(self.prelude_op(PreludeOp::IsSome, [option.as_str().into()]));
+                        entry.push_text(format!(" {{ break; }} let {next} = "));
+                        entry.push(self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]));
+                        entry.push_text("; ");
+                        entry
+                    }
+                };
+                pipeline.segments[0].entry = entry;
+                pipeline
+            }
+        };
+        pipeline.exact |= matches!(constructor, Constructor::Empty | Constructor::Once);
+        let item = self.inference.resolve(&item);
+        Ok(self.iterator_expr(pipeline, item, call))
     }
 
     /// A runtime iterator of `pipeline` (`lazy.rs`): its sources and

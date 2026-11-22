@@ -474,7 +474,7 @@ impl Parser<'_> {
     pub(super) fn scalar_trace(
         &self,
         tests: bool,
-        binding: Option<(&ImmutableString, Span)>,
+        binding: Option<(&ImmutableString, Span, super::branch::Bound)>,
         written: &Ty,
     ) -> PatternTrace {
         let mut trace = PatternTrace::default();
@@ -489,12 +489,33 @@ impl Parser<'_> {
         match binding {
             // Below a `&mut`, rawr binds the value it refers to, which Rust
             // binds as the reference: the loans it keeps are left to rustc.
-            Some((_, span)) if !derefs.is_empty() && !self.shared_references(written) => {
+            Some((_, span, _)) if !derefs.is_empty() && !self.shared_references(written) => {
                 trace.unmodeled = Some(("a binding of a matched reference's value", span));
+            }
+            // `ref v` and `ref mut v` borrow the subject as written.
+            Some((
+                name,
+                span,
+                bound @ (super::branch::Bound::Shared | super::branch::Bound::Unique),
+            )) => {
+                let mutable = bound == super::branch::Bound::Unique;
+                trace.parts.push(Part {
+                    path: Vec::new(),
+                    regions: Vec::new(),
+                    kind: PartKind::Bind {
+                        name: name.clone(),
+                        span,
+                        by_ref: Some(mutable),
+                        ty: Ty::Reference {
+                            mutable,
+                            target: Box::new(written.clone()),
+                        },
+                    },
+                });
             }
             // The binding is the subject as written, `&T` included, and
             // holds its loans.
-            Some((name, span)) => trace.parts.push(Part {
+            Some((name, span, _)) => trace.parts.push(Part {
                 path: Vec::new(),
                 regions: Vec::new(),
                 kind: PartKind::Bind {
@@ -980,6 +1001,41 @@ impl Parser<'_> {
                 .collect(),
             output: function.output.as_ref().unwrap_or(&unit),
             lifetimes: &function.lifetimes,
+        };
+        signature::summary(&signature, &|target| self.declared_lifetimes(target))
+    }
+
+    /// What a call of the trait method `function`, as its trait declares
+    /// it, keeps of its inputs: the call of a generic parameter's bound
+    /// (`t.get()` of `T: Get`) or a trait object's (`b.get()` of `Box<dyn
+    /// Get>`), whichever impl it runs.
+    pub(super) fn trait_method_summary(&self, function: &item::Function) -> Summary {
+        let unit = type_ref::Type::Unit(function.body.span);
+        // `self` is of the trait's parameter `Self`.
+        let lifetimes = item::Lifetimes {
+            owner: Some(Box::new(type_ref::Type::Path(type_ref::Path {
+                name: "Self".into(),
+                target: type_ref::Target::Parameter,
+                arguments: Box::default(),
+                span: function.name.span,
+            }))),
+            ..function.lifetimes.clone()
+        };
+        let signature = signature::Signature {
+            receiver: function.receiver.as_ref().map(|receiver| match receiver {
+                crate::item::Receiver::Shared(_) => signature::Receiver::Shared,
+                crate::item::Receiver::Mutable(_) => signature::Receiver::Mutable,
+                crate::item::Receiver::Owned(_) | crate::item::Receiver::OwnedMutable(_) => {
+                    signature::Receiver::Owned
+                }
+            }),
+            parameters: function
+                .parameters
+                .iter()
+                .map(|parameter| &parameter.ty)
+                .collect(),
+            output: function.output.as_ref().unwrap_or(&unit),
+            lifetimes: &lifetimes,
         };
         signature::summary(&signature, &|target| self.declared_lifetimes(target))
     }
@@ -1773,6 +1829,22 @@ impl Parser<'_> {
             None if any_holds => known = false,
             None => {}
         }
+        // What a `&mut` argument refers to takes another input's borrows
+        // (`store(&mut v, &x)`).
+        for (index, taps) in &summary.argument_stores {
+            for tap in taps {
+                match (
+                    self.read_input(&mut inputs, tap.from),
+                    arguments.get(*index),
+                ) {
+                    (Some(stored), _) if stored.is_empty() => {}
+                    (Some(stored), Some(argument)) => {
+                        known &= self.flow().store_through(argument.span, &stored);
+                    }
+                    _ => known = false,
+                }
+            }
+        }
         // The receiver's own borrow, kept in what a `&mut` argument
         // refers to (`scene.draw(&mut pass)`).
         for &index in &summary.receiver_into {
@@ -1975,6 +2047,37 @@ impl Parser<'_> {
                 self.flow().overloaded_index(value.span.start(), value.span);
             }
             _ => self.project_place(value, Projection::Index),
+        }
+    }
+
+    /// A field read of `value`, a value made here whose `Drop` uses the
+    /// borrows it holds (`G(&x).0`): a temporary its statement drops at its
+    /// end, which uses them there.
+    pub(super) fn field_of_temporary(&self, value: &ParsedExpr) {
+        if is_place(value) || self.flow().in_place(value.span) {
+            return;
+        }
+        let ty = self.inference.resolve(&value.ty);
+        if !self.made_here(value.span, &ty) || self.drop_use(&ty) != drops::DropUse::All {
+            return;
+        }
+        let held = self.flow().origins(value.span).map(<[_]>::to_vec);
+        if let Some(held) = held {
+            self.flow().hold_temporary(value.span, &held);
+        }
+    }
+
+    /// `cell.borrow()` or `cell.borrow_mut()` spanning `call`: its guard
+    /// holds the `&self` borrow of the cell for as long as it lives, as
+    /// `Ref` and `RefMut` do.
+    pub(super) fn cell_borrowed(&self, cell: &ParsedExpr, call: Span) {
+        if !is_place(cell) {
+            return;
+        }
+        let below = self.may_hold_borrow(&cell.ty);
+        let loan = self.flow().autoref(cell.span.start(), call, false, below);
+        if let Some(loan) = loan {
+            self.flow().set_origins(call, vec![(Path::OWN, loan)]);
         }
     }
 

@@ -9083,6 +9083,1108 @@ main();
 }
 
 #[test]
+fn language_a_float_constant_in_a_pattern_matches_its_value() {
+    // A pattern naming a float `const`, free or associated, matches its
+    // value, as rustc's; an `f32` one its value as an `f32` (#2508). A
+    // suffixed number ends a `match` head.
+    let output = printed(
+        r#"
+const F: f64 = 1.5;
+const G: f64 = -F * 2.0;
+const LO: f64 = 0.5;
+const HI: f64 = LO * 4.0;
+const H: f32 = 0.1;
+const N: u8 = 3u8;
+struct P;
+impl P {
+    const K: f64 = 2.5;
+}
+fn main() {
+    for x in [1.5, 2.0, -3.0, 0.25, 2.5] {
+        match x {
+            F => println!("F {x}"),
+            G => println!("G {x}"),
+            LO..=HI => println!("in {x}"),
+            P::K => println!("K {x}"),
+            _ => println!("other {x}"),
+        }
+    }
+    let y: f32 = 0.1;
+    match y {
+        H => println!("H"),
+        _ => println!("not H"),
+    }
+    match 3u8 {
+        N => println!("N"),
+        _ => println!("not N"),
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "F 1.5\nin 2\nG -3\nother 0.25\nK 2.5\nH\nN\n");
+}
+
+#[test]
+fn language_a_parameter_literal_takes_its_suffix() {
+    // `1u8` in a parameter pattern is a `u8`, as rustc reads it (#2510):
+    // E0005 names the `u8` values it misses, and on an `i32` it is E0308.
+    assert_eq!(
+        rendered("fn f((x, 1u8): (i32, u8)) -> i32 { x }\nfn main() {}\n"),
+        concat!(
+            "error[E0005]: refutable pattern in function argument\n",
+            " --> main.rs:1:6\n",
+            "  |\n",
+            "1 | fn f((x, 1u8): (i32, u8)) -> i32 { x }\n",
+            "  |      ^^^^^^^^ patterns `(_, 0_u8)` and `(_, 2_u8..=u8::MAX)` not covered\n",
+            "  |\n",
+            "  = note: the matched value is of type `(i32, u8)`\n",
+        )
+    );
+    assert_eq!(
+        rendered("fn f((x, 1u8): (i32, i32)) -> i32 { x }\nfn main() {}\n"),
+        concat!(
+            "error[E0308]: mismatched types\n",
+            " --> main.rs:1:10\n",
+            "  |\n",
+            "1 | fn f((x, 1u8): (i32, i32)) -> i32 { x }\n",
+            "  |          ^^^   ---------- expected due to this\n",
+            "  |          |\n",
+            "  |          expected `i32`, found `u8`\n",
+        )
+    );
+    // In a body's pattern too, a suffixed literal is its own type.
+    assert_eq!(
+        rendered(
+            "fn main() {\n    let t: (i32, i32) = (2, 1);\n    match t {\n        \
+             (x, 1u8) => println!(\"{x}\"),\n        _ => {}\n    }\n}\n"
+        ),
+        concat!(
+            "error[E0308]: mismatched types\n",
+            " --> main.rs:4:13\n",
+            "  |\n",
+            "3 |     match t {\n",
+            "  |           - this expression has type `(i32, i32)`\n",
+            "4 |         (x, 1u8) => println!(\"{x}\"),\n",
+            "  |             ^^^ expected `i32`, found `u8`\n",
+        )
+    );
+}
+
+#[test]
+fn language_a_ref_arm_borrows_the_matched_value() {
+    // `match x { ref v => .. }` binds `&x`, and `ref mut` the place, on a
+    // struct, a `Vec`, an `Option`, a `String` or a scalar alike (#194).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct P {
+    x: i32,
+}
+fn main() {
+    let p = P { x: 1 };
+    let a = match p { ref q => q.x };
+    let v = vec![1, 2];
+    let b = match v { ref w if w.len() > 5 => 0, ref w => w.len() };
+    let o = Some(String::from("o"));
+    let c = match o { ref r => r.is_some() };
+    let mut m = P { x: 5 };
+    match m { ref mut q => q.x += 1 }
+    let s = String::from("abc");
+    let n = match s { ref v => v.len() };
+    let k = 6;
+    let j = match k { ref v => *v };
+    let mut t = String::from("x");
+    match t { ref mut w => w.push('y') }
+    println!("{a} {b} {c} {:?} {:?} {:?} {:?} {n} {j} {s} {t}", p, v, o, m);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "1 2 true P { x: 1 } [1, 2] Some(\"o\") P { x: 6 } 3 6 abc xy\n"
+    );
+    // The borrow lasts as long as the binding is used.
+    let report = refused(
+        "fn main() {\n    let mut s = String::from(\"abc\");\n    match s {\n        \
+         ref v => {\n            s.push('d');\n            println!(\"{v}\");\n        }\n    }\n}\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0502]: cannot borrow `s` as mutable because it is also borrowed as immutable"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        "struct P {\n    x: i32,\n}\nfn main() {\n    let p = P { x: 1 };\n    \
+         let r = match p {\n        ref q => q,\n    };\n    drop(p);\n    println!(\"{}\", r.x);\n}\n",
+    );
+    assert!(
+        report.starts_with("error[E0505]: cannot move out of `p` because it is borrowed"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_an_element_borrow_checks_its_index_where_it_is_made() {
+    // `&mut a[i]` past the end panics where the borrow is made, as rustc's
+    // does, not where it is first used (#410).
+    assert_eq!(
+        panicked(
+            "fn main() {\n    let mut a = [1, 2, 3];\n    let v = vec![0; 9];\n    \
+             let i = v.len();\n    let r = &mut a[i];\n    println!(\"made\");\n    *r = 4;\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:5:18:\nindex out of bounds: the len is 3 but the index is 9"
+    );
+    assert_eq!(
+        panicked(
+            "struct G {\n    cells: [i32; 2],\n}\nfn main() {\n    let mut g = G { cells: [1, 2] };\n    \
+             let mut m = [[1, 2], [3, 4]];\n    let k = g.cells.len() + 1;\n    \
+             let c = &mut m[1][k - 2];\n    *c = 0;\n    let d = &mut g.cells[k];\n    \
+             println!(\"made\");\n    *d = 1;\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:10:18:\nindex out of bounds: the len is 2 but the index is 3"
+    );
+}
+
+#[test]
+fn language_a_primitive_op_assign_through_a_ref_cell_reads_its_right_side_first() {
+    // A builtin `op=` of two primitives evaluates its right side before
+    // its place, as rustc does, so the right side's `borrow()` ends before
+    // the place's `borrow_mut()` (#3). A trait's `op=`, of a `String`,
+    // borrows its place first, and the right side's `borrow()` panics.
+    let output = printed(
+        r#"
+use std::cell::RefCell;
+fn main() {
+    let n = RefCell::new(1);
+    *n.borrow_mut() += {
+        let v = *n.borrow();
+        v
+    };
+    let f = RefCell::new(1.5);
+    *f.borrow_mut() *= {
+        let v = *f.borrow();
+        v
+    };
+    println!("primitive {} {}", n.borrow(), f.borrow());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "primitive 2 2.25\n");
+    assert_eq!(
+        panicked(
+            "use std::cell::RefCell;\nfn main() {\n    let s = RefCell::new(String::from(\"a\"));\n    \
+             *s.borrow_mut() += {\n        let v = s.borrow().clone();\n        &v.clone()\n    };\n}\n"
+        )
+        .lines()
+        .next()
+        .map(str::to_owned),
+        Some("thread 'main' panicked at main.rs:5:19:".to_owned())
+    );
+}
+
+#[test]
+fn language_a_whole_optional_borrow_binds_beside_bindings_of_its_value() {
+    // A catch-all binding of a whole `Option<&mut T>`, a local's or a
+    // call's, beside an arm binding its value by `&mut`, holds the
+    // reference to the element's place, as rustc's (#166).
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    match v.last_mut() {
+        Some(x) if *x > 10 => *x += 1,
+        whole => {
+            if let Some(y) = whole {
+                *y += 100
+            }
+        }
+    }
+    let mut w = vec![5, 50];
+    let o = w.first_mut();
+    match o {
+        Some(x) if *x > 10 => *x += 1,
+        None => {}
+        whole => {
+            if let Some(y) = whole {
+                *y += 7;
+            }
+        }
+    }
+    let mut u = vec![20];
+    match u.first_mut() {
+        Some(x) if *x > 10 => *x += 1,
+        whole => println!("{:?}", whole),
+    }
+    println!("{:?} {:?} {:?}", v, w, u);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2, 103] [12, 50] [21]\n");
+}
+
+#[test]
+fn language_a_part_with_drop_glue_moves_out_below_a_field() {
+    // A move out of a field below a field, or of a member below a member,
+    // whose type implements `Drop` leaves the rest of the local to drop
+    // where rustc drops it, the moved part with its new owner (#196).
+    let output = printed(
+        r#"
+struct D(i32);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop D{}", self.0);
+    }
+}
+struct I {
+    d: D,
+    e: D,
+}
+struct O {
+    i: I,
+    f: D,
+}
+impl O {
+    fn take(self) -> D {
+        println!("taking");
+        self.i.e
+    }
+}
+fn main() {
+    let t = (D(1), (D(2), D(3)));
+    let a = t.1.0;
+    println!("moved {}", a.0);
+    let u = (D(4), D(5));
+    let b = u.1;
+    println!("moved {}", b.0);
+    let mut o = O { i: I { d: D(6), e: D(7) }, f: D(8) };
+    let c = o.i.d;
+    o.i.d = D(9);
+    println!("moved {}", c.0);
+    let p = O { i: I { d: D(10), e: D(11) }, f: D(12) };
+    let e = p.take();
+    println!("took {}", e.0);
+    println!("end");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "moved 2\nmoved 5\nmoved 6\ntaking\ndrop D10\ndrop D12\ntook 11\nend\ndrop D11\n\
+         drop D6\ndrop D9\ndrop D7\ndrop D8\ndrop D5\ndrop D4\ndrop D2\ndrop D1\ndrop D3\n"
+    );
+}
+
+#[test]
+fn language_a_qualified_path_without_a_trait_is_the_types_path() {
+    // `<T>::f(..)` means `T::f(..)`, with the turbofish a type's arguments
+    // take in an expression (#378).
+    let output = printed(
+        r#"
+struct S;
+impl S {
+    fn make() -> i32 { 7 }
+    fn twice(&self, x: i32) -> i32 { x * 2 }
+}
+trait Tr { fn tr() -> i32; }
+impl Tr for S { fn tr() -> i32 { 9 } }
+fn main() {
+    println!("{} {} {}", <S>::make(), <S>::twice(&S, 4), <S>::tr());
+    println!("{} {} {}", <i32>::max(3, 5), <Vec<i32>>::new().len(), <str>::len("abc"));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 8 9\n5 0 3\n");
+}
+
+#[test]
+fn language_question_mark_converts_an_error_through_std_from() {
+    // `?` returns `Err(From::from(e))`, through std's impls as through a
+    // program's: `&str` into `String`, `u8` into `u64` (#1034).
+    let output = printed(
+        r#"
+fn pick(x: Option<i32>) -> Result<i32, String> {
+    let v = x.ok_or("missing")?;
+    Ok(v + 1)
+}
+fn pick2(x: Result<i32, &str>) -> Result<i32, String> { Ok(x? * 2) }
+fn wide(x: Result<u8, u8>) -> Result<u8, u64> { Ok(x?) }
+fn main() {
+    println!("{:?} {:?} {:?} {:?}", pick(Some(1)), pick(None), pick2(Err("bad")), wide(Err(7)));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Ok(2) Err(\"missing\") Err(\"bad\") Err(7)\n");
+    let report = refused(
+        "fn bad(x: Result<i32, bool>) -> Result<i32, String> { Ok(x?) }\nfn main() {}\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: `?` couldn't convert the error to `String`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_an_error_in_an_arm_where_a_boxed_error_is_expected_is_e0308() {
+    // The expected `Result<_, Box<dyn Error>>` reaches each arm's
+    // `Err(..)`: a bare error there is rustc's E0308, and a boxed one
+    // coerces (#1430).
+    let declarations = "use std::error::Error;\nuse std::fmt;\n#[derive(Debug)]\nstruct MyErr;\n\
+        impl fmt::Display for MyErr {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, \"my\") }\n}\n\
+        impl Error for MyErr {}\n";
+    for body in [
+        "if c { Ok(1) } else { Err(MyErr) }",
+        "match c { true => Ok(1), false => Err(MyErr) }",
+    ] {
+        let report = refused(&format!(
+            "{declarations}fn run(c: bool) -> Result<i32, Box<dyn Error>> {{\n    {body}\n}}\n\
+             fn main() {{ println!(\"{{:?}}\", run(true).is_ok()); }}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with("error[E0308]: mismatched types\n"),
+            "{report}"
+        );
+        assert!(
+            report.contains("expected `Box<dyn Error>`, found `MyErr`"),
+            "{report}"
+        );
+    }
+    let output = printed(&format!(
+        "{declarations}fn run(c: bool) -> Result<i32, Box<dyn Error>> {{\n    \
+         if c {{ Ok(1) }} else {{ Err(Box::new(MyErr)) }}\n}}\n\
+         fn main() {{ println!(\"{{:?}} {{}}\", run(true).is_ok(), run(false).unwrap_err()); }}\nmain();\n"
+    ));
+    assert_eq!(output, "true my\n");
+}
+
+#[test]
+fn language_a_relaxed_sized_bound_bounds_nothing() {
+    // `?Sized` in a parameter's bounds and in a `where` clause (#801); no
+    // other trait is relaxed.
+    let output = printed(
+        r#"
+use std::fmt::Display;
+fn show<T: Display + ?Sized>(t: &T) -> String { format!("<{}>", t) }
+fn wrap<T>(t: &T) -> String where T: ?Sized + Display { format!("[{}]", t) }
+fn main() {
+    let s: &str = "hi";
+    println!("{} {} {}", show(s), show(&5), wrap("ab"));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "<hi> <5> [ab]\n");
+    let report = refused("fn f<T: ?Clone>(t: &T) {}\nfn main() {}\nmain();\n");
+    assert!(
+        report.starts_with("error: bound modifier `?` can only be applied to `Sized`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_a_method_where_self_is_sized_is_no_method_of_dyn_trait() {
+    // `where Self: Sized` keeps a method out of `dyn Trait`, so it may take
+    // no `self` or return `Self` (#802). Outside an impl or a trait there
+    // is no `Self` (E0411).
+    let output = printed(
+        r#"
+trait Shape {
+    fn area(&self) -> f64;
+    fn doubled(self) -> f64 where Self: Sized { self.area() * 2.0 }
+    fn make() -> Self where Self: Sized;
+}
+struct Sq(f64);
+impl Shape for Sq {
+    fn area(&self) -> f64 { self.0 * self.0 }
+    fn make() -> Self { Sq(3.0) }
+}
+fn main() {
+    let b: Box<dyn Shape> = Box::new(Sq(2.0));
+    println!("{} {} {}", b.area(), Sq(2.0).doubled(), Sq::make().area());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "4 8 9\n");
+    let report = refused("fn f() where Self: Sized {}\nfn main() {}\nmain();\n");
+    assert!(
+        report.starts_with("error[E0411]: cannot find type `Self` in this scope\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_a_generic_traits_associated_type_bound_names_its_parameters() {
+    // `type Out: Iterator<Item = T>` of `trait Conv<T>` is the iterator of
+    // the bound's or the impl's `T` (#382), and an impl whose type yields
+    // another is rustc's E0271.
+    let output = printed(
+        r#"
+trait Conv<T> {
+    type Out: Iterator<Item = T>;
+    fn conv(&self) -> Self::Out;
+}
+struct Up(u32);
+impl Conv<u32> for Up {
+    type Out = std::ops::Range<u32>;
+    fn conv(&self) -> Self::Out { 0..self.0 }
+}
+fn total<C: Conv<u32>>(c: &C) -> u32 { c.conv().sum() }
+fn firsts<T, C: Conv<T>>(c: &C) -> Option<T> { c.conv().next() }
+fn main() {
+    let s: Vec<u32> = Up(4).conv().collect();
+    let f: Option<u32> = firsts(&Up(3));
+    println!("{:?} {} {:?}", s, total(&Up(5)), f);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[0, 1, 2, 3] 10 Some(0)\n");
+    let report = refused(
+        "trait Conv<T> { type Out: Iterator<Item = T>; }\nstruct Up;\n\
+         impl Conv<u64> for Up { type Out = std::ops::Range<u32>; }\nfn main() {}\nmain();\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0271]: expected `Range<u32>` to be an iterator that yields `u64`, but it \
+             yields `u32`\n"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_blanket_impls_are_probed_by_the_bounds_that_hold() {
+    // Two blanket impls of different traits give `shout`: the one whose
+    // bounds hold for the receiver is called, and two that hold are
+    // rustc's E0034. `T::Item` in a blanket impl's signature is the
+    // receiver's item (#1555).
+    let declarations = "trait Named { fn name(&self) -> String; }\n\
+        trait Loud { fn shout(&self) -> String; }\n\
+        impl<T: Named> Loud for T { fn shout(&self) -> String { self.name().to_uppercase() } }\n\
+        trait Quiet { fn shout(&self) -> String; }\n\
+        impl<T: Clone> Quiet for T { fn shout(&self) -> String { \"shh\".into() } }\n";
+    let output = printed(&format!(
+        "{declarations}struct Dog;\nimpl Named for Dog {{ fn name(&self) -> String {{ \"dog\".into() }} }}\n\
+         trait Or {{ type Out; fn or(self, d: Self::Out) -> Self::Out; }}\n\
+         impl<T: Iterator> Or for T {{ type Out = T::Item; fn or(self, d: T::Item) -> T::Item {{ d }} }}\n\
+         fn main() {{ println!(\"{{}} {{}} {{}}\", Dog.shout(), 5.shout(), vec![4, 5].into_iter().or(9)); }}\nmain();\n"
+    ));
+    assert_eq!(output, "DOG shh 9\n");
+    let report = refused(&format!(
+        "{declarations}#[derive(Clone)]\nstruct Cat;\nimpl Named for Cat {{ fn name(&self) -> String {{ \"cat\".into() }} }}\n\
+         fn main() {{ println!(\"{{}}\", Cat.shout()); }}\nmain();\n"
+    ));
+    assert!(
+        report.starts_with("error[E0034]: multiple applicable items in scope\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_prelude_type_imported_under_another_name_works_in_bodies() {
+    // `use std::string::String as Text;` names `String` in a body's paths,
+    // types and patterns, as in a signature (#810).
+    let output = printed(
+        r#"
+use std::option::Option as Maybe;
+use std::string::String as Text;
+use std::vec::Vec as List;
+fn twice(t: Text) -> Text {
+    t.repeat(2)
+}
+fn main() {
+    let t: Text = Text::from("ab");
+    let mut l: List<Text> = List::new();
+    l.push(twice(t));
+    let m: Maybe<usize> = Maybe::Some(l.len());
+    match m {
+        Maybe::Some(n) => println!("{n} {:?} {}", l, Text::with_capacity(4).len()),
+        Maybe::None => println!("none"),
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 [\"abab\"] 0\n");
+}
+
+#[test]
+fn a_public_glob_re_exports_its_module_s_names() {
+    // `pub use inner::*;` binds inner's names in `outer` for every module
+    // `outer`'s items reach, a std module's too (#1349).
+    let output = printed(
+        r#"
+mod outer {
+    mod inner {
+        pub fn f() -> i32 {
+            1
+        }
+        pub struct S(pub i32);
+        pub trait T {
+            fn t(&self) -> i32 {
+                9
+            }
+        }
+        impl T for S {}
+    }
+    pub use inner::*;
+}
+mod formatting {
+    pub use std::fmt::*;
+}
+use outer::T;
+struct X;
+impl formatting::Display for X {
+    fn fmt(&self, f: &mut formatting::Formatter) -> formatting::Result {
+        write!(f, "x")
+    }
+}
+fn main() {
+    let s = outer::S(outer::f());
+    println!("{} {} {X}", s.0, s.t());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 9 x\n");
+    // Each name goes no further than its item: a `pub(super)` function
+    // is the parent's, rustc's E0603 where another module names it.
+    let report = refused(
+        r#"
+mod outer {
+    mod inner {
+        pub(super) fn g() -> i32 {
+            2
+        }
+    }
+    pub use inner::*;
+    pub fn h() -> i32 {
+        g()
+    }
+}
+fn main() {
+    println!("{} {}", outer::h(), outer::g());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0603]: function import `g` is private"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_facade_type_s_trait_method_needs_its_trait_in_scope() {
+    // `Stdout`'s `flush`, `Stdin`'s `read_to_string` and a `Cursor`'s
+    // `read_to_end` are `Write`'s and `Read`'s: rustc's E0599 with no
+    // `use` of them (#1427).
+    for (program, headline, import) in [
+        (
+            "fn main() {\n    std::io::stdout().flush().unwrap();\n}\n",
+            "error[E0599]: no method named `flush` found for struct `Stdout` in the current scope",
+            "1 + use std::io::Write;",
+        ),
+        (
+            "fn main() {\n    let mut s = String::new();\n    \
+             std::io::stdin().read_to_string(&mut s).unwrap();\n}\n",
+            "error[E0599]: no method named `read_to_string` found for struct `Stdin` in the \
+             current scope",
+            "1 + use std::io::Read;",
+        ),
+        (
+            "use std::io::Cursor;\nfn main() {\n    let mut c = Cursor::new(vec![1u8]);\n    \
+             let mut v = Vec::new();\n    c.read_to_end(&mut v).unwrap();\n}\n",
+            "error[E0599]: no method named `read_to_end` found for struct `std::io::Cursor<T>` \
+             in the current scope",
+            "1 + use std::io::Read;",
+        ),
+    ] {
+        let report = refused(&format!("{program}main();\n"));
+        assert!(report.starts_with(headline), "{report}");
+        assert!(report.contains(import), "{report}");
+    }
+    // With `BufRead` in scope, a `Cursor`'s `lines` are its own.
+    let output = printed(
+        r#"
+use std::io::{BufRead, Cursor};
+fn main() {
+    for line in Cursor::new("a\nb\n").lines() {
+        println!("{}", line.unwrap());
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a\nb\n");
+}
+
+#[test]
+fn std_iter_s_sources_run_as_far_as_the_chain_pulls() {
+    // `repeat`, `once`, `empty`, `from_fn`, `successors`, `repeat_with`,
+    // `repeat_n` and `once_with`, each a chain's source; a closure runs
+    // once per item pulled.
+    let output = printed(
+        r#"
+use std::iter::{self, from_fn, successors};
+fn counter() -> impl Iterator<Item = u32> {
+    let mut c = 0;
+    from_fn(move || {
+        c += 1;
+        if c <= 3 { Some(c) } else { None }
+    })
+}
+fn main() {
+    let a: Vec<i32> = iter::repeat(7).take(3).collect();
+    let b: Vec<i32> = iter::once(1).chain(iter::once(2)).collect();
+    let mut k = 1;
+    let c: Vec<i32> = iter::repeat_with(|| { k *= 2; k }).take(4).collect();
+    let d: Vec<u32> = successors(Some(1u32), |x| if *x < 100 { Some(x * 3) } else { None }).collect();
+    println!("{:?} {:?} {:?} {:?} {}", a, b, c, d, iter::empty::<u8>().count());
+    let mut it = counter();
+    println!("{:?} {:?}", it.next(), it.collect::<Vec<_>>());
+    let mut pulls = 0;
+    let e: Vec<i32> = std::iter::from_fn(|| { pulls += 1; Some(pulls) }).take(2).collect();
+    let s: i32 = iter::repeat_n(4, 3).sum();
+    let w: Vec<String> = iter::once_with(|| "w".to_string()).collect();
+    println!("{:?} {pulls} {s} {:?} {}", e, w, iter::once(1).len());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[7, 7, 7] [1, 2] [2, 4, 8, 16] [1, 3, 9, 27, 81, 243] 0\nSome(1) [2, 3]\n\
+         [1, 2] 2 12 [\"w\"] 1\n"
+    );
+    // `repeat` clones its value, which must be `Clone`.
+    let report = refused(
+        "struct S;\nfn main() {\n    let n = std::iter::repeat(S).take(2).count();\n}\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `S: Clone` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_buffered_reader_and_writer_over_a_file_run_as_stds() {
+    // std's `BufWriter` over a `File` writes what it buffers when it is
+    // flushed or dropped, and a `BufReader` reads a file's lines, as
+    // std's do (#2580). `read_line` is `BufRead`'s, so it needs its `use`.
+    let directory = std::env::temp_dir().join(format!("rawr-buffered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let source = format!(
+        r#"
+use std::fs::{{self, File}};
+use std::io::{{BufRead, BufReader, BufWriter, Cursor, Read, Write}};
+use std::path::PathBuf;
+fn main() {{
+    let dir = PathBuf::from({directory:?});
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("lines.txt");
+    {{
+        let mut out = BufWriter::new(File::create(&p).unwrap());
+        writeln!(out, "one").unwrap();
+        out.write_all(b"two\n").unwrap();
+        println!("{{}} {{}}", out.capacity(), fs::read_to_string(&p).unwrap().len());
+    }}
+    let mut out = BufWriter::with_capacity(4, fs::OpenOptions::new().append(true).open(&p).unwrap());
+    out.write_all(b"three\n").unwrap();
+    out.flush().unwrap();
+    drop(out);
+    for line in BufReader::new(File::open(&p).unwrap()).lines() {{
+        println!("{{}}", line.unwrap());
+    }}
+    let mut reader = BufReader::new(File::open(&p).unwrap());
+    let mut first = String::new();
+    let n = reader.read_line(&mut first).unwrap();
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).unwrap();
+    println!("{{n}} {{first:?}} {{rest:?}}");
+    let words: Vec<String> = BufReader::new(Cursor::new("x y\nz")).lines().map(|l| l.unwrap()).collect();
+    println!("{{:?}}", words);
+    fs::remove_dir_all(&dir).unwrap();
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    assert_eq!(
+        output,
+        "8192 0\none\ntwo\nthree\n4 \"one\\n\" \"two\\nthree\\n\"\n[\"x y\", \"z\"]\n"
+    );
+    let report = refused(
+        "use std::io::{BufReader, Cursor};\nfn main() {\n    let mut r = \
+         BufReader::new(Cursor::new(\"a\"));\n    let mut s = String::new();\n    \
+         r.read_line(&mut s).unwrap();\n}\nmain();\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `read_line` found for struct `BufReader<R>` in the \
+             current scope"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("1 + use std::io::BufRead;"), "{report}");
+}
+
+#[test]
+fn an_operator_on_a_std_type_needs_no_trait_in_scope() {
+    // `+`, `+=`, `-`, `==`, `<` and `[]` call their traits' methods with
+    // no `use` of `Add`, `AddAssign`, `PartialEq` or `Index`, as in Rust;
+    // only method syntax asks for its trait (#1427).
+    let output = printed(
+        r#"
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+fn main() {
+    let mut t: SystemTime = UNIX_EPOCH + Duration::from_secs(90);
+    t += Duration::from_secs(10);
+    t -= Duration::from_secs(40);
+    println!("{:?} {}", t.duration_since(UNIX_EPOCH).unwrap(), t == UNIX_EPOCH + Duration::from_secs(60));
+    let now = Instant::now();
+    let mut later = now + Duration::from_millis(5);
+    later += Duration::from_millis(5);
+    println!("{:?} {} {}", later - now, later > now, later == now);
+    let mut d = Duration::from_secs(1) * 3;
+    d += Duration::from_secs(2);
+    d -= Duration::from_millis(500);
+    println!("{:?} {} {:?}", d, d == Duration::from_millis(4500), d / 2);
+    let mut s = String::from("ab") + "c";
+    s += "d";
+    println!("{} {} {}", s, s == "abcd", &s[1..3]);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "60s true\n10ms true false\n4.5s true 2.25s\nabcd true bc\n"
+    );
+}
+
+#[test]
+fn a_reference_type_written_with_a_named_lifetime_borrows_for_it() {
+    // `let x: &'static T` and `let x: &'a T` of the function's `'a` borrow
+    // what `x` is given for all of the body (#129).
+    let short = "error[E0597]: `n` does not live long enough";
+    refused_as(&[
+        (
+            "fn main() { let n = 5; let x: &'static i32 = &n; println!(\"{}\", x); }",
+            short,
+        ),
+        (
+            "fn main() { let x: &'static i32; { let n = 5; x = &n; } println!(\"{}\", x); }",
+            short,
+        ),
+        (
+            "fn f<'a>(r: &'a i32) -> &'a i32 { let n = 5; let x: &'a i32 = &n; println!(\"{}\", x); r }
+fn main() { let k = 1; println!(\"{}\", f(&k)); }",
+            short,
+        ),
+    ]);
+    let output = printed(
+        r#"
+static A: i32 = 1;
+const C: i32 = 3;
+struct H<'a>(&'a i32);
+impl<'a> H<'a> {
+    fn g(&self) -> i32 { let y: &'a i32 = self.0; let z: &'a i32 = &*self.0; *y + *z }
+}
+fn f<'a>(r: &'a i32) -> i32 { let x: &'a i32 = r; let w: &'a i32 = &*r; *x + *w }
+fn main() {
+    let s: &'static str = "a";
+    let x: &'static i32 = &A;
+    let y: &'static i32 = &5;
+    let z: &'static i32 = &C;
+    let w: &'static [i32] = &[1, 2];
+    let t: &'static str;
+    t = s;
+    let k = 4;
+    println!("{} {} {} {} {:?} {} {} {}", s, x, y, z, w, t, H(&k).g(), f(&k));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a 1 5 3 [1, 2] a 8 8\n");
+}
+
+#[test]
+fn a_field_that_leaves_out_its_types_lifetime_is_e0106() {
+    // `w: Wrapper` of `struct Wrapper<'a>`, in a field, a payload or a
+    // type argument, as rustc refuses it (#160).
+    let missing = "error[E0106]: missing lifetime specifier";
+    refused_as(&[
+        (
+            "struct Wrapper<'a> { r: &'a i32 }
+struct Outer { w: Wrapper }
+fn main() { let a = 1; let o = Outer { w: Wrapper { r: &a } }; println!(\"{}\", o.w.r); }",
+            missing,
+        ),
+        (
+            "struct W<'a> { r: &'a i32 }
+enum E { A(i32), B(Option<W>) }
+fn main() {}",
+            missing,
+        ),
+        (
+            "struct W<'a, T> { r: &'a T }
+struct O { w: Vec<W<i32>> }
+fn main() {}",
+            missing,
+        ),
+        (
+            "struct O<'a> { w: &'a W }
+struct W<'a> { r: &'a i32 }
+fn main() {}",
+            missing,
+        ),
+    ]);
+    let output = printed(
+        r#"
+struct W<'a, T> { r: &'a T }
+struct O<'a> { w: Vec<W<'a, i32>>, f: fn(i32) -> i32 }
+enum E<'b> { A(W<'b, u8>), B }
+fn main() {
+    let a = 1;
+    let b = 2u8;
+    let o = O { w: vec![W { r: &a }], f: |n| n + 1 };
+    let e = E::A(W { r: &b });
+    if let E::A(w) = e {
+        println!("{} {}", (o.f)(*o.w[0].r), w.r);
+    }
+    let _ = E::B;
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 2\n");
+}
+
+#[test]
+fn a_closure_that_moves_out_a_capture_where_fn_is_needed_is_e0507() {
+    // A closure written for an `F: Fn` or `impl FnMut` parameter has that
+    // kind, which can't move out a capture (#193).
+    refused_as(&[
+        (
+            "fn call_twice<F: Fn() -> usize>(f: F) -> usize { f() + f() }
+fn main() { let s = String::from(\"ab\"); println!(\"{}\", call_twice(move || { let t = s; t.len() })); }",
+            "error[E0507]: cannot move out of `s`, a captured variable in an `Fn` closure",
+        ),
+        (
+            "fn mutable(mut f: impl FnMut() -> usize) -> usize { f() }
+fn main() { let u = String::from(\"abc\"); println!(\"{}\", mutable(|| { let t = u; t.len() })); }",
+            "error[E0507]: cannot move out of `u`, a captured variable in an `FnMut` closure",
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn once<F: FnOnce() -> usize>(f: F) -> usize { f() }
+fn twice<F: Fn() -> usize>(f: F) -> usize { f() + f() }
+fn main() {
+    let s = String::from("ab");
+    let t = String::from("abc");
+    println!("{} {}", once(move || { let u = s; u.len() }), twice(|| t.len()));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 6\n");
+}
+
+#[test]
+fn a_cells_guard_keeps_the_cell_borrowed_until_it_drops() {
+    // `c.borrow()` borrows `c` for as long as its `Ref` lives, whose drop
+    // at its scope's end uses the borrow (#185).
+    let assigned = "error[E0506]: cannot assign to `c` because it is borrowed";
+    refused_as(&[
+        (
+            "use std::cell::RefCell;
+fn main() { let mut c = RefCell::new(1); let b = c.borrow(); c = RefCell::new(2); println!(\"{}\", b); }",
+            assigned,
+        ),
+        (
+            "use std::cell::RefCell;
+fn main() { let mut c = RefCell::new(1); let b = c.borrow_mut(); c = RefCell::new(2); }",
+            assigned,
+        ),
+    ]);
+    let output = printed(
+        r#"
+use std::cell::RefCell;
+fn main() {
+    let mut c = RefCell::new(1);
+    let n = *c.borrow();
+    c = RefCell::new(n + 1);
+    {
+        let b = c.borrow();
+        println!("{}", b);
+    }
+    c = RefCell::new(5);
+    let b = c.borrow_mut();
+    drop(b);
+    c = RefCell::new(6);
+    *c.borrow_mut() += 1;
+    let r = &c;
+    let g = r.borrow();
+    println!("{} {}", g, c.borrow());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2\n7 7\n");
+}
+
+#[test]
+fn a_field_read_of_a_drop_temporary_keeps_its_borrows_to_the_statements_end() {
+    // `G(&x, 7).1` keeps the temporary `G` to the statement's end, where
+    // its `Drop` uses `&x` (#185).
+    refused_as(&[(
+        "struct G<'a>(&'a i32, i32);
+impl Drop for G<'_> { fn drop(&mut self) {} }
+fn bump(x: &mut i32) -> i32 { *x += 1; *x }
+fn main() { let mut x = 1; let n = G(&x, 7).1 + bump(&mut x); println!(\"{}\", n); }",
+        "error[E0502]: cannot borrow `x` as mutable because it is also borrowed as immutable",
+    )]);
+    let output = printed(
+        r#"
+struct G<'a>(&'a i32, i32);
+impl Drop for G<'_> { fn drop(&mut self) {} }
+struct P<'a>(&'a i32, i32);
+fn bump(x: &mut i32) -> i32 { *x += 1; *x }
+fn main() {
+    let mut x = 1;
+    let a = G(&x, 7).1;
+    let b = bump(&mut x);
+    let c = P(&x, 2).1 + bump(&mut x);
+    let d = *G(&x, 3).0;
+    println!("{} {} {} {}", a, b, c, d);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 2 5 3\n");
+}
+
+#[test]
+fn a_trait_method_and_a_mut_parameter_keep_what_their_signatures_say() {
+    // A call through a generic bound or a trait object keeps what the
+    // trait's signature says, and a `&mut` parameter takes another
+    // argument's borrow its lifetimes tie to it (#132).
+    let assigned =
+        |name: &str| format!("error[E0506]: cannot assign to `{name}` because it is borrowed");
+    let (t, b, a) = (assigned("t"), assigned("b"), assigned("a"));
+    refused_as(&[
+        (
+            "trait Get { fn get(&self) -> &i32; }
+struct S(i32);
+impl Get for S { fn get(&self) -> &i32 { &self.0 } }
+fn f<T: Get>(mut t: T, u: T) { let r = t.get(); t = u; println!(\"{}\", r); }
+fn main() { f(S(1), S(2)); }",
+            &t,
+        ),
+        (
+            "trait Get { fn get(&self) -> &i32; }
+struct S(i32);
+impl Get for S { fn get(&self) -> &i32 { &self.0 } }
+fn main() { let mut b: Box<dyn Get> = Box::new(S(1)); let r = b.get(); b = Box::new(S(2)); \
+             println!(\"{} {}\", r, b.get()); }",
+            &b,
+        ),
+        (
+            "fn store<'a>(dst: &mut Vec<&'a i32>, x: &'a i32) { dst.push(x); }
+fn main() { let mut a = 1; let mut v = Vec::new(); store(&mut v, &a); a = 2; println!(\"{:?} {}\", v, a); }",
+            &a,
+        ),
+        (
+            "struct Holder<'a> { r: &'a i32 }
+fn put<'a>(h: &mut Holder<'a>, x: &'a i32) { h.r = x; }
+fn main() { let z = 0; let mut a = 1; let mut h = Holder { r: &z }; put(&mut h, &a); a = 2; \
+             println!(\"{} {}\", h.r, a); }",
+            &a,
+        ),
+    ]);
+    let output = printed(
+        r#"
+struct Holder<'a> { r: &'a i32 }
+fn put<'a>(h: &mut Holder<'a>, x: &'a i32) { h.r = x; }
+fn count(v: &mut Vec<i32>, x: &i32) { v.push(*x); }
+fn store<'a>(dst: &mut Vec<&'a i32>, x: &'a i32) { dst.push(x); }
+trait Get { fn get(&self) -> &i32; fn twice(&self) -> i32 { *self.get() * 2 } }
+struct S(i32);
+impl Get for S { fn get(&self) -> &i32 { &self.0 } }
+fn show<T: Get>(t: &T) -> i32 { let r = t.get(); *r + t.twice() }
+fn main() {
+    let z = 0;
+    let mut a = 1;
+    let mut v = Vec::new();
+    count(&mut v, &a);
+    a = 2;
+    let mut w = Vec::new();
+    store(&mut w, &z);
+    let mut h = Holder { r: &z };
+    put(&mut h, &z);
+    let b: Box<dyn Get> = Box::new(S(4));
+    let r = b.get();
+    println!("{:?} {} {:?} {} {} {}", v, a, w, h.r, r, show(&S(3)));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1] 2 [0] 0 4 9\n");
+}
+
+#[test]
+fn a_closure_storing_a_borrow_in_a_capture_stores_it_in_the_captured_local() {
+    // `|| w.push(&x)` stores the borrow of `x` in `w` itself, which a
+    // later use of `w` keeps. rustc names the use of `x` in the body, as
+    // it does for any capture that does not live long enough (#148).
+    refused_as(&[
+        (
+            "fn main() { let mut w: Vec<&i32> = Vec::new(); { let x = 1; let mut f = || w.push(&x); f(); } \
+             println!(\"{:?}\", w); }",
+            "error[E0597]: `x` does not live long enough\n --> <script>:1:84",
+        ),
+        (
+            "fn main() { let f; { let x = 1; f = || x + 1; } println!(\"{}\", f()); }",
+            "error[E0597]: `x` does not live long enough\n --> <script>:1:40",
+        ),
+        (
+            "fn main() { let mut x = 1; let mut w: Vec<&i32> = Vec::new(); let mut f = || w.push(&x); f(); \
+             x = 2; println!(\"{:?} {}\", w, x); }",
+            "error[E0506]: cannot assign to `x` because it is borrowed",
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn main() {
+    let x = 1;
+    let y = 2;
+    let mut w: Vec<&i32> = Vec::new();
+    {
+        let mut f = || w.push(&x);
+        f();
+        f();
+    }
+    let mut g = |r: &i32| { let _ = r; w.push(&y) };
+    g(&3);
+    println!("{:?}", w);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 1, 2]\n");
+}
+
+#[test]
 fn std_from_runs_char_byte_text_and_slice_conversions() {
     // std's `From<char> for u32`, `From<u8> for char`, `From<&str> for
     // Vec<u8>`, `From<&[T]> for Vec<T>` and `From<Vec<T>> for Box<[T]>`,

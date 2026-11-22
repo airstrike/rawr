@@ -221,6 +221,8 @@ struct CapturePlace {
     /// For a capture by value: whether the place is copied rather than
     /// moved, when that is known.
     copy: Option<bool>,
+    /// Where the body first uses the place.
+    used: Span,
 }
 
 impl Default for Recorder {
@@ -645,6 +647,14 @@ impl Recorder {
         self.flow_into(local, held);
     }
 
+    /// The local `name` declared at `declaration` has every point for its
+    /// region, as `let x: &'static T` has: what flows into it is borrowed
+    /// for `'static`.
+    pub(crate) fn everywhere(&mut self, name: &str, declaration: Span) {
+        let local = self.local(name, declaration);
+        self.body.everywhere.push(local);
+    }
+
     fn fact_mut(&mut self, point: Point) -> &mut Fact {
         &mut self.body.blocks[point.block.0 as usize].facts[point.index as usize]
     }
@@ -1066,6 +1076,7 @@ impl Recorder {
             temporary,
             of_reference: false,
             through: None,
+            used: None,
         });
         let loan = LoanId(self.body.loans.len() as u32 - 1);
         if let Fact::Access { loan: made, .. } = self.fact_mut(point) {
@@ -1523,7 +1534,12 @@ impl Recorder {
                             *local = *upvar;
                         }
                     }
-                    Fact::Access { place, access, .. } => {
+                    Fact::Access {
+                        place,
+                        access,
+                        span: used,
+                        ..
+                    } => {
                         let Some((upvar, capture)) = upvars.get(&place.local) else {
                             continue;
                         };
@@ -1539,7 +1555,7 @@ impl Recorder {
                         };
                         mutable |= kind == Some(CaptureKind::Mutable);
                         if let Some(kind) = kind {
-                            places.push(capture_place(place, kind, *access, moved, capture));
+                            places.push(capture_place(place, kind, *access, moved, capture, *used));
                         }
                         place.local = *upvar;
                     }
@@ -1554,9 +1570,12 @@ impl Recorder {
                 loan.place.local = *upvar;
             }
         }
-        // A borrow the body stores in what it captured, or keeps for
-        // `'static`, outlives the call in ways these facts do not follow.
+        // A borrow the body keeps for `'static` outlives the call in ways
+        // these facts do not follow. One it stores in what it captured by
+        // reference is stored in the captured local (`|| w.push(&x)`),
+        // below.
         let mut stores = false;
+        let mut stored = Vec::new();
         for flow in &mut self.body.flows {
             if !inside(flow.at) {
                 continue;
@@ -1567,13 +1586,10 @@ impl Recorder {
                 *from = *upvar;
             }
             if let Some((upvar, _)) = upvars.get(&flow.into) {
+                stored.push((flow.from, flow.into, flow.path, flow.at));
                 flow.into = *upvar;
-                stores = true;
             }
             stores |= self.body.everywhere.contains(&flow.into);
-        }
-        if stores {
-            self.unmodeled("a borrow a closure stores in what it captured", span);
         }
         // The captures, made here. For each captured local: whether it is
         // captured by reference, and the loans it is captured by.
@@ -1629,6 +1645,7 @@ impl Recorder {
                 loan: None,
             });
             let loan = self.make_loan(point, place, mutable, span);
+            self.body.loans[loan.0 as usize].used = Some(capture.used);
             self.body.loans[loan.0 as usize].capture =
                 if mutable && through && !captured.declared_mut {
                     Capture::Unique
@@ -1650,6 +1667,44 @@ impl Recorder {
                 .or_insert((true, Vec::new()))
                 .1
                 .push(Origin::Loan(loan));
+        }
+        // What the body stores in a local it captured by reference, traced
+        // back to what the closure captured, flows into that local.
+        if !stored.is_empty() {
+            let tracer = Tracer {
+                body: &self.body,
+                upvars: upvars
+                    .iter()
+                    .flat_map(|(local, (upvar, _))| [(*local, *local), (*upvar, *local)])
+                    .collect(),
+                parameters: parameters
+                    .iter()
+                    .filter_map(|declaration| self.locals.get(declaration).copied())
+                    .collect(),
+                captures: &by_local,
+            };
+            let mut flows = Vec::new();
+            for (from, into, path, at) in stored {
+                let mut kept = Vec::new();
+                let traced = by_local
+                    .get(&into)
+                    .is_some_and(|(by_reference, _)| *by_reference)
+                    && tracer.trace(from, &mut kept, &mut BTreeSet::new());
+                if !traced {
+                    stores = true;
+                    break;
+                }
+                flows.extend(kept.into_iter().map(|from| Flow {
+                    from,
+                    into,
+                    path,
+                    at,
+                }));
+            }
+            self.body.flows.extend(flows);
+        }
+        if stores {
+            self.unmodeled("a borrow a closure stores in what it captured", span);
         }
         // What a call keeps: what its returns and its value hold, traced
         // back to what the closure captured.
@@ -1989,6 +2044,24 @@ impl Recorder {
         reference
     }
 
+    /// The value spanning `value`, which holds `held`, is kept in a
+    /// temporary to its scope's end, whose drop uses what it holds there,
+    /// as a part read of a value with `Drop` is (`G(&x).0`).
+    pub(crate) fn hold_temporary(&mut self, value: Span, held: &[(Path, Origin)]) {
+        let local = self.hidden(super::TEMPORARY, value);
+        self.push(Fact::Def(local));
+        self.flow_into(local, held);
+        if let Some(scope) = self.temporary_scopes.last_mut() {
+            scope.push(Temporary {
+                local,
+                span: value,
+                extendable: false,
+                drops: true,
+                ends: None,
+            });
+        }
+    }
+
     /// A call takes `held`: a temporary one of its loans borrows is no
     /// `let`'s to extend.
     pub(crate) fn pin(&mut self, held: &[(Path, Origin)]) {
@@ -2087,6 +2160,7 @@ fn capture_place(
     access: Access,
     moved: bool,
     captured: &Captured,
+    used: Span,
 ) -> CapturePlace {
     let mut cut = place
         .projection
@@ -2127,6 +2201,7 @@ fn capture_place(
         projection: place.projection[..cut].to_vec(),
         kind,
         copy,
+        used,
     }
 }
 
@@ -2139,6 +2214,7 @@ fn merge(places: Vec<CapturePlace>) -> Vec<CapturePlace> {
             above.local == place.local && place.projection.starts_with(&above.projection)
         }) {
             above.kind = above.kind.max(place.kind);
+            above.used = first(above.used, place.used);
             if above.projection == place.projection {
                 above.copy = above.copy.or(place.copy);
             }
@@ -2149,12 +2225,22 @@ fn merge(places: Vec<CapturePlace>) -> Vec<CapturePlace> {
                 below.local == place.local && below.projection.starts_with(&place.projection);
             if absorbed {
                 place.kind = place.kind.max(below.kind);
+                place.used = first(place.used, below.used);
             }
             !absorbed
         });
         merged.push(place);
     }
     merged
+}
+
+/// The one of `a` and `b` that starts first.
+fn first(a: Span, b: Span) -> Span {
+    if b.start() < a.start() {
+        b
+    } else {
+        a
+    }
 }
 
 /// Traces what a closure's returned value holds back to what the closure

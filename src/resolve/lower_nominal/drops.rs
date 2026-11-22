@@ -1051,8 +1051,15 @@ impl Parser<'_> {
         // The body's locals and parameters end, each after its drop, in
         // reverse order of declaration: a loan of one that a later one's
         // drop uses is rustc's E0597.
+        let live: Vec<Span> = self
+            .bindings
+            .values()
+            .map(|binding| binding.declaration)
+            .collect();
+        let guards = self.cell_guard_drops(&live);
         if self.drop_scoped() && self.drop_scopes.len() > self.drop_base {
-            let uses = self.block_drop_uses();
+            let mut uses = self.block_drop_uses();
+            uses.extend(guards);
             let declared: Vec<Span> = self
                 .drop_scopes
                 .last()
@@ -1060,6 +1067,9 @@ impl Parser<'_> {
                 .unwrap_or_default();
             let end = point_span(self.position());
             self.flow().body_end(&declared, &uses, end);
+        } else if !guards.is_empty() {
+            let end = point_span(self.position());
+            self.flow().body_end(&[], &guards, end);
         }
         let drops = self.close_drops()?;
         if drops.is_empty() {

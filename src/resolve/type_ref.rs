@@ -2126,7 +2126,11 @@ impl Type {
     /// `fn(..)` or `Fn(..)`, not `FnMut` or `FnOnce`.
     pub(crate) fn is_shared_call_fn(&self) -> bool {
         matches!(self, Type::Path(path)
-            if path.target == Target::Builtin && path.name.as_str() == item::type_ref::FN_TYPE)
+        if path.target == Target::Builtin
+            && matches!(
+                path.name.as_str(),
+                item::type_ref::FN_TYPE | item::type_ref::FN_POINTER_TYPE
+            ))
     }
 
     /// The inputs and output of a function type `fn(A, ..) -> B`.

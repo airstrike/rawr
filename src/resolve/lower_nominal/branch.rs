@@ -235,7 +235,18 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_match(&mut self, match_span: Span) -> Result<ParsedExpr, Error> {
         let dereferenced = matches!(self.peek(), Token::Multiply);
         let framed = self.frames.last().map_or(0, Vec::len);
-        let (subject, matched) = self.parse_subject()?;
+        let (mut subject, matched) = self.parse_subject()?;
+        // `match v.last_mut() { Some(x) => .., whole => .. }`: an arm binding
+        // the whole `Option<&mut T>` holds it as `let o = v.last_mut();`
+        // does, `Some` of the reference to the element's place (D1113).
+        if subject.lvalue.is_some()
+            && !self.holds_stored(&subject)
+            && matches!(self.inference.resolve(&subject.ty), Ty::Option(element)
+                if matches!(self.inference.resolve(&element), Ty::Reference { mutable: true, .. }))
+            && self.whole_binding_ahead()
+        {
+            self.store_borrow(&mut subject)?;
+        }
         // Matching through `&T` matches the referenced value.
         let subject_ty = self.referenced(&subject.ty);
         if matches!(
@@ -320,6 +331,7 @@ impl<'a> Parser<'a> {
                 Token::Identifier(name)
                     if Prelude::from_name(&name).is_none()
                         && self.unit_struct(&name).is_none()
+                        && name.as_str() != "ref"
                         && !matches!(
                             self.peek_second(),
                             Token::DoubleColon
@@ -405,6 +417,18 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let syntax = self.parse_pattern_syntax()?;
+                if let pattern::Syntax::Ref {
+                    span,
+                    mutable: true,
+                    ..
+                } = syntax
+                    && (self.holds_stored(&place) || self.stored_temporary(&place))
+                {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a `ref mut` binding of a whole value that holds `&mut`s".into(),
+                        source: span,
+                    });
+                }
                 let mut resolved =
                     self.resolve_root_pattern(&syntax, &binding_ty)
                         .map_err(|error| {
@@ -899,6 +923,67 @@ impl<'a> Parser<'a> {
         Ok((subject, matched))
     }
 
+    /// Whether an arm of the match whose `{` is ahead binds the whole value:
+    /// `name =>`, `name if ..`, `mut name` or `ref mut name`, of a name no
+    /// constant, unit struct or prelude variant takes.
+    fn whole_binding_ahead(&self) -> bool {
+        let tokens: Vec<Token> = self.input.clone().map(|(token, _)| token).collect();
+        if !matches!(tokens.first(), Some(Token::LeftBrace)) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut arm_start = false;
+        for (at, token) in tokens.iter().enumerate() {
+            let starts = std::mem::take(&mut arm_start);
+            match token {
+                Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+                    depth += 1;
+                    arm_start = depth == 1;
+                    continue;
+                }
+                Token::RightBrace | Token::RightParen | Token::RightBracket => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return false;
+                    }
+                    arm_start = depth == 1 && matches!(token, Token::RightBrace);
+                    continue;
+                }
+                Token::Comma if depth == 1 => {
+                    arm_start = true;
+                    continue;
+                }
+                _ => {}
+            }
+            if !starts {
+                continue;
+            }
+            let rest = &tokens[at..];
+            let name = match rest {
+                [Token::Identifier(word), Token::Mut, Token::Identifier(name), ..]
+                    if word.as_str() == "ref" =>
+                {
+                    Some((name, &rest[3..]))
+                }
+                [Token::Mut, Token::Identifier(name), ..] => Some((name, &rest[2..])),
+                [Token::Identifier(name), ..] => Some((name, &rest[1..])),
+                _ => None,
+            };
+            if let Some((name, [Token::DoubleArrow | Token::If, ..])) = name
+                && name.as_str() != "ref"
+                && Prelude::from_name(name).is_none()
+                && self.unit_struct(name).is_none()
+                && !self
+                    .models
+                    .function(name)
+                    .is_some_and(|function| function.definition.body.constant)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(super) fn next_after_else(&mut self) -> Token {
         self.next();
         self.peek()
@@ -963,7 +1048,7 @@ impl<'a> Parser<'a> {
                 test.is_some(),
                 binding
                     .as_ref()
-                    .map(|(name, declaration, _)| (name, *declaration)),
+                    .map(|(name, declaration, bound)| (name, *declaration, *bound)),
                 &written,
             );
             self.pattern_tests(&trace, &matched, subject.span);
@@ -973,21 +1058,48 @@ impl<'a> Parser<'a> {
             let tests = test.into_iter().collect::<Vec<_>>();
             let mut seen = [false; 2];
             bool_literals(&syntax, &mut seen);
-            if let Some((name, declaration, mutable)) = &binding {
+            if let Some((name, declaration, Bound::Unique)) = &binding {
+                // `ref mut v` is the matched place itself, as `let v = &mut
+                // place;` is.
+                let (root, place) = match &subject.lvalue {
+                    Some(Lvalue::Binding { binding, .. }) => {
+                        (binding.clone(), origin::Fragment::plain(binding.as_str()))
+                    }
+                    Some(Lvalue::Place { binding, place, .. }) => (binding.clone(), place.clone()),
+                    _ => {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "`ref mut` of a value that is not a local's place".into(),
+                            source: subject.span,
+                        })
+                    }
+                };
+                self.borrow_place(name.clone(), *declaration, written.clone(), place, root);
+            } else if let Some((name, declaration, bound)) = &binding {
+                // `ref v` borrows the value as written, a copy at runtime.
+                let ty = match bound {
+                    Bound::Shared => Ty::Reference {
+                        mutable: false,
+                        target: Box::new(written.clone()),
+                    },
+                    Bound::Value | Bound::Mutable | Bound::Unique => binding_ty.clone(),
+                };
                 self.bindings.insert(
                     name.clone(),
                     Binding {
-                        ty: binding_ty.clone(),
-                        mutable: *mutable,
+                        ty,
+                        mutable: *bound == Bound::Mutable,
                         available: true,
                         declaration: *declaration,
                         kind: BindingKind::Local,
                     },
                 );
             }
-            let bind = binding.as_ref().map_or(String::new(), |(name, _, _)| {
-                format!("let {name} = {temporary}; ")
-            });
+            let bind = match &binding {
+                Some((name, _, bound)) if *bound != Bound::Unique => {
+                    format!("let {name} = {temporary}; ")
+                }
+                _ => String::new(),
+            };
             let mut condition = origin::Fragment::plain(if tests.is_empty() {
                 "true".to_string()
             } else {
@@ -1582,10 +1694,10 @@ impl<'a> Parser<'a> {
         syntax: &pattern::Syntax,
         written: &Ty,
         temporary: &str,
-        binding: &mut Option<(ImmutableString, Span, bool)>,
+        binding: &mut Option<(ImmutableString, Span, Bound)>,
     ) -> Result<Option<String>, Error> {
         let ty = &self.referenced(written);
-        let mut bind = |name: &ImmutableString, span: Span, mutable: bool| {
+        let mut bind = |name: &ImmutableString, span: Span, bound: Bound| {
             if binding.as_ref().is_some_and(|(bound, _, _)| bound != name) {
                 return Err(Error::InvalidMatch {
                     owner: ty.name(&self.models),
@@ -1593,7 +1705,7 @@ impl<'a> Parser<'a> {
                     pattern: span,
                 });
             }
-            *binding = Some((name.clone(), span, mutable));
+            *binding = Some((name.clone(), span, bound));
             Ok(())
         };
         Ok(match syntax {
@@ -1603,7 +1715,28 @@ impl<'a> Parser<'a> {
                 span,
                 mutable,
             } => {
-                bind(name, *span, *mutable)?;
+                let bound = if *mutable {
+                    Bound::Mutable
+                } else {
+                    Bound::Value
+                };
+                bind(name, *span, bound)?;
+                None
+            }
+            pattern::Syntax::Ref {
+                name,
+                span,
+                mutable: false,
+            } => {
+                bind(name, *span, Bound::Shared)?;
+                None
+            }
+            pattern::Syntax::Ref {
+                name,
+                span,
+                mutable: true,
+            } => {
+                bind(name, *span, Bound::Unique)?;
                 None
             }
             pattern::Syntax::At {
@@ -1611,7 +1744,7 @@ impl<'a> Parser<'a> {
                 name_span,
                 pattern,
             } => {
-                bind(name, *name_span, false)?;
+                bind(name, *name_span, Bound::Value)?;
                 self.scalar_condition(pattern, written, temporary, binding)?
             }
             pattern::Syntax::Reference {
@@ -2158,7 +2291,8 @@ impl<'a> Parser<'a> {
                 .map(|binding| binding.declaration)
                 .filter(|declaration| !outer_locals.contains(declaration))
                 .collect();
-            let drop_uses = self.block_drop_uses();
+            let mut drop_uses = self.block_drop_uses();
+            drop_uses.extend(self.cell_guard_drops(&declared));
             self.flow()
                 .storage_dead(&declared, &drop_uses, point_span(end));
             let mut block_output = std::mem::replace(&mut self.output, outer_output);
@@ -2422,4 +2556,17 @@ impl<'a> Parser<'a> {
             value,
         })
     }
+}
+
+/// How an arm of a match on a scalar or a string binds the value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Bound {
+    /// `v`, a copy or a move of the value.
+    Value,
+    /// `mut v`.
+    Mutable,
+    /// `ref v`, a shared borrow of the value as written.
+    Shared,
+    /// `ref mut v`, the matched place.
+    Unique,
 }

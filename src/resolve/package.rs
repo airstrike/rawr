@@ -768,8 +768,8 @@ impl<'a> Resolver<'a> {
         declared.chain(renamed).collect()
     }
 
-    /// Bind each private glob import's names, and the variants a public
-    /// glob of an enum re-exports, until none binds more: a glob
+    /// Bind each glob import's names, a public glob's as re-exports, until
+    /// none binds more: a glob
     /// may reach names another glob bound, as `use Progress::*;` after
     /// `use super::*;` does, or a module's glob the names its parent's
     /// glob bound. A glob that names nothing binds nothing here; its
@@ -787,11 +787,9 @@ impl<'a> Resolver<'a> {
                         continue;
                     };
                     let segments = path_segments(prefix);
-                    // `pub use Shade::*;` re-exports the enum's variants.
+                    // `pub use Shade::*;` re-exports the enum's variants,
+                    // and `pub use inner::*;` the module's names (#1349).
                     let public = used.header.visibility.is_some();
-                    if public && !self.enum_glob(context, &segments) {
-                        continue;
-                    }
                     for name in self.glob_names(context, &segments).unwrap_or_default() {
                         let address = context.address(&name);
                         if self.tables.binds(&address) || found.contains_key(&address) {
@@ -799,13 +797,23 @@ impl<'a> Resolver<'a> {
                         }
                         let mut path = segments.to_vec();
                         path.push(name);
+                        // A glob re-exports each name no further than
+                        // the item reaches: `pub use inner::*;` of a
+                        // `pub(super) fn` binds it for the parent alone.
+                        let mut reach = context.namespace.reach(used.header.visibility.as_ref());
+                        let (origin, origin_path) = self.origin(context, &path);
+                        if let Some((_, declaration)) = self.declared_at(&origin, &origin_path)
+                            && !reach.within(&declaration.reach)
+                        {
+                            reach = declaration.reach.clone();
+                        }
                         let export = Export {
                             source: context.source,
                             context: context.clone(),
                             path: path.into_boxed_slice(),
                             span: *span,
                             written: *span,
-                            reach: context.namespace.reach(used.header.visibility.as_ref()),
+                            reach,
                         };
                         found.insert(address, (export, public));
                     }
@@ -1208,6 +1216,7 @@ impl<'a> Resolver<'a> {
         };
         let (methods, builtin_methods, std_traits) =
             super::resolve_methods(&mut shells, &definitions, self.host).map_err(unimported)?;
+        super::elided_lifetimes(&shells).map_err(unimported)?;
         super::resolve_functions(&mut shells).map_err(unimported)?;
         scripts.sort_by_key(|(source, ..)| source.index());
         let source_maps = scripts
@@ -1763,21 +1772,6 @@ impl<'a> Resolver<'a> {
             .and_then(|block| self.in_blocks(context, &segments, block))
             .unwrap_or(segments);
         let module: ImmutableString = segments.join("::").into();
-        let local = self.enum_glob(context, &segments)
-            || super::std_ordering(&self.through_use(context, &segments))
-            || self.local_glob_module(context, &segments).is_some();
-        if parsed.header.visibility.is_some() && !local {
-            return Err(Failure {
-                primary: context.source,
-                secondary: None,
-                error: Error::InvalidImport {
-                    path: module,
-                    reason: "glob re-exports are not supported".into(),
-                    reference: *span,
-                    declaration: None,
-                },
-            });
-        }
         let Some(names) = self.glob_names(context, &segments) else {
             // rustc stops at a first segment that names no crate or module.
             let error = match prefix.segments.first() {
@@ -1966,16 +1960,6 @@ impl<'a> Resolver<'a> {
             .export(&address)
             .or_else(|| self.tables.alias(&address))
             .or_else(|| self.tables.glob(&address))
-    }
-
-    /// Whether a glob import of `segments` names an enum's variants, the
-    /// program's (`Shade::*`) or a crate's (`iced::Alignment::*`).
-    fn enum_glob(&self, context: &Context, segments: &[ImmutableString]) -> bool {
-        self.script_enum(context, segments).is_some()
-            || self
-                .host
-                .enum_variants(&super::std_reexport(&segments.join("::"), self.host))
-                .is_some()
     }
 
     /// The variant `path` names from `context`, after [`Self::origin`]:

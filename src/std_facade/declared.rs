@@ -288,6 +288,22 @@ pub(super) static STEPS: &[Step] = &[
         non_exhaustive: false,
     },
     Step::Held {
+        std: "std::io::BufReader",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::io::BufWriter",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
         std: "std::char::ToUppercase",
         capabilities: &[
             capability::Kind::Debug,
@@ -1743,6 +1759,15 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
     },
     Step::Item {
+        path: "io::Cursor::lines",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Iter(&Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("io::Error"),
+        )),
+    },
+    Step::Item {
         path: "io::Cursor::seek",
         kind: Kind::Method(Mode::Mutable),
         inputs: &[Ty::Registered("io::SeekFrom")],
@@ -1795,6 +1820,144 @@ pub(super) static STEPS: &[Step] = &[
         kind: Kind::Method(Mode::Shared),
         inputs: &[],
         output: Ty::Option(&Ty::Builtin(Builtin::I64)),
+    },
+    Step::Item {
+        path: "io::BufReader::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Parameter("R")],
+        output: Ty::Applied {
+            path: "io::BufReader",
+            arguments: &[Ty::Parameter("R")],
+        },
+    },
+    Step::Item {
+        path: "io::BufReader::with_capacity",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Usize), Ty::Parameter("R")],
+        output: Ty::Applied {
+            path: "io::BufReader",
+            arguments: &[Ty::Parameter("R")],
+        },
+    },
+    Step::Item {
+        path: "io::BufReader::capacity",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "io::BufReader::get_ref",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Reference {
+            mutable: false,
+            target: &Ty::Parameter("R"),
+        },
+    },
+    Step::Item {
+        path: "io::BufReader::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Parameter("R"),
+    },
+    Step::Item {
+        path: "io::BufReader::read_line",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::BufReader::read_to_string",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::BufReader::read_to_end",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Vec(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::BufReader::lines",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Iter(&Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("io::Error"),
+        )),
+    },
+    Step::Item {
+        path: "io::BufWriter::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Parameter("W")],
+        output: Ty::Applied {
+            path: "io::BufWriter",
+            arguments: &[Ty::Parameter("W")],
+        },
+    },
+    Step::Item {
+        path: "io::BufWriter::with_capacity",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Usize), Ty::Parameter("W")],
+        output: Ty::Applied {
+            path: "io::BufWriter",
+            arguments: &[Ty::Parameter("W")],
+        },
+    },
+    Step::Item {
+        path: "io::BufWriter::capacity",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Usize),
+    },
+    Step::Item {
+        path: "io::BufWriter::get_ref",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Reference {
+            mutable: false,
+            target: &Ty::Parameter("W"),
+        },
+    },
+    Step::Item {
+        path: "io::BufWriter::write",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::BufWriter::write_all",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::BufWriter::write_fmt",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Arguments)],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::BufWriter::flush",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
     },
     Step::Item {
         path: "env::args",
@@ -5713,14 +5876,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "io::BufRead",
         std: "std::io::BufRead",
-    },
-    Step::StdAlias {
-        path: "io::BufReader",
-        std: "std::io::BufReader",
-    },
-    Step::StdAlias {
-        path: "io::BufWriter",
-        std: "std::io::BufWriter",
     },
     Step::StdAlias {
         path: "io::Bytes",
