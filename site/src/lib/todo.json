@@ -6499,7 +6499,15 @@
     {"issue":2644,"title":"E0599 and E0277 on a std method lack rustc's notes on the impl that has it","state":"open","category":"Divergences from rustc"},
     {"issue":2645,"title":"LocalKey::try_with is not run","state":"open","category":"Divergences from rustc"},
     {"issue":2646,"title":"The type tool sends a whole text in one event-loop turn, so a controlled iced text_input keeps only the last character","state":"open","category":"Health"},
-    {"issue":2647,"title":"A printable `key` press may not reach a widget that `type` of the same character reaches","state":"open","category":"Health"}
+    {"issue":2647,"title":"A printable `key` press may not reach a widget that `type` of the same character reaches","state":"open","category":"Health"},
+    {"issue":2648,"title":"The generated runner copies its manifest carrier through build.rs, so a change of demand reruns the build script","state":"open","category":"Health"},
+    {"issue":2649,"title":"The generated runner binary keeps the dev profile's default codegen units; fewer may build its edits faster","state":"open","category":"Health"},
+    {"issue":2650,"title":"Generated runner members inherit every root dependency, so an unused edge rebuilds a member on a native dependency edit","state":"open","category":"Health"},
+    {"issue":2651,"title":"A run's background cargo check hashes every build script's OUT_DIR, which only `rawr check` reads","state":"open","category":"Health"},
+    {"issue":2652,"title":"Pruning reads the whole runner executable even when no loose object file can match","state":"open","category":"Health"},
+    {"issue":2653,"title":"Runner generation decodes the facade twice and round-trips its image through JSON","state":"open","category":"Health"},
+    {"issue":2654,"title":"The generated base crate's fixed support source is compiled again for each program","state":"open","category":"Health"},
+    {"issue":2655,"title":"A run's diagnostic cargo check starts with the run and can hold Cargo's build-directory lock ahead of the runner build","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8270,7 +8278,7 @@
           "id": "build-phase-0-3",
           "name": "Build: the runner on every core",
           "start": 80,
-          "size": 1.5,
+          "size": 1.4,
           "state": "done",
           "note": "The runner is a workspace of a base crate and one adapter crate per imported root (#1670). A native rebuild for a one-crate edit takes 177 s where cargo build takes 18-27 s (#1772). Left: the copy's speed (#1801), a harness per preparation (#1794), re-encoding per hit (#1851).",
           "issues": [
@@ -8343,7 +8351,7 @@
           "id": "build-phase",
           "name": "Build: the runner on every core",
           "start": 80,
-          "size": 1.3,
+          "size": 1.4,
           "state": "next",
           "note": "The runner is a workspace of a base crate and one adapter crate per imported root (#1670). A native rebuild for a one-crate edit takes 177 s where cargo build takes 18-27 s (#1772). Left: the copy's speed (#1801), a harness per preparation (#1794), re-encoding per hit (#1851).",
           "issues": [
@@ -8385,7 +8393,15 @@
             {"number":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open"},
             {"number":2248,"title":"A check reaches its demand closure in many rounds, each paying probes, harness work and a resolution","state":"open"},
             {"number":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open"},
-            {"number":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open"}
+            {"number":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open"},
+            {"number":2648,"title":"The generated runner copies its manifest carrier through build.rs, so a change of demand reruns the build script","state":"open"},
+            {"number":2649,"title":"The generated runner binary keeps the dev profile's default codegen units; fewer may build its edits faster","state":"open"},
+            {"number":2650,"title":"Generated runner members inherit every root dependency, so an unused edge rebuilds a member on a native dependency edit","state":"open"},
+            {"number":2651,"title":"A run's background cargo check hashes every build script's OUT_DIR, which only `rawr check` reads","state":"open"},
+            {"number":2652,"title":"Pruning reads the whole runner executable even when no loose object file can match","state":"open"},
+            {"number":2653,"title":"Runner generation decodes the facade twice and round-trips its image through JSON","state":"open"},
+            {"number":2654,"title":"The generated base crate's fixed support source is compiled again for each program","state":"open"},
+            {"number":2655,"title":"A run's diagnostic cargo check starts with the run and can hold Cargo's build-directory lock ahead of the runner build","state":"open"}
           ],
           "milestone": "0.6"
         },
