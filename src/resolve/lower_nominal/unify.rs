@@ -91,6 +91,19 @@ impl<'a> Parser<'a> {
                 self.unify_type(&expected_length.argument(), &actual_length.argument())
                     && self.unify_type(expected_element, actual_element)
             }
+            // One function's opaque output at two calls is one type when
+            // their type arguments are (D1109).
+            (
+                Ty::Param(_, Parameter::Opaque(expected_opaque, expected_arguments)),
+                Ty::Param(_, Parameter::Opaque(actual_opaque, actual_arguments)),
+            ) if expected_opaque == actual_opaque
+                && expected_arguments.len() == actual_arguments.len() =>
+            {
+                expected_arguments
+                    .iter()
+                    .zip(actual_arguments.iter())
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
+            }
             (
                 Ty::Script(expected_id, expected_arguments),
                 Ty::Script(actual_id, actual_arguments),

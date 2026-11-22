@@ -26,7 +26,7 @@ pub(super) struct Inference {
     pub(super) equalities: BTreeMap<(ImmutableString, ImmutableString, ImmutableString), Ty>,
     /// Every function's opaque output (D1109), whose written bindings
     /// (`impl Named<Out = i64>`) its projections are.
-    pub(super) opaque_outputs: Shared<BTreeMap<type_ref::Opaque, item::Generic>>,
+    pub(super) opaque_outputs: Shared<BTreeMap<type_ref::Opaque, item::OpaqueOutput>>,
     /// The variables a diverging expression was coerced into, as rustc's
     /// diverging type variables: one nothing else settles falls back once
     /// the body is read (`fall_back_diverging`). A rollback drops those it
@@ -380,6 +380,18 @@ impl Inference {
                     .map(|(name, ty)| (name.clone(), self.resolve(ty)))
                     .collect(),
             ),
+            Ty::Param(name, Parameter::Opaque(opaque, arguments)) if !arguments.is_empty() => {
+                Ty::Param(
+                    name.clone(),
+                    Parameter::Opaque(
+                        *opaque,
+                        arguments
+                            .iter()
+                            .map(|argument| self.resolve(argument))
+                            .collect(),
+                    ),
+                )
+            }
             _ => ty.clone(),
         }
     }
@@ -446,14 +458,19 @@ impl Inference {
                 }
             }
             // `impl Named<Out = i64>`: its written binding (D1109).
-            Ty::Param(_, Parameter::Opaque(opaque)) => {
-                if let Some((_, _, ty)) = self.opaque_outputs.get(opaque).and_then(|generic| {
-                    generic
-                        .projections
-                        .iter()
-                        .find(|(bound, item, _)| bound.text == *trait_name && item.text == *name)
-                }) {
-                    return self.resolve(&Ty::from_resolved(ty));
+            // At its call's type arguments (`impl Iterator<Item = T>`).
+            Ty::Param(_, Parameter::Opaque(opaque, arguments)) => {
+                if let Some(output) = self.opaque_outputs.get(opaque)
+                    && let Some((_, _, ty)) =
+                        output.bounds.projections.iter().find(|(bound, item, _)| {
+                            bound.text == *trait_name && item.text == *name
+                        })
+                {
+                    let substitution = super::generics::opaque_substitution(output, arguments);
+                    return self.resolve(&super::generics::instantiate(
+                        &Ty::from_resolved(ty),
+                        &substitution,
+                    ));
                 }
             }
             // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.

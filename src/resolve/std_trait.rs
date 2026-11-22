@@ -433,8 +433,8 @@ pub(crate) fn declarations(
             objects(output, named);
         }
         // `-> impl Display`: its opaque type's bounds (D1109).
-        for (_, generic) in function.opaque_outputs.iter() {
-            named.extend(generic.traits.iter().map(|name| name.text.clone()));
+        for (_, output) in function.opaque_outputs.iter() {
+            named.extend(output.bounds.traits.iter().map(|name| name.text.clone()));
         }
     };
     for shell in items {

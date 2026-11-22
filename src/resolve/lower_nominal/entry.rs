@@ -727,7 +727,7 @@ pub(super) fn lower_with_context(
     let mut dispatch_ops = Vec::new();
     write_trait_dispatchers(&mut assembly.generated, &models, &mut dispatch_ops);
     write_default_dispatcher(&mut assembly.generated, program, &models, &mut dispatch_ops);
-    let witnesses = write_hidden_dispatcher(&mut assembly.generated, &assembly.hidden);
+    let witnesses = write_hidden_dispatcher(&mut assembly.generated, &assembly.hidden, &models);
     #[cfg(feature = "rust-import")]
     pieces.written(assembly.generated.len(), None);
 
@@ -996,8 +996,27 @@ pub(super) struct Lowered {
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Hidden {
     pub(super) filled: Vec<(type_ref::Opaque, Ty)>,
-    pub(super) witnessed: Vec<(type_ref::Opaque, Span)>,
+    pub(super) witnessed: Vec<Witnessed>,
     pub(super) sends: Vec<HiddenSend>,
+}
+
+/// An opaque output a generic call takes as a type argument at `span`,
+/// and which of its own type arguments have a witness there: the one a
+/// hidden type that is one of them passes (D1109).
+#[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct Witnessed {
+    pub(super) opaque: type_ref::Opaque,
+    pub(super) span: Span,
+    pub(super) arguments: Box<[bool]>,
+}
+
+/// The witness of an opaque output's one hidden type (D1109): known, or
+/// the witness of the type argument it is, at each call.
+#[derive(Clone, PartialEq)]
+enum HiddenWitness {
+    Known(String),
+    Captured(usize),
 }
 
 /// A thread's closure capturing a value whose type `ty` holds an opaque
@@ -1027,19 +1046,27 @@ pub(super) struct Declared {
     pub(super) ty: Option<super::ty::Ty>,
 }
 
-/// The function from each opaque output to the witness of its hidden type
-/// (D1109), which a generic call taking it as a type argument passes:
-/// written once every function's body has filled its own. Each opaque
-/// output's witness, if one hidden type has one.
+/// The function from each opaque output, and the witnesses of its type
+/// arguments, to the witness of its hidden type (D1109), which a generic
+/// call taking it as a type argument passes: written once every
+/// function's body has filled its own. Each opaque output's witness, if
+/// one hidden type has one.
 fn write_hidden_dispatcher(
     output: &mut location::Generated,
     hidden: &[(crate::program::source::Id, Hidden)],
-) -> BTreeMap<type_ref::Opaque, Option<String>> {
-    let mut witnesses = BTreeMap::<type_ref::Opaque, Option<String>>::new();
+    models: &Models,
+) -> BTreeMap<type_ref::Opaque, Option<HiddenWitness>> {
+    let mut witnesses = BTreeMap::<type_ref::Opaque, Option<HiddenWitness>>::new();
     for (opaque, ty) in hidden.iter().flat_map(|(_, hidden)| &hidden.filled) {
         let witness = match ty {
-            Ty::Script(id, _) => Some(id.number().to_string()),
-            ty => witness_code(ty).map(|code| code.to_string()),
+            Ty::Script(id, _) => Some(HiddenWitness::Known(id.number().to_string())),
+            // `fn wrap<T>(t: T) -> impl Shape { t }`: its call's `T`'s.
+            Ty::Param(name, super::ty::Parameter::Declared) => models
+                .opaque_outputs
+                .get(opaque)
+                .and_then(|output| output.captured.iter().position(|captured| captured == name))
+                .map(HiddenWitness::Captured),
+            ty => witness_code(ty).map(|code| HiddenWitness::Known(code.to_string())),
         };
         // A trait method's opaque output, which each impl fills (stage 4),
         // has no one hidden type yet.
@@ -1059,6 +1086,10 @@ fn write_hidden_dispatcher(
             continue;
         };
         let [source, line, column, index] = opaque.numbers();
+        let witness = match witness {
+            HiddenWitness::Known(witness) => witness.clone(),
+            HiddenWitness::Captured(at) => format!("__rawr_arguments[{at}]"),
+        };
         let _ = writeln!(
             text,
             "if __rawr_source == {source} && __rawr_line == {line} \
@@ -1072,7 +1103,7 @@ fn write_hidden_dispatcher(
             span,
             &format!(
                 "__rawr_private fn {HIDDEN_DISPATCHER}(__rawr_source, __rawr_line, \
-                 __rawr_column, __rawr_index) {{\n{text}}}\n"
+                 __rawr_column, __rawr_index, __rawr_arguments) {{\n{text}}}\n"
             ),
         );
     }
@@ -1080,21 +1111,32 @@ fn write_hidden_dispatcher(
 }
 
 /// Refuse a generic call taking as a type argument an opaque output with
-/// no one hidden type a witness names, as it refuses that type argument.
+/// no one hidden type a witness names, or whose hidden type is a type
+/// argument with none at the call, as it refuses that type argument.
 fn witnessed_hidden(
-    witnesses: &BTreeMap<type_ref::Opaque, Option<String>>,
+    witnesses: &BTreeMap<type_ref::Opaque, Option<HiddenWitness>>,
     hidden: &[(crate::program::source::Id, Hidden)],
     models: &Models,
 ) -> Result<(), LoweringFailure> {
     for (source, hidden) in hidden {
-        for (opaque, span) in &hidden.witnessed {
-            if let Some(Some(_)) = witnesses.get(opaque) {
+        for Witnessed {
+            opaque,
+            span,
+            arguments,
+        } in &hidden.witnessed
+        {
+            let witnessed = match witnesses.get(opaque) {
+                Some(Some(HiddenWitness::Known(_))) => true,
+                Some(Some(HiddenWitness::Captured(at))) => arguments.get(*at) == Some(&true),
+                _ => false,
+            };
+            if witnessed {
                 continue;
             }
-            let name = models
-                .opaque_outputs
-                .get(opaque)
-                .map_or_else(|| "impl Trait".into(), |generic| generic.name.text.clone());
+            let name = models.opaque_outputs.get(opaque).map_or_else(
+                || "impl Trait".into(),
+                |output| output.bounds.name.text.clone(),
+            );
             return Err(LoweringFailure::original(
                 *source,
                 Error::UnsupportedNominalSyntax {
@@ -1127,8 +1169,14 @@ fn sent_hidden(
             })
             .or_insert_with(|| Some(ty.clone()));
     }
+    // At its type arguments: `wrap::<Rc<f64>>`'s hidden `T` is `Rc<f64>`.
     let reveal = |ty: &Ty| match ty {
-        Ty::Param(_, super::ty::Parameter::Opaque(opaque)) => revealed.get(opaque)?.clone(),
+        Ty::Param(_, super::ty::Parameter::Opaque(opaque, arguments)) => {
+            let hidden = revealed.get(opaque)?.as_ref()?;
+            let output = models.opaque_outputs.get(opaque)?;
+            let substitution = super::generics::opaque_substitution(output, arguments);
+            Some(super::generics::instantiate(hidden, &substitution))
+        }
         _ => None,
     };
     for (source, hidden) in hidden {

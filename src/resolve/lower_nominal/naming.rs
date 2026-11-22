@@ -241,9 +241,10 @@ pub(super) fn witness_variable(name: &str) -> String {
     format!("__rawr_witness_{name}")
 }
 
-/// A placeholder long enough for any witness it becomes.
+/// A placeholder long enough for any witness it becomes: an opaque
+/// output's (D1109) names its place and a script type argument's id.
 pub(super) fn witness_placeholder(index: usize) -> String {
-    format!("__rawr_nominal_witness_{index:024}")
+    format!("__rawr_nominal_witness_{index:048}")
 }
 
 /// The generated function that runs `trait_name::method` for a value by its

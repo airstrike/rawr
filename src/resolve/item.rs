@@ -485,10 +485,21 @@ pub(crate) struct Function {
     /// the type parameter its opaque type is (D1109), named by the text
     /// rustc prints for it (`impl Shape`): filled by the body alone and
     /// known elsewhere by its bounds.
-    pub opaque_outputs: Box<[(type_ref::Opaque, Generic)]>,
+    pub opaque_outputs: Box<[(type_ref::Opaque, OpaqueOutput)]>,
     /// The parameter written `&mut fmt::Formatter`, through any path to
     /// it, whose body writes into it as a `fmt` body does.
     pub formatter: Option<crate::ImmutableString>,
+}
+
+/// An `impl Bounds` a function's output writes (D1109): the type parameter
+/// its opaque type is, and the type parameters in scope it captures, its
+/// function's and its impl's, in the order its type's arguments fill them
+/// (`impl Into<T>` of `fn conv<T>` is one type per `T`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(crate) struct OpaqueOutput {
+    pub bounds: Generic,
+    pub captured: Box<[crate::ImmutableString]>,
 }
 
 /// A type parameter of a dependency's trait method that an impl's function

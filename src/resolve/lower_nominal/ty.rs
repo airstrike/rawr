@@ -807,15 +807,19 @@ pub(super) enum Ty {
 }
 
 /// What a [`Ty::Param`] is.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Parameter {
     /// A type parameter the item declares, or one the parser lifts for it
     /// (an argument's `impl Trait`, a `where` bound's type, a projection).
     Declared,
     /// A function's `-> impl Bounds` (D1109), which no caller chooses and
-    /// its function's body fills: its name is the text rustc prints.
-    Opaque(type_ref::Opaque),
+    /// its function's body fills: its name is the text rustc prints. With
+    /// the type arguments of the type parameters it captures, in the order
+    /// `item::OpaqueOutput::captured` names them: two calls taking
+    /// different ones return different types, as rustc's `wrap::<Sq>` and
+    /// `wrap::<Ci>` opaque types are.
+    Opaque(type_ref::Opaque, Box<[Ty]>),
 }
 
 impl Ty {
@@ -826,7 +830,7 @@ impl Ty {
 
     /// Whether this is a function's opaque output (D1109).
     pub(super) const fn is_opaque(&self) -> bool {
-        matches!(self, Self::Param(_, Parameter::Opaque(_)))
+        matches!(self, Self::Param(_, Parameter::Opaque(..)))
     }
 
     /// Any iterator of `item`, as an adaptor makes.
@@ -892,7 +896,7 @@ impl Ty {
             Self::Fn { .. } | Self::FnChoice { .. } => "fn pointer",
             Self::FnItem { .. } => "fn item",
             Self::Dyn(..) => "trait object",
-            Self::Param(_, Parameter::Opaque(_)) => "opaque type",
+            Self::Param(_, Parameter::Opaque(..)) => "opaque type",
             Self::Param(name, _)
                 if crate::item::type_ref::projection_parameter_name(name).is_some() =>
             {
@@ -1194,7 +1198,18 @@ impl Ty {
                 type_ref::Target::Parameter => Self::param(path.name.clone()),
                 type_ref::Target::Opaque(opaque) => Self::Param(
                     path.name.clone(),
-                    opaque.map_or(Parameter::Declared, Parameter::Opaque),
+                    opaque.map_or(Parameter::Declared, |opaque| {
+                        Parameter::Opaque(
+                            opaque,
+                            path.arguments
+                                .iter()
+                                .filter_map(|argument| match argument {
+                                    type_ref::Argument::Type(ty) => Some(Self::from_resolved(ty)),
+                                    type_ref::Argument::Lifetime(_) => None,
+                                })
+                                .collect(),
+                        )
+                    }),
                 ),
                 type_ref::Target::Projection(base, trait_name) => Self::Projection(
                     Box::new(Self::from_resolved(base)),
@@ -2119,7 +2134,9 @@ pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
             Ty::Array { element, .. } | Ty::Option(element) => inside(element),
             Ty::Result(ok, err) => inside(ok) || inside(err),
             Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(inside),
-            Ty::Host { arguments, .. } => arguments.iter().any(inside),
+            Ty::Host { arguments, .. } | Ty::Param(_, Parameter::Opaque(_, arguments)) => {
+                arguments.iter().any(inside)
+            }
             Ty::Callable { inputs, output, .. }
             | Ty::Fn { inputs, output }
             | Ty::FnItem { inputs, output, .. }

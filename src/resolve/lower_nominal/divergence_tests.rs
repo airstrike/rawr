@@ -2852,3 +2852,117 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn an_opaque_output_is_one_type_per_type_argument() {
+    // rustc's opaque type captures its function's type parameters, so
+    // `wrap::<Sq>` and `wrap::<Ci>` return two types, and a bound naming a
+    // parameter is read at the call's argument (#2492).
+    let report = refused(
+        r#"
+trait Shape { fn area(&self) -> f64; }
+struct Sq(f64);
+struct Ci(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+impl Shape for Ci { fn area(&self) -> f64 { 3.0 * self.0 * self.0 } }
+fn wrap<T: Shape>(t: T) -> impl Shape { t }
+fn main() {
+    let mut x = wrap(Sq(1.0));
+    x = wrap(Ci(2.0));
+    println!("{}", x.area());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0308]: mismatched types"),
+        "{report}"
+    );
+    assert!(report.contains("expected `Sq`, found `Ci`"), "{report}");
+    let output = printed(
+        r#"
+fn conv<T: Into<String>>(t: T) -> impl Into<T> { t }
+fn items<T: Clone>(t: T) -> impl Iterator<Item = T> { vec![t.clone(), t].into_iter() }
+fn main() {
+    let s: &str = conv("hi").into();
+    let v = items(3).collect::<Vec<i64>>();
+    println!("{} {:?}", s, v);
+    let mut x = items(1i64);
+    x = items(2i64);
+    println!("{:?}", x.collect::<Vec<_>>());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "hi [3, 3]\n[2, 2]\n");
+}
+
+#[test]
+fn a_generic_opaque_outputs_hidden_type_is_its_calls_type_argument() {
+    // rustc's hidden type of `wrap::<Z>`'s opaque type is `Z`, so a generic
+    // call taking it dispatches on `Z`, and it is `Send` as `Z` is (#2492).
+    let output = printed(
+        r#"
+trait Zero { fn zero() -> Self; fn val(&self) -> i64; }
+struct Z(i64);
+impl Zero for Z { fn zero() -> Self { Z(0) } fn val(&self) -> i64 { self.0 } }
+fn wrap<T: Zero>(t: T) -> impl Zero { t }
+fn same<T: Zero>(_: &T) -> T { T::zero() }
+fn zeroed<T: Default>(_: &T) -> T { T::default() }
+fn num<T: Default + std::fmt::Display>(t: T) -> impl Default + std::fmt::Display { t }
+fn main() {
+    let a = wrap(Z(5));
+    let b = same(&a);
+    let n = num(7);
+    let z = zeroed(&n);
+    println!("{} {} {} {}", a.val(), b.val(), n, z);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "5 0 7 0\n");
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Sq(Rc<f64>);
+impl Shape for Sq { fn area(&self) -> f64 { 2.0 } }
+fn wrap<T: Shape>(t: T) -> impl Shape { t }
+fn main() {
+    let s = wrap(Sq(Rc::new(2.0)));
+    let h = std::thread::spawn(move || s.area());
+    println!("{}", h.join().unwrap());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Sq` cannot be sent between threads safely"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_generic_impls_opaque_output_is_read_at_its_receivers_type_arguments() {
+    // rustc's opaque type of a method captures its impl's type parameters
+    // too, so `W<i64>`'s `items` gives `i64`s (#2492).
+    let output = printed(
+        r#"
+struct W<T>(Vec<T>);
+impl<T: Clone> W<T> {
+    fn items(&self) -> impl Iterator<Item = T> + '_ { self.0.iter().cloned() }
+    fn first(&self) -> impl Into<Option<T>> { self.0.first().cloned() }
+}
+fn main() {
+    let w = W(vec![1i64, 2]);
+    let total: i64 = w.items().sum();
+    let first: Option<i64> = w.first().into();
+    let names = W(vec![String::from("a")]);
+    let joined: Vec<String> = names.items().collect();
+    println!("{} {:?} {:?}", total, first, joined);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 Some(1) [\"a\"]\n");
+}
