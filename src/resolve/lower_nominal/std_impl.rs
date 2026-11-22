@@ -1148,6 +1148,41 @@ impl Parser<'_> {
         }
     }
 
+    /// `*value` under `&mut`, of a place of a program type with `Deref`:
+    /// its `DerefMut` target and the `deref_mut` call `&mut *value` makes
+    /// of `&mut value`, or rustc's E0596 when the type has no `DerefMut`.
+    /// `None` for any other value.
+    pub(super) fn lent_program_deref(
+        &mut self,
+        value: &ParsedExpr,
+    ) -> Result<Option<(Ty, DerefCall)>, Error> {
+        let ty = self.inference.resolve(&value.ty);
+        let Ty::Script(id, _) = ty else {
+            return Ok(None);
+        };
+        if value.lvalue.is_none()
+            || !matches!(
+                self.deref_target(&ty, false),
+                Some((_, DerefCall::Program(_)))
+            )
+        {
+            return Ok(None);
+        }
+        match self.deref_target(&ty, true) {
+            Some(deref) => Ok(Some(deref)),
+            None => Err(Error::BorrowConflict {
+                code: "E0596",
+                message: format!(
+                    "cannot borrow data in dereference of `{}` as mutable",
+                    self.models.definition(id).name()
+                )
+                .into(),
+                access: value.span,
+                borrow: Span::NONE,
+            }),
+        }
+    }
+
     /// Whether `(*w)` is followed by a call of a `&mut self` method of
     /// `target`, as in `(*w).push(1)`: rustc's `convert_place_derefs_to_
     /// mutable` makes such a place deref `DerefMut`'s.

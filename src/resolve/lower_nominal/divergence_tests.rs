@@ -11782,3 +11782,59 @@ main();
         "box rc arc str path 3\nfield 3 made\nfrom hinted [1, 2] [\"x\", \"arc\"] 2\n"
     );
 }
+
+/// `&mut *w` of a program type is `DerefMut::deref_mut(&mut w)`: an
+/// argument, a `let` and a slice coercion of it change `w` and call its
+/// `deref_mut` once each (#816). A use of `w` while the reborrow lives is
+/// rustc's E0499, an immutable `w` its E0596 naming `w`, and a type with
+/// `Deref` alone its E0596. The output and the reports are rustc's for
+/// the same programs.
+#[test]
+fn a_mut_deref_of_a_program_type_goes_through_deref_mut() {
+    let head = r#"
+use std::ops::{Deref, DerefMut};
+struct W(Vec<i64>);
+struct R(Vec<i64>);
+impl Deref for R { type Target = Vec<i64>; fn deref(&self) -> &Vec<i64> { &self.0 } }
+impl Deref for W { type Target = Vec<i64>; fn deref(&self) -> &Vec<i64> { &self.0 } }
+impl DerefMut for W { fn deref_mut(&mut self) -> &mut Vec<i64> { println!("deref_mut"); &mut self.0 } }
+fn push_through(v: &mut Vec<i64>) { v.push(9); }
+"#;
+    let source = format!(
+        "{head}{}",
+        r#"
+fn main() {
+    let mut w = W(vec![]);
+    push_through(&mut *w);
+    let r = &mut *w;
+    r.push(1);
+    r.push(2);
+    let s: &mut [i64] = &mut *w;
+    s[0] = 7;
+    println!("{:?} {}", w.0, w.len());
+}
+main();
+"#
+    );
+    assert_eq!(
+        printed(&source),
+        "deref_mut\nderef_mut\nderef_mut\n[7, 1, 2] 3\n"
+    );
+    for (body, report) in [
+        (
+            "let mut w = W(vec![]); let r = &mut *w; w.0.push(3); r.push(1);",
+            "error[E0499]: cannot borrow `w.0` as mutable more than once at a time",
+        ),
+        (
+            "let w = W(vec![]); push_through(&mut *w);",
+            "error[E0596]: cannot borrow `w` as mutable, as it is not declared as mutable",
+        ),
+        (
+            "let mut w = R(vec![]); push_through(&mut *w);",
+            "error[E0596]: cannot borrow data in dereference of `R` as mutable",
+        ),
+    ] {
+        let refused = refused(&format!("{head}fn main() {{ {body} }}\nmain();\n"));
+        assert!(refused.starts_with(report), "{body}\n{refused}");
+    }
+}

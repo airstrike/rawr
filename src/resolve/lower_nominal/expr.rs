@@ -412,6 +412,7 @@ impl<'a> Parser<'a> {
                 self.lent_mut_field = lent;
                 let mut operand =
                     operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
+                let deref = self.lent_deref.take();
                 // Through the operand's last token, a `(place)`'s `)` too.
                 let whole = span(start, self.written_end());
                 if operand.lvalue.is_none() {
@@ -458,6 +459,13 @@ impl<'a> Parser<'a> {
                     mutable: true,
                     target: Box::new(self.inference.resolve(&operand.ty)),
                 };
+                if let Some((target, call)) = deref {
+                    let ty = Ty::Reference {
+                        mutable: true,
+                        target: Box::new(target),
+                    };
+                    self.apply_derefs(&mut operand, vec![call], ty)?;
+                }
                 operand.span = whole;
                 return Ok(operand.retain_origin());
             }
@@ -514,6 +522,14 @@ impl<'a> Parser<'a> {
             let reference = matches!(self.inference.resolve(&operand.ty), Ty::Reference { .. });
             self.flow().deref(operand.span.start(), start, reference);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
+            // `&mut *w` of a program type is `DerefMut::deref_mut(&mut w)`,
+            // which the `&mut` makes of the place `w`.
+            if self.lent_mut_field == Some(start)
+                && let Some(deref) = self.lent_program_deref(&operand)?
+            {
+                self.lent_deref = Some(deref);
+                return Ok(operand);
+            }
             // `*w` of a program type is `*Deref::deref(&w)`, and
             // `*DerefMut::deref_mut(&mut w)` where it is assigned, as
             // rustc's place deref is.

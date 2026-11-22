@@ -619,6 +619,10 @@ struct Parser<'a> {
     /// field read there, as `&mut pixel.0`, is a place the call writes
     /// through (`read_imported_field`).
     lent_mut_field: Option<Position>,
+    /// The `DerefMut` call of a program type's `*w` under `&mut`, which
+    /// the `&mut` makes of its `&mut w`, as rustc's `&mut *w` is
+    /// `DerefMut::deref_mut(&mut w)`.
+    lent_deref: Option<(Ty, std_impl::DerefCall)>,
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
@@ -1156,6 +1160,7 @@ impl<'a> Parser<'a> {
             stored_inputs: false,
             lent_field: None,
             lent_mut_field: None,
+            lent_deref: None,
             bound_iterators: BTreeMap::new(),
             held_iter_mut: BTreeMap::new(),
             pending_iter_mut: None,
