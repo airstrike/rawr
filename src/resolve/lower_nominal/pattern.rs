@@ -1190,6 +1190,11 @@ impl<'a> Parser<'a> {
         let start = if negative { Some(self.next().1) } else { None };
         let (token, position) = self.next();
         let start = start.unwrap_or(position);
+        // A suffix, which `literal_kind` reads, ends the literal's span.
+        let suffix = match self.input.clone().next() {
+            Some((Token::Identifier(name), at)) => Some((at, text_end(at, &name))),
+            _ => None,
+        };
         let (literal, ty, text) = match token {
             Token::IntegerConstant(value) => (
                 ast::NominalLiteral::Int(if negative { -value } else { value }),
@@ -1231,11 +1236,11 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        Ok(Some((
-            literal,
-            ty,
-            Span::new(start, text_end(position, &text)),
-        )))
+        let end = match suffix {
+            Some((at, end)) if self.position() != at => end,
+            _ => text_end(position, &text),
+        };
+        Ok(Some((literal, ty, Span::new(start, end))))
     }
 
     /// The value of the constant whose path is ahead, as a pattern matches
@@ -1298,11 +1303,8 @@ impl<'a> Parser<'a> {
                     .named_model(owner)
                     .and_then(|model| self.models.method(model.definition().id(), member))
                     .filter(|definition| definition.constant())?;
-                let value = definition.integer()?;
-                (
-                    ast::NominalLiteral::Int(value),
-                    Ty::from_resolved(definition.output()),
-                )
+                let ty = Ty::from_resolved(definition.output());
+                (pattern_value(definition.value()?, &ty)?, ty)
             }
             [(name, _)] => {
                 let function = self
@@ -1314,16 +1316,7 @@ impl<'a> Parser<'a> {
                     .output
                     .as_ref()
                     .map_or(Ty::Unit, Ty::from_resolved);
-                let literal = match self.constant_value(name, 0)? {
-                    crate::item::constant::Value::Integer(value) => {
-                        ast::NominalLiteral::Int(match ty {
-                            Ty::Int(kind) => kind.store(value),
-                            _ => crate::INT::try_from(value).ok()?,
-                        })
-                    }
-                    crate::item::constant::Value::Bool(value) => ast::NominalLiteral::Bool(value),
-                    crate::item::constant::Value::Char(value) => ast::NominalLiteral::Char(value),
-                };
+                let literal = pattern_value(self.constant_value(name, 0)?, &ty)?;
                 (literal, ty)
             }
             _ => return None,
@@ -2503,15 +2496,24 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => self.inference.resolve(&target),
             ty => ty,
         };
+        let actual = &self.inference.resolve(actual);
+        // A number of a written kind matches only that kind (`1u8` no
+        // `i32`); one still inferred takes any.
         let same = matches!(
             (&expected, actual),
-            (Ty::Int(_), Ty::Int(_))
+            (Ty::Int(Int::Var(_)), Ty::Int(_))
+                | (Ty::Int(_), Ty::Int(Int::Var(_)))
+                | (Ty::Float(super::Float::Var(_)), Ty::Float(_))
+                | (Ty::Float(_), Ty::Float(super::Float::Var(_)))
                 | (Ty::Char, Ty::Char)
                 | (Ty::Str, Ty::Str)
                 | (Ty::Bool, Ty::Bool)
-                | (Ty::Float(_), Ty::Float(_))
                 | (Ty::Ordering, Ty::Ordering)
-        ) || matches!(actual, Ty::Script(..)) && expected == *actual;
+        ) || matches!(
+            (&expected, actual),
+            (Ty::Int(_), Ty::Int(_)) | (Ty::Float(_), Ty::Float(_))
+        ) && expected == *actual
+            || matches!(actual, Ty::Script(..)) && expected == *actual;
         if same {
             Ok(())
         } else {
@@ -3347,7 +3349,30 @@ impl<'a> Parser<'a> {
             crate::item::ParameterPattern::Discard(span) => Syntax::Discard { span: *span },
             crate::item::ParameterPattern::Literal { literal, span } => {
                 let (literal, ty) = match literal {
-                    crate::item::PatternLiteral::Integer(value) => {
+                    crate::item::PatternLiteral::Integer {
+                        value,
+                        suffix: Some(suffix),
+                    } => {
+                        let ty = super::ty::numeric_type(suffix)
+                            .expect("a parsed suffix names a number");
+                        let literal = match ty {
+                            Ty::Int(kind) => {
+                                let wide = super::Wide::Signed((*value).into());
+                                if wide.fits(kind).is_err() {
+                                    return Err(self.overflowing(kind, wide, *span));
+                                }
+                                ast::NominalLiteral::Int(kind.store(i128::from(*value)))
+                            }
+                            _ => ast::NominalLiteral::Float(crate::types::FloatWrapper::new(
+                                *value as crate::FLOAT,
+                            )),
+                        };
+                        (literal, ty)
+                    }
+                    crate::item::PatternLiteral::Integer {
+                        value,
+                        suffix: None,
+                    } => {
                         // An `{integer}`, as an unsuffixed literal in a
                         // body is (`literal_kind`).
                         let id = self.inference.fresh_id();
@@ -4395,4 +4420,25 @@ fn require_same_names(
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+/// The literal a pattern matches for a constant of type `ty` whose value
+/// is `value`. An `f32` constant holds its initializer rounded to `f32`, as
+/// rustc evaluates it in the constant's type.
+fn pattern_value(value: crate::item::constant::Value, ty: &Ty) -> Option<ast::NominalLiteral> {
+    use crate::item::constant::Value;
+    Some(match value {
+        Value::Integer(value) => ast::NominalLiteral::Int(match ty {
+            Ty::Int(kind) => kind.store(value),
+            _ => crate::INT::try_from(value).ok()?,
+        }),
+        Value::Bool(value) => ast::NominalLiteral::Bool(value),
+        Value::Char(value) => ast::NominalLiteral::Char(value),
+        Value::Float(value) => ast::NominalLiteral::Float(match ty {
+            Ty::Float(super::Float::F32) => {
+                crate::types::FloatWrapper::new(crate::FLOAT::from(*value as f32))
+            }
+            _ => value,
+        }),
+    })
 }

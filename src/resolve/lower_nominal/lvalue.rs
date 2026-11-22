@@ -553,24 +553,29 @@ pub(super) fn in_place(value: &ParsedExpr) -> Option<origin::Fragment> {
         }
         Lvalue::Place { place, .. } => Some(place.clone()),
         Lvalue::Field(field) => Some(field.place()),
-        Lvalue::Nested(nested) => {
-            let mut place = nested.base.clone();
-            for step in &nested.steps {
-                match step {
-                    PlaceStep::Field { slot } => place = field_place(place, *slot),
-                    PlaceStep::Index(index) => {
-                        place.push_text("[");
-                        place.push(index.clone());
-                        place.push_text("]");
-                    }
-                    PlaceStep::Member(member) => place.push_text(format!("[{member}]")),
-                    _ => return None,
-                }
-            }
-            Some(place)
-        }
+        Lvalue::Nested(nested) => nested_place(nested),
         Lvalue::Slice(_) => None,
     }
+}
+
+/// The place `nested` is, as the runtime reaches it where it is: its base
+/// and each field, member and element below it (`s[0][i]`). `None` for a
+/// place reached through anything else.
+pub(super) fn nested_place(nested: &Nested) -> Option<origin::Fragment> {
+    let mut place = nested.base.clone();
+    for step in &nested.steps {
+        match step {
+            PlaceStep::Field { slot } => place = field_place(place, *slot),
+            PlaceStep::Index(index) => {
+                place.push_text("[");
+                place.push(index.clone());
+                place.push_text("]");
+            }
+            PlaceStep::Member(member) => place.push_text(format!("[{member}]")),
+            _ => return None,
+        }
+    }
+    Some(place)
 }
 
 /// The local and the place of `value` when it is a chain of fields and

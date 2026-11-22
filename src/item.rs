@@ -1447,7 +1447,12 @@ pub enum ParameterPattern {
 #[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub enum PatternLiteral {
     /// An integer, negated by its `-`.
-    Integer(crate::INT),
+    Integer {
+        /// The value.
+        value: crate::INT,
+        /// The type its suffix names: `u8` of `1u8`.
+        suffix: Option<ImmutableString>,
+    },
     /// A `char`.
     Char(char),
     /// A `bool`.

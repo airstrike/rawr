@@ -5,14 +5,20 @@
 use crate::tokenizer::Token;
 use crate::ImmutableString;
 
-/// A constant's value, as a const generic parameter takes it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A constant's value, as a const generic parameter or a pattern takes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum Value {
     Integer(i128),
     Bool(bool),
     Char(char),
+    /// A float, which a pattern matches but no const generic takes.
+    Float(crate::types::FloatWrapper<crate::FLOAT>),
 }
+
+// Only a const generic argument's value is compared as a whole, and no
+// const generic takes a float.
+impl Eq for Value {}
 
 impl Value {
     /// The value as a type writes it: `4`, `true`, `'a'`.
@@ -21,6 +27,7 @@ impl Value {
             Self::Integer(value) => value.to_string(),
             Self::Bool(value) => value.to_string(),
             Self::Char(value) => format!("{value:?}"),
+            Self::Float(value) => format!("{:?}", *value),
         }
     }
 
@@ -57,7 +64,7 @@ impl Value {
     fn word(self) -> String {
         match self {
             Self::Char(value) => format!("'\\u{{{:x}}}'", u32::from(value)),
-            Self::Integer(_) | Self::Bool(_) => self.text(),
+            Self::Integer(_) | Self::Bool(_) | Self::Float(_) => self.text(),
         }
     }
 }
@@ -135,8 +142,13 @@ impl Operator {
     /// `left op right`; `None` when Rust's evaluation would fail (an
     /// overflow, a division by zero) or the operands don't take it.
     fn apply(self, left: Value, right: Value) -> Option<Value> {
-        use Value::{Bool, Integer};
+        use Value::{Bool, Float, Integer};
         Some(match (self, left, right) {
+            (Self::Add, Float(a), Float(b)) => Float((*a + *b).into()),
+            (Self::Subtract, Float(a), Float(b)) => Float((*a - *b).into()),
+            (Self::Multiply, Float(a), Float(b)) => Float((*a * *b).into()),
+            (Self::Divide, Float(a), Float(b)) => Float((*a / *b).into()),
+            (Self::Remainder, Float(a), Float(b)) => Float((*a % *b).into()),
             (Self::Add, Integer(a), Integer(b)) => Integer(a.checked_add(b)?),
             (Self::Subtract, Integer(a), Integer(b)) => Integer(a.checked_sub(b)?),
             (Self::Multiply, Integer(a), Integer(b)) => Integer(a.checked_mul(b)?),
@@ -304,12 +316,13 @@ fn operand(rest: &mut &[Piece], lookup: &mut dyn FnMut(&str) -> Option<Value>) -
         }
         Piece::Operator(Operator::Subtract) => match operand(rest, lookup)? {
             Value::Integer(value) => Some(Value::Integer(value.checked_neg()?)),
+            Value::Float(value) => Some(Value::Float((-*value).into())),
             _ => None,
         },
         Piece::Operator(Operator::Not) => match operand(rest, lookup)? {
             Value::Integer(value) => Some(Value::Integer(!value)),
             Value::Bool(value) => Some(Value::Bool(!value)),
-            Value::Char(_) => None,
+            Value::Char(_) | Value::Float(_) => None,
         },
         Piece::Operator(_) | Piece::Close => None,
     }

@@ -22,11 +22,10 @@ impl<'a> Parser<'a> {
             return None;
         }
         if let Some((owner, member)) = name.rsplit_once("::") {
-            let integer = self
+            return self
                 .named_model(owner)
                 .and_then(|model| self.models.method(model.definition().id(), member))
-                .and_then(|definition| definition.integer())?;
-            return Some(crate::item::constant::Value::Integer(i128::from(integer)));
+                .and_then(|definition| definition.value());
         }
         let function = self
             .models

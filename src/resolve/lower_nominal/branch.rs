@@ -320,6 +320,7 @@ impl<'a> Parser<'a> {
                 Token::Identifier(name)
                     if Prelude::from_name(&name).is_none()
                         && self.unit_struct(&name).is_none()
+                        && name.as_str() != "ref"
                         && !matches!(
                             self.peek_second(),
                             Token::DoubleColon
@@ -963,7 +964,7 @@ impl<'a> Parser<'a> {
                 test.is_some(),
                 binding
                     .as_ref()
-                    .map(|(name, declaration, _)| (name, *declaration)),
+                    .map(|(name, declaration, bound)| (name, *declaration, *bound)),
                 &written,
             );
             self.pattern_tests(&trace, &matched, subject.span);
@@ -973,21 +974,48 @@ impl<'a> Parser<'a> {
             let tests = test.into_iter().collect::<Vec<_>>();
             let mut seen = [false; 2];
             bool_literals(&syntax, &mut seen);
-            if let Some((name, declaration, mutable)) = &binding {
+            if let Some((name, declaration, Bound::Unique)) = &binding {
+                // `ref mut v` is the matched place itself, as `let v = &mut
+                // place;` is.
+                let (root, place) = match &subject.lvalue {
+                    Some(Lvalue::Binding { binding, .. }) => {
+                        (binding.clone(), origin::Fragment::plain(binding.as_str()))
+                    }
+                    Some(Lvalue::Place { binding, place, .. }) => (binding.clone(), place.clone()),
+                    _ => {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "`ref mut` of a value that is not a local's place".into(),
+                            source: subject.span,
+                        })
+                    }
+                };
+                self.borrow_place(name.clone(), *declaration, written.clone(), place, root);
+            } else if let Some((name, declaration, bound)) = &binding {
+                // `ref v` borrows the value as written, a copy at runtime.
+                let ty = match bound {
+                    Bound::Shared => Ty::Reference {
+                        mutable: false,
+                        target: Box::new(written.clone()),
+                    },
+                    Bound::Value | Bound::Mutable | Bound::Unique => binding_ty.clone(),
+                };
                 self.bindings.insert(
                     name.clone(),
                     Binding {
-                        ty: binding_ty.clone(),
-                        mutable: *mutable,
+                        ty,
+                        mutable: *bound == Bound::Mutable,
                         available: true,
                         declaration: *declaration,
                         kind: BindingKind::Local,
                     },
                 );
             }
-            let bind = binding.as_ref().map_or(String::new(), |(name, _, _)| {
-                format!("let {name} = {temporary}; ")
-            });
+            let bind = match &binding {
+                Some((name, _, bound)) if *bound != Bound::Unique => {
+                    format!("let {name} = {temporary}; ")
+                }
+                _ => String::new(),
+            };
             let mut condition = origin::Fragment::plain(if tests.is_empty() {
                 "true".to_string()
             } else {
@@ -1582,10 +1610,10 @@ impl<'a> Parser<'a> {
         syntax: &pattern::Syntax,
         written: &Ty,
         temporary: &str,
-        binding: &mut Option<(ImmutableString, Span, bool)>,
+        binding: &mut Option<(ImmutableString, Span, Bound)>,
     ) -> Result<Option<String>, Error> {
         let ty = &self.referenced(written);
-        let mut bind = |name: &ImmutableString, span: Span, mutable: bool| {
+        let mut bind = |name: &ImmutableString, span: Span, bound: Bound| {
             if binding.as_ref().is_some_and(|(bound, _, _)| bound != name) {
                 return Err(Error::InvalidMatch {
                     owner: ty.name(&self.models),
@@ -1593,7 +1621,7 @@ impl<'a> Parser<'a> {
                     pattern: span,
                 });
             }
-            *binding = Some((name.clone(), span, mutable));
+            *binding = Some((name.clone(), span, bound));
             Ok(())
         };
         Ok(match syntax {
@@ -1603,7 +1631,28 @@ impl<'a> Parser<'a> {
                 span,
                 mutable,
             } => {
-                bind(name, *span, *mutable)?;
+                let bound = if *mutable {
+                    Bound::Mutable
+                } else {
+                    Bound::Value
+                };
+                bind(name, *span, bound)?;
+                None
+            }
+            pattern::Syntax::Ref {
+                name,
+                span,
+                mutable: false,
+            } => {
+                bind(name, *span, Bound::Shared)?;
+                None
+            }
+            pattern::Syntax::Ref {
+                name,
+                span,
+                mutable: true,
+            } => {
+                bind(name, *span, Bound::Unique)?;
                 None
             }
             pattern::Syntax::At {
@@ -1611,7 +1660,7 @@ impl<'a> Parser<'a> {
                 name_span,
                 pattern,
             } => {
-                bind(name, *name_span, false)?;
+                bind(name, *name_span, Bound::Value)?;
                 self.scalar_condition(pattern, written, temporary, binding)?
             }
             pattern::Syntax::Reference {
@@ -2422,4 +2471,17 @@ impl<'a> Parser<'a> {
             value,
         })
     }
+}
+
+/// How an arm of a match on a scalar or a string binds the value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Bound {
+    /// `v`, a copy or a move of the value.
+    Value,
+    /// `mut v`.
+    Mutable,
+    /// `ref v`, a shared borrow of the value as written.
+    Shared,
+    /// `ref mut v`, the matched place.
+    Unique,
 }
