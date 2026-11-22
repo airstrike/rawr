@@ -140,6 +140,13 @@ impl<'a> Parser<'a> {
             .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
             .collect();
         let arity = inputs.len();
+        // The fields as written: a `&mut` given to one that is no
+        // reference moves (`move_unless_reborrowed`).
+        let written: Box<[Ty]> = item
+            .fields
+            .iter()
+            .map(|field| Ty::from_resolved(&field.ty))
+            .collect();
         let declared = self
             .models
             .type_in_this_file(&item.key)
@@ -192,9 +199,10 @@ impl<'a> Parser<'a> {
                 arguments: Some(places),
             });
         }
-        for (value, expected) in args.iter_mut().zip(inputs.iter()) {
+        for ((value, expected), written) in args.iter_mut().zip(inputs.iter()).zip(&written) {
             self.coerce_expr(expected, value)?;
             self.move_local(value)?;
+            self.move_unless_reborrowed(value, Some(written));
         }
         let parts: Vec<_> = args
             .iter()
@@ -754,6 +762,9 @@ impl<'a> Parser<'a> {
         variant: Prelude,
         start: Span,
     ) -> Result<ParsedExpr, Error> {
+        // The type the variant is expected to have, which says whether a
+        // `&mut` payload is reborrowed or moved (`move_unless_reborrowed`).
+        let expectation = self.block_expectation();
         let turbofish = self.parse_prelude_turbofish(variant)?;
         let inferred = turbofish.is_none();
         let (ok, err) = match turbofish {
@@ -810,6 +821,14 @@ impl<'a> Parser<'a> {
         };
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
+        let payload = match (variant, expectation.map(|ty| self.inference.resolve(&ty))) {
+            _ if !inferred => Some(expected.clone()),
+            (Prelude::Some, Some(Ty::Option(payload))) => Some(*payload),
+            (Prelude::Ok, Some(Ty::Result(payload, _)))
+            | (Prelude::Err, Some(Ty::Result(_, payload))) => Some(*payload),
+            _ => None,
+        };
+        self.move_unless_reborrowed(value, payload.as_ref());
         // A payload that never comes, as `Some(return)`'s, is the variable
         // it was coerced into, which a later use settles or the fallback
         // makes `!`: copyness waits for it, as rustc's does.
@@ -1024,9 +1043,11 @@ impl<'a> Parser<'a> {
                 .iter()
                 .find(|known| known.name.text == *field)
                 .expect("unknown fields were rejected");
-            let expected = instantiate(&Ty::from_resolved(&declared.ty), &substitution);
+            let written = Ty::from_resolved(&declared.ty);
+            let expected = instantiate(&written, &substitution);
             self.coerce_expr(&expected, value)?;
             self.move_local(value)?;
+            self.move_unless_reborrowed(value, Some(&written));
             let temporary = self.temporary("field");
             prelude.push_text(format!("let {temporary} = "));
             prelude.push(value.rendered_source());

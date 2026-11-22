@@ -436,8 +436,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The binding a change through `name` changes. A closure's `self` is
-    /// the method's own: the statement making the closure writes it back
-    /// (`lend_self`).
+    /// the method's own, the receiver's shared handle (`parse_closure`).
     pub(super) fn mutation_binding(&self, name: &str) -> Option<&Binding> {
         if name == SELF_CAPTURE {
             self.self_changed.set(true);

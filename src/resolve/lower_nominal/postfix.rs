@@ -2089,6 +2089,9 @@ impl<'a> Parser<'a> {
                 let lent = method_lent(&definition);
                 self.mutable_arguments(&args, lent.iter().copied())?;
                 self.lend_mutable(&mut args, &lent)?;
+                let kept = method_kept(&definition);
+                self.mutable_arguments(&args, kept.iter().copied())?;
+                self.lend_kept(&mut args, &kept)?;
                 let mut source =
                     origin::Fragment::plain(format!("{}.{method}(", places::RECEIVER_PLACE));
                 source.push(arguments);
@@ -2175,6 +2178,9 @@ impl<'a> Parser<'a> {
             self.mutable_arguments(&args, lent.iter().copied())?;
             self.move_copied_in(&mut args, &copied);
             self.lend_mutable(&mut args, &lent)?;
+            let kept = method_kept(&definition);
+            self.mutable_arguments(&args, kept.iter().copied())?;
+            self.lend_kept(&mut args, &kept)?;
             let arguments = origin::Fragment::join(
                 args.iter()
                     .map(ParsedExpr::rendered_source)

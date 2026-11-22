@@ -1766,6 +1766,9 @@ impl<'a> Parser<'a> {
         self.mutable_arguments(&arguments, lent.iter().copied())?;
         self.move_copied_in(&mut arguments, &copied);
         self.lend_mutable(&mut arguments, &lent)?;
+        let kept = method_kept(&definition);
+        self.mutable_arguments(&arguments, kept.iter().copied())?;
+        self.lend_kept(&mut arguments, &kept)?;
         let source = origin::Fragment::call(
             method_name(&definition),
             arguments

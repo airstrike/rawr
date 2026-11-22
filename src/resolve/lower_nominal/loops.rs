@@ -771,10 +771,10 @@ impl<'a> Parser<'a> {
                         return Err(self.pipeline_error(&lhs, fallback));
                     }
                 };
-                // `for r in v` of a `Vec<&mut T>`: each `r` is a stored
-                // `&mut` (`stored.rs`).
+                // `for r in v` of a `Vec<&mut T>`, or of one a call gives:
+                // each `r` is a stored `&mut` (`stored.rs`).
                 if pattern.is_none()
-                    && self.holds_stored(&lhs)
+                    && (self.holds_stored(&lhs) || self.stored_temporary(&lhs))
                     && matches!(
                         self.inference.resolve(&ty),
                         Ty::Reference { mutable: true, .. }

@@ -2302,7 +2302,8 @@ impl<'a> Parser<'a> {
             && !shared
             && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
         {
-            let (rebind, end) = self.rebind_selector(value.span, &value.ty, selector, mutable)?;
+            let (rebind, end) =
+                self.rebind_selector(value.span, &value.ty, selector, mutable, false)?;
             let value = ParsedExpr {
                 prelude: origin::Fragment::default(),
                 source: rebind.surrounded("{ ", " }"),
