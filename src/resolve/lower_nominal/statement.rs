@@ -332,6 +332,7 @@ impl<'a> Parser<'a> {
         let Some(binding) = self.mutation_binding(&binding_name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
+        let declaration = binding.declaration;
         // rustc checks an assignment's types before its mutability: an
         // immutable local is reported once the value's type is.
         // A `let x;` not declared `mut` takes one assignment, where it has
@@ -428,6 +429,14 @@ impl<'a> Parser<'a> {
             let place = value.ty.clone();
             self.parse_expr_expecting(Some(&place))?
         };
+        // `r = c.borrow();`: `r` holds the guard, whose drop uses the
+        // cell's borrow where `r` ends.
+        if !compound
+            && matches!(lvalue, Lvalue::Binding { .. })
+            && self.cell_guard_types.contains_key(&replacement.span)
+        {
+            self.assigned_guards.insert(declaration);
+        }
         self.assigned_place(
             value.span,
             &value.ty,

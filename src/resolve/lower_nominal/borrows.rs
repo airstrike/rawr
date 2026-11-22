@@ -2087,21 +2087,30 @@ impl Parser<'_> {
         }
         let held = self.flow().origins(value.span).map(<[_]>::to_vec);
         if let Some(held) = held {
-            self.flow().hold_temporary(value.span, &held);
+            self.flow().hold_temporary(value.span, &held, None);
         }
     }
 
     /// `cell.borrow()` or `cell.borrow_mut()` spanning `call`: its guard
     /// holds the `&self` borrow of the cell for as long as it lives, as
-    /// `Ref` and `RefMut` do.
+    /// `Ref` and `RefMut` do, and the guard's drop uses it. A guard the
+    /// expression makes is a temporary of its scope, whose drop runs the
+    /// destructor of std's guard type (`cell_guard_type`).
     pub(super) fn cell_borrowed(&self, cell: &ParsedExpr, call: Span) {
         if !is_place(cell) {
             return;
         }
         let below = self.may_hold_borrow(&cell.ty);
-        let loan = self.flow().autoref(cell.span.start(), call, false, below);
+        // At the receiver, as rustc reports a method's autoref.
+        let loan = self
+            .flow()
+            .autoref(cell.span.start(), cell.span, false, below);
         if let Some(loan) = loan {
-            self.flow().set_origins(call, vec![(Path::OWN, loan)]);
+            let held = vec![(Path::OWN, loan)];
+            let guard = self.cell_guard_type(call).unwrap_or_default();
+            let destructor = crate::resolve::tail::Destructor::Glue(guard);
+            self.flow().hold_temporary(call, &held, Some(destructor));
+            self.flow().set_origins(call, held);
         }
     }
 
@@ -2244,7 +2253,16 @@ impl Parser<'_> {
             return;
         }
         let whole = assignee::assignment_span(target, replacement);
-        self.flow().assigned(target.start(), whole, compound);
+        // `*c.borrow_mut() = v` stores through the guard the expression
+        // made: a change inside the cell, which its `&self` borrow allows.
+        let through_guard = matches!(
+            lvalue,
+            Lvalue::Nested(nested)
+                if matches!(nested.steps.first(), Some(PlaceStep::Cell { release: true, .. }))
+        );
+        if !through_guard {
+            self.flow().assigned(target.start(), whole, compound);
+        }
         // `pair.right = &b`: the local takes the borrows besides its own.
         let origins = self
             .flow()
@@ -2415,7 +2433,9 @@ impl Parser<'_> {
                 tail: Some(explanation),
                 ..
             }) => Err(Error::TailTemporary(Box::new(
-                explanation.written(|span| self.expression_span(span)),
+                explanation
+                    .guard_named(|temporary| self.cell_guard_type(temporary))
+                    .written(|span| self.expression_span(span)),
             ))),
             Some(conflict) => Err(Error::BorrowConflict {
                 code: conflict.code,

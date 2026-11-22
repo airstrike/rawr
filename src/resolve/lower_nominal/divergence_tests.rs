@@ -10818,3 +10818,111 @@ fn a_tail_temporary_in_a_condition_or_subject_drops_with_it_before_edition_2024(
          end\n"
     );
 }
+
+/// A block whose tail reads through a `RefCell`'s borrow of a local.
+const GUARD_BLOCK: &str = r#"use std::cell::RefCell;
+
+fn main() {
+    let n = {
+        let x = RefCell::new(1);
+        *x.borrow()
+    };
+    println!("{n}");
+}
+"#;
+
+/// A body whose tail calls a method through a `RefCell`'s mutable borrow
+/// of a local.
+const GUARD_BODY: &str = r#"use std::cell::RefCell;
+
+fn total() -> usize {
+    let v = RefCell::new(vec![1, 2]);
+    v.borrow_mut().len()
+}
+
+fn main() {
+    println!("{}", total());
+}
+"#;
+
+#[test]
+fn a_refcell_guard_in_a_tail_outlives_its_cell_before_edition_2024() {
+    // `borrow()` gives std's `Ref<'_, T>` and `borrow_mut()` its
+    // `RefMut<'_, T>`, whose drop uses the borrow of the cell. Before
+    // edition 2024 one made in a block's tail drops after the block's
+    // locals: a borrow of a local cell is rustc's E0597, which names the
+    // guard's destructor (#2620). Edition 2024 drops it first.
+    assert_eq!(
+        edition_rendered("guard-block", "2021", GUARD_BLOCK),
+        "error[E0597]: `x` does not live long enough\n  |\n6 |         let x = RefCell::new(1);\n  |             - binding `x` declared here\n7 |         *x.borrow()\n  |          ^---------\n  |          |\n  |          borrowed value does not live long enough\n  |          a temporary with access to the borrow is created here ...\n8 |     };\n  |     -- ... and the borrow might be used here, when that temporary is dropped and runs the destructor for type `Ref<'_, i32>`\n  |     |\n  |     `x` dropped here while still borrowed\n  |\n  = note: the temporary is part of an expression at the end of a block;\n          consider forcing this temporary to be dropped sooner, before the block's local variables are dropped\nhelp: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block\n  |\n7 |         let x = *x.borrow(); x\n  |         +++++++            +++\n"
+    );
+    assert_eq!(edition_printed("guard-block", "2024", GUARD_BLOCK), "1\n");
+    assert_eq!(
+        edition_rendered("guard-body", "2021", GUARD_BODY),
+        "error[E0597]: `v` does not live long enough\n  |\n5 |     let v = RefCell::new(vec![1, 2]);\n  |         - binding `v` declared here\n6 |     v.borrow_mut().len()\n  |     ^-------------\n  |     |\n  |     borrowed value does not live long enough\n  |     a temporary with access to the borrow is created here ...\n7 | }\n  | -\n  | |\n  | `v` dropped here while still borrowed\n  | ... and the borrow might be used here, when that temporary is dropped and runs the destructor for type `RefMut<'_, Vec<i32>>`\n  |\n  = note: the temporary is part of an expression at the end of a block;\n          consider forcing this temporary to be dropped sooner, before the block's local variables are dropped\nhelp: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block\n  |\n6 |     let x = v.borrow_mut().len(); x\n  |     +++++++                     +++\n"
+    );
+    assert_eq!(edition_printed("guard-body", "2024", GUARD_BODY), "2\n");
+}
+
+/// Guards read, changed, printed and held through a `RefCell`, an `Rc` of
+/// one and a `Mutex`, in blocks' tails whose cells outlive them.
+const GUARD_USES: &str = r#"use std::cell::RefCell;
+use std::rc::Rc;
+
+fn first(v: &RefCell<Vec<i32>>) -> i32 {
+    v.borrow()[0]
+}
+
+fn main() {
+    let c = RefCell::new(vec![1, 2]);
+    c.borrow_mut().push(3);
+    *c.borrow_mut() = vec![4, 5, 6];
+    let n = c.borrow().len();
+    println!("{n} {:?} {}", c.borrow(), first(&c));
+    let s = RefCell::new(String::from("hi"));
+    println!("{} {}", s.borrow(), s.borrow().len());
+    let shared = Rc::new(RefCell::new(7));
+    *shared.borrow_mut() += 1;
+    let total = { *shared.borrow() + 1 };
+    let g = c.borrow();
+    println!("{total} {} {}", g[1], g.iter().sum::<i32>());
+    drop(g);
+    drop(c);
+    let m = std::sync::Mutex::new(2);
+    let doubled = { *m.lock().unwrap() * 2 };
+    println!("{doubled}");
+}
+"#;
+
+#[test]
+fn a_refcell_guard_derefs_to_its_value_in_every_edition() {
+    // A guard derefs to the cell's value, and `Display` and `Debug` go
+    // through it. A tail's guard of a cell that outlives the block is
+    // accepted before edition 2024 too. Each is what rustc's build prints.
+    let printed = "3 [4, 5, 6] 4\nhi 2\n9 5 15\n4\n";
+    assert_eq!(edition_printed("guard-uses", "2021", GUARD_USES), printed);
+    assert_eq!(edition_printed("guard-uses", "2024", GUARD_USES), printed);
+}
+
+#[test]
+fn a_refcell_guard_assigned_to_a_local_drops_where_the_local_ends() {
+    // `r = c.borrow();` moves the guard into `r`, whose drop at the end of
+    // `main` uses the borrow of `c`, which ended with its block: rustc's
+    // E0597 though `r` is never read.
+    let report = refused(
+        "use std::cell::RefCell;
+fn main() {
+    let r;
+    {
+        let c = RefCell::new(1);
+        r = c.borrow();
+    }
+}
+main();
+",
+    );
+    assert!(
+        report.starts_with("error[E0597]: `c` does not live long enough"),
+        "{report}"
+    );
+}
