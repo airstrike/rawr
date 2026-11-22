@@ -150,10 +150,11 @@ pub(crate) struct Shadow {
     pub(crate) files: Vec<(std::path::PathBuf, String)>,
     /// What native code sees of the marked modules, item by item.
     pub(crate) shape: Shape,
-    /// Items native code can see that no trampoline can stand for, with
-    /// why: an error before anything is built.
+    /// Items native code can see that no trampoline can stand for, each
+    /// the error that says why at its signature: an error before anything
+    /// is built ([`refusal`]).
     #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
-    pub(crate) refused: Vec<String>,
+    pub(crate) refused: Vec<crate::diagnostic::Builder>,
     /// Each stand-in's maker, by its type's path from the crate's root and
     /// the maker's from the shadow crate's (#1264), for [`support`] to
     /// register.
@@ -861,6 +862,60 @@ struct Generator<'a> {
 struct Stub {
     text: String,
     uncalled: Option<String>,
+}
+
+/// Why native code can't call a function through rawr yet, at the part of
+/// its signature that says so: rustc's error line, its label and its help.
+struct Refusal {
+    message: String,
+    at: Span,
+    label: Option<String>,
+    help: Option<&'static str>,
+}
+
+impl Refusal {
+    /// The refusal as rustc reports an error in `file`.
+    fn report(self, file: &Source<'_>) -> crate::diagnostic::Builder {
+        let Self {
+            message,
+            at,
+            label,
+            help,
+        } = self;
+        let start = || {
+            let builder = crate::diagnostic::Report::error(
+                crate::diagnostic::code::RESOLVE_UNSUPPORTED_SYNTAX,
+                message.as_str(),
+            );
+            match help {
+                Some(help) => builder.help(help),
+                None => builder,
+            }
+        };
+        let Ok(source) = crate::diagnostic::Source::new(file.path.display().to_string(), file.text)
+        else {
+            return start();
+        };
+        start()
+            .primary(source.clone(), at, label.clone().map(Into::into))
+            .unwrap_or_else(|_| start().source(source))
+    }
+}
+
+/// The marked functions native code can see and can't call through rawr
+/// yet, as one report: the first, then each other after it, as rustc
+/// gives the errors of one check.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+pub(crate) fn refusal(
+    refused: Vec<crate::diagnostic::Builder>,
+) -> Option<crate::diagnostic::Report> {
+    let mut refused = refused.into_iter();
+    let first = refused.next()?;
+    Some(
+        refused
+            .fold(first, |first, next| first.follower(next.finish()))
+            .finish(),
+    )
 }
 
 impl Stub {
@@ -1930,7 +1985,7 @@ impl<'a> Generator<'a> {
         file: &Source<'_>,
         group: &[&Source<'_>],
         shape: &mut BTreeMap<String, Entry>,
-        refused: &mut Vec<String>,
+        refused: &mut Vec<crate::diagnostic::Builder>,
         objects: &mut Vec<(String, String)>,
     ) -> String {
         let mut items = String::new();
@@ -2062,7 +2117,7 @@ impl<'a> Generator<'a> {
                         // left out: a native module below that names it gets
                         // rustc's error for the missing item.
                         Err(_) if declared.header.visibility.is_none() => {}
-                        Err(reason) => refused.push(reason),
+                        Err(refusal) => refused.push(refusal.report(file)),
                     }
                 }
                 item::Parsed::Trait(declared)
@@ -2242,7 +2297,7 @@ impl<'a> Generator<'a> {
         declared: &item::Impl,
         items: &mut String,
         shape: &mut BTreeMap<String, Entry>,
-        refused: &mut Vec<String>,
+        refused: &mut Vec<crate::diagnostic::Builder>,
     ) {
         let type_ref::Type::Path(written) = &declared.owner else {
             return;
@@ -2347,7 +2402,7 @@ impl<'a> Generator<'a> {
                 }
                 // As a private free function's ([`Generator::body`]).
                 Err(_) if trait_.is_none() && function.header.visibility.is_none() => {}
-                Err(reason) => refused.push(reason),
+                Err(refusal) => refused.push(refusal.report(file)),
             }
             beside.extend(self.entries.borrow_mut().drain(..));
         }
@@ -2556,7 +2611,7 @@ impl<'a> Generator<'a> {
                         let _ = writeln!(text, "    {line}");
                     }
                 }
-                Err(reason) => place.refused.push(reason),
+                Err(refusal) => place.refused.push(refusal.report(file)),
             }
         }
         text.push_str("}\n");
@@ -2593,7 +2648,7 @@ impl<'a> Generator<'a> {
         owner: Owner<'_>,
         object: bool,
         path: &str,
-    ) -> Result<Stub, String> {
+    ) -> Result<Stub, Refusal> {
         // The function's and its impl's type parameters are in scope
         // while it is written ([`Generator::parameters`]).
         let parameters = outer
@@ -2617,24 +2672,33 @@ impl<'a> Generator<'a> {
         owner: Owner<'_>,
         object: bool,
         path: &str,
-    ) -> Result<Stub, String> {
+    ) -> Result<Stub, Refusal> {
         if let Some(type_ref::Type::Path(output)) = &function.output {
             let first = output
                 .segments
                 .first()
                 .map_or("", |segment| segment.name.text.as_str());
             if first.starts_with("impl") || type_ref::is_fn_type(first) {
-                return Err(format!(
-                    "`{path}` returns `{}`, and native code can't call it through rawr yet. \
-                     Return a named type, or make it private to the marked module.",
-                    slice(file.text, output.span)
-                ));
+                return Err(Refusal {
+                    message: format!(
+                        "`{path}` returns `{}`, and native code can't call it through rawr yet",
+                        slice(file.text, output.span)
+                    ),
+                    at: output.span,
+                    label: None,
+                    help: Some("return a named type, or make it private to the marked module"),
+                });
             }
         }
         if function.asynchronous {
-            return Err(format!(
-                "`{path}` is an `async fn`, and native code can't call it through rawr yet."
-            ));
+            return Err(Refusal {
+                message: format!(
+                    "`{path}` is an `async fn`, and native code can't call it through rawr yet"
+                ),
+                at: function.name.span,
+                label: None,
+                help: None,
+            });
         }
         // The signature as written, each parameter renamed so a pattern
         // parameter binds one name.
@@ -2789,19 +2853,17 @@ impl<'a> Generator<'a> {
                 .iter()
                 .find(|reason| reason.starts_with("its result"))
         {
-            let at = function
-                .output
-                .as_ref()
-                .map_or(function.span, type_ref::Type::span)
-                .start();
-            return Err(format!(
-                "error: native code can't borrow the result of `{path}` through rawr yet: {}\n  \
-                 --> {}:{}:{}",
-                reason.trim_start_matches("its result: "),
-                file.path.display(),
-                at.line().unwrap_or(1),
-                at.position().unwrap_or(1)
-            ));
+            return Err(Refusal {
+                message: format!(
+                    "native code can't borrow the result of `{path}` through rawr yet"
+                ),
+                at: function
+                    .output
+                    .as_ref()
+                    .map_or(function.name.span, type_ref::Type::span),
+                label: Some(reason.trim_start_matches("its result: ").to_owned()),
+                help: None,
+            });
         }
         // A marked trait's impl gives its value by the impl's own type,
         // which no instance is keyed by and which only an instance entry,
@@ -4253,7 +4315,7 @@ struct Place<'p> {
     declared: &'p mut BTreeSet<String>,
     items: &'p mut String,
     shape: &'p mut BTreeMap<String, Entry>,
-    refused: &'p mut Vec<String>,
+    refused: &'p mut Vec<crate::diagnostic::Builder>,
     objects: &'p mut Vec<(String, String)>,
 }
 
@@ -9497,12 +9559,16 @@ mod tests {
              impl page::Page for Badge {\n    \
              fn rows(&self) -> &[page::Row] { &self.rows }\n}\n",
         );
+        // The refusal is rustc's error at the result's type (#1930).
+        let refusal = refusal(shadow.refused).expect("one refusal");
         assert_eq!(
-            shadow.refused,
-            [
-                "error: native code can't borrow the result of `physics::Badge::Page::rows` \
-              through rawr yet: a `Row` can't cross yet\n  --> /crate/src/physics.rs:7:23"
-            ]
+            crate::diagnostic::render(&refusal),
+            "error: native code can't borrow the result of `physics::Badge::Page::rows` through \
+             rawr yet\n \
+             --> /crate/src/physics.rs:7:23\n  \
+             |\n\
+             7 |     fn rows(&self) -> &[page::Row] { &self.rows }\n  \
+             |                       ^^^^^^^^^^^^ a `Row` can't cross yet\n"
         );
     }
 
@@ -9521,10 +9587,20 @@ mod tests {
         );
         assert!(text.contains("__call.argument(&__a0);"), "{text}");
         assert_eq!(shadow.refused.len(), 1);
+        let refusal = refusal(shadow.refused).expect("one refusal");
+        let rendered = crate::diagnostic::render(&refusal);
         assert!(
-            shadow.refused[0].starts_with("`physics::points` returns `impl Iterator<Item = i64>`"),
-            "{:?}",
-            shadow.refused
+            rendered.starts_with(
+                "error: `physics::points` returns `impl Iterator<Item = i64>`, and native code \
+                 can't call it through rawr yet\n"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with(
+                "  = help: return a named type, or make it private to the marked module\n"
+            ),
+            "{rendered}"
         );
     }
 
