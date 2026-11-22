@@ -5152,6 +5152,26 @@ main();
         denied.ends_with("false false false\nfalse false false\n"),
         "{denied}"
     );
+    // `Path::new(&S)` of a borrowed `String`, and a `&Path` given back
+    // owned.
+    let output = printed(
+        r#"
+use std::path::{Path, PathBuf};
+fn name(p: &Path) -> String {
+    p.file_name().unwrap().to_string_lossy().to_string()
+}
+fn main() {
+    let s = String::from("/a/b.rs");
+    let p = Path::new(&s);
+    let owned: PathBuf = p.to_path_buf();
+    let again = PathBuf::from(p);
+    let t = &s;
+    println!("{} {} {:?} {} {}", name(p), name(&owned), again, p == owned.as_path(), Path::new(t).display());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "b.rs b.rs \"/a/b.rs\" true /a/b.rs\n");
 }
 
 #[test]
