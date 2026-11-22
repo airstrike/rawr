@@ -13,6 +13,7 @@ use crate::resolve::borrowck::{
     signature::{self, Input, Source, Summary, Tap},
     Access, Origin, Path, Place, Projection, Step,
 };
+use std::cell::RefCell;
 
 /// Where a part is in the value it is read from (T127).
 #[derive(Clone)]
@@ -689,17 +690,19 @@ impl Parser<'_> {
                 borrow: Span::NONE,
             });
         }
-        let own = signature::own(signature, &declared);
+        let visiting = RefCell::new(Vec::new());
+        let variance = |target: &type_ref::Target| self.invariant_positions(target, &visiting);
+        let own = signature::own(signature, &declared, &variance);
         // A parameter a pattern destructures is not one local.
         let named = parameters
             .iter()
             .zip(own.parameters)
             .filter(|(parameter, _)| parameter.pattern.is_none())
-            .map(|(parameter, borrows)| {
+            .map(|(parameter, regions)| {
                 (
                     parameter.name.text.clone(),
                     parameter.name.span,
-                    borrows,
+                    regions,
                     false,
                 )
             });
@@ -708,9 +711,58 @@ impl Parser<'_> {
             .into_iter()
             .chain(named)
             .collect();
-        self.flow()
-            .own_signature(&parameters, own.output, &signature.lifetimes.bounds);
+        self.flow().own_signature(parameters, own.output);
         Ok(())
+    }
+
+    /// The positions of the crate type `target` below which its fields make
+    /// it invariant ([`signature::Variance`]). A type `visiting` holds is
+    /// one whose fields name it again, read as covariant there: the rest of
+    /// its fields say where it is invariant.
+    fn invariant_positions(
+        &self,
+        target: &type_ref::Target,
+        visiting: &RefCell<Vec<type_def::Id>>,
+    ) -> Vec<Path> {
+        let type_ref::Target::Script { definition, .. } = target else {
+            return Vec::new();
+        };
+        if visiting.borrow().contains(definition) {
+            return Vec::new();
+        }
+        visiting.borrow_mut().push(*definition);
+        let (regions, generics, fields): (_, _, Vec<&type_ref::Type>) =
+            match self.models.definition(*definition) {
+                Nominal::Struct { item, .. } => (
+                    &item.regions,
+                    &item.generics,
+                    item.fields.iter().map(|field| &field.ty).collect(),
+                ),
+                Nominal::Enum { item, .. } => (
+                    &item.regions,
+                    &item.generics,
+                    item.variants
+                        .iter()
+                        .flat_map(|variant| &variant.payload)
+                        .collect(),
+                ),
+            };
+        let parameters: Vec<ImmutableString> = generics
+            .iter()
+            .map(|generic| generic.name.text.clone())
+            .collect();
+        let declared = |target: &type_ref::Target| self.declared_lifetimes(target);
+        let variance = |target: &type_ref::Target| self.invariant_positions(target, visiting);
+        let mut invariant: Vec<Path> = Vec::new();
+        for ty in fields {
+            for path in signature::invariant_in(ty, regions, &parameters, &declared, &variance) {
+                if !invariant.contains(&path) {
+                    invariant.push(path);
+                }
+            }
+        }
+        visiting.borrow_mut().pop();
+        invariant
     }
 
     /// What a call of the crate function `function` keeps of its inputs.

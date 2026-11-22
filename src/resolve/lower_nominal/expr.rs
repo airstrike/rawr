@@ -907,9 +907,16 @@ impl<'a> Parser<'a> {
                     });
                 };
                 let (ty, declaration) = (binding.ty.clone(), binding.declaration);
-                // An owned `self` is a local of the method's body, as rustc
-                // holds it: a move out of it or of a part of it is followed.
-                if self.closures.is_empty() && self.owned_receiver() {
+                // `self` is a local of the method's body, as rustc holds it:
+                // a move out of an owned one or of a part of it is followed,
+                // and what a `&self` holds flows where it is read (#170). A
+                // `&mut self` is not yet: a move of it into a generic
+                // parameter is not followed.
+                let mutable = matches!(
+                    self.inference.resolve(&ty),
+                    Ty::Reference { mutable: true, .. }
+                );
+                if self.closures.is_empty() && !mutable {
                     self.mention("self", declaration, &ty, token_span);
                 }
                 // A closure reads `self` through the local its outermost

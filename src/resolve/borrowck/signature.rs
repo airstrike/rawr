@@ -126,8 +126,33 @@ struct Reader<'a> {
     /// How many lifetime parameters a crate type declares, or `None` for one
     /// whose regions these facts can't place.
     declared: &'a dyn Fn(&Target) -> Option<usize>,
+    /// Where a crate type is invariant.
+    variance: Variance<'a>,
     /// Where each elided lifetime is, by its number less one.
     elided: Vec<Span>,
+    /// The positions read so far below which the type is invariant: what a
+    /// `&mut` refers to, a cell's value, a crate type's invariant
+    /// parameters.
+    invariant: Vec<Path>,
+}
+
+/// The positions of a crate type, each a [`Step::Lifetime`] or
+/// [`Step::Arg`] of it, at which its fields make it invariant: a lifetime
+/// or type parameter used in what a `&mut` refers to or in a cell's value.
+pub(crate) type Variance<'a> = &'a dyn Fn(&Target) -> Vec<Path>;
+
+/// A crate type's variance where the signature's reading doesn't need it.
+fn covariant(_: &Target) -> Vec<Path> {
+    Vec::new()
+}
+
+/// Whether the builtin `name` is invariant in its type arguments, as std's
+/// cells are.
+fn invariant_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "Cell" | "RefCell" | "UnsafeCell" | "OnceCell" | "Mutex" | "RwLock" | "OnceLock"
+    )
 }
 
 impl Reader<'_> {
@@ -158,13 +183,16 @@ impl Reader<'_> {
                 }
             }
             Type::Reference {
+                mutable,
                 lifetime,
                 target,
                 span,
-                ..
             } => {
                 let region = self.lifetime(*lifetime, *span);
                 out.push((own, region));
+                if *mutable {
+                    self.invariant.push(at.push(Step::Arg(0)));
+                }
                 self.positions(target, at.push(Step::Arg(0)), output, out);
             }
             // `&str`, which a resolved type reads as `String` with the
@@ -245,11 +273,20 @@ impl Reader<'_> {
                     Target::Builtin | Target::Script { .. } => {}
                 }
                 let script = matches!(path.target, Target::Script { .. });
+                if script {
+                    let invariant = (self.variance)(&path.target);
+                    self.invariant
+                        .extend(invariant.into_iter().map(|below| at.join(below)));
+                }
+                let cell = path.target == Target::Builtin && invariant_builtin(&path.name);
                 let mut written = 0;
                 let mut types = 0;
                 for argument in &path.arguments {
                     match argument {
                         Argument::Type(ty) => {
+                            if cell {
+                                self.invariant.push(at.push(Step::Arg(types)));
+                            }
                             self.positions(ty, at.push(Step::Arg(types)), output, out);
                             types += 1;
                         }
@@ -374,8 +411,6 @@ struct Read {
     owner: Positions,
     /// The receiver's and each parameter's.
     inputs: Vec<(Input, Positions)>,
-    /// Each input's own reference's region, for one that is a reference.
-    outer: Vec<Option<Region>>,
     /// The output's, elided ones not yet given an input's.
     output: Positions,
     /// What elision gives the output's elided lifetimes: `&self`'s, or the
@@ -386,13 +421,21 @@ struct Read {
     unknown: bool,
     /// Where each elided lifetime is, by its number less one.
     elided: Vec<Span>,
+    /// The output's positions below which it is invariant.
+    invariant: Vec<Path>,
 }
 
-fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) -> Read {
+fn read(
+    signature: &Signature<'_>,
+    declared: &dyn Fn(&Target) -> Option<usize>,
+    variance: Variance<'_>,
+) -> Read {
     let mut reader = Reader {
         lifetimes: signature.lifetimes,
         declared,
+        variance,
         elided: Vec::new(),
+        invariant: Vec::new(),
     };
     let mut owner = Positions::new();
     match &signature.lifetimes.owner {
@@ -401,7 +444,6 @@ fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) 
         None => {}
     }
     let mut inputs: Vec<(Input, Positions)> = Vec::new();
-    let mut outer = Vec::new();
     // The receiver's own region, which elided output lifetimes take.
     let mut receiver_region = None;
     if let Some(mode) = signature.receiver {
@@ -423,24 +465,17 @@ fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) 
                 }
             };
         inputs.push((Input::Receiver, positions));
-        outer.push(receiver_region.clone());
     }
     let written = signature.lifetimes.written_parameters.as_deref();
     for (index, ty) in signature.parameters.iter().enumerate() {
         let ty = written.and_then(|written| written.get(index)).unwrap_or(ty);
         let mut positions = Positions::new();
         reader.positions(ty, Path::ROOT, false, &mut positions);
-        let reference = matches!(ty, Type::Reference { .. }) || ty.is_str();
-        outer.push(
-            positions
-                .iter()
-                .find(|(path, _)| reference && *path == Path::OWN)
-                .map(|(_, region)| region.clone()),
-        );
         inputs.push((Input::Argument(index), positions));
     }
     let mut output = Positions::new();
     let written = signature.lifetimes.written_output.as_deref();
+    reader.invariant.clear();
     reader.positions(
         written.unwrap_or(signature.output),
         Path::ROOT,
@@ -469,11 +504,11 @@ fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) 
     Read {
         owner,
         inputs,
-        outer,
         output,
         elided_to,
         unknown,
         elided: reader.elided,
+        invariant: reader.invariant,
     }
 }
 
@@ -484,7 +519,7 @@ pub(crate) fn missing_lifetime(
     signature: &Signature<'_>,
     declared: &dyn Fn(&Target) -> Option<usize>,
 ) -> Option<Span> {
-    let read = read(signature, declared);
+    let read = read(signature, declared, &covariant);
     if read.elided_to.is_some() || read.unknown {
         return None;
     }
@@ -504,134 +539,263 @@ pub(crate) enum Lifetime {
     Static,
 }
 
-/// The lifetimes of the borrows an input or the output of a function's own
-/// signature holds.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Borrows {
-    /// It holds no borrow.
-    None,
-    /// All its borrows have this one lifetime.
-    One(Lifetime),
-    /// A reference of this lifetime to what holds borrows of others, which
-    /// outlive it: each borrow it holds outlives this one.
-    AtLeast(Lifetime),
-    /// Several lifetimes, or ones the signature does not say, which these
-    /// facts do not tell apart.
-    Several,
-}
+impl Lifetime {
+    /// The lifetime `region` is, or `None` for one the signature does not
+    /// say.
+    fn of(region: &Region) -> Option<Self> {
+        match region {
+            Region::Named(name) => Some(Lifetime::Named(name.clone())),
+            Region::Elided(number) => Some(Lifetime::Elided(*number)),
+            Region::Static => Some(Lifetime::Static),
+            Region::Parameter(_) | Region::Captures | Region::Unknown => None,
+        }
+    }
 
-impl Borrows {
-    /// Whether each borrow it holds outlives every one `output` holds, by
-    /// the signature's `bounds`: `None` when these facts can't tell.
-    pub(crate) fn outlive(
-        &self,
-        output: &Borrows,
-        bounds: &[(ImmutableString, ImmutableString)],
-    ) -> Option<bool> {
-        match (self, output) {
-            (Borrows::None, _) | (_, Borrows::None) => Some(true),
-            (Borrows::One(lifetime), Borrows::One(output)) => {
-                Some(outlives_lifetime(bounds, lifetime, output))
-            }
-            (Borrows::AtLeast(lifetime), Borrows::One(output))
-                if outlives_lifetime(bounds, lifetime, output) =>
-            {
-                Some(true)
-            }
-            _ => None,
+    /// The lifetime a bound names.
+    fn named(name: &ImmutableString) -> Self {
+        if name == "static" {
+            Lifetime::Static
+        } else {
+            Lifetime::Named(name.clone())
         }
     }
 }
 
-/// A function's own signature, as its body is checked against it: the
-/// lifetimes of the borrows its receiver, each parameter and its output
-/// hold, the output's elided ones given by elision.
-pub(crate) struct Own {
-    pub(crate) receiver: Borrows,
-    pub(crate) parameters: Vec<Borrows>,
-    pub(crate) output: Borrows,
+/// The lifetime at each region position of an input or the output of a
+/// function's own signature, or `None` at one the signature does not say:
+/// a trait object's or an `impl Trait`'s. A type parameter's positions
+/// are left out: what it holds is the caller's on both sides.
+pub(crate) type Regions = Vec<(Path, Option<Lifetime>)>;
+
+/// What outlives what in a function's own signature: the bounds it writes,
+/// and the ones its types imply, as `&'a &'b T` has `'b: 'a`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Bounds(Vec<(Lifetime, Lifetime)>);
+
+impl Bounds {
+    /// The bounds `written`, and those the types of `regions` imply: each
+    /// region below a value's own region outlives it.
+    fn of<'a>(
+        written: &[(ImmutableString, ImmutableString)],
+        regions: impl IntoIterator<Item = &'a Regions>,
+    ) -> Self {
+        let mut bounds: Vec<(Lifetime, Lifetime)> = written
+            .iter()
+            .map(|(longer, shorter)| (Lifetime::named(longer), Lifetime::named(shorter)))
+            .collect();
+        for regions in regions {
+            for (own, shorter) in regions {
+                let (true, Some(shorter)) = (own.is_own(), shorter) else {
+                    continue;
+                };
+                let value = own.parent();
+                for (below, longer) in regions {
+                    if let Some(longer) = longer
+                        && below != own
+                        && below.starts_with(value)
+                    {
+                        bounds.push((longer.clone(), shorter.clone()));
+                    }
+                }
+            }
+        }
+        Self(bounds)
+    }
+
+    /// Whether `longer: shorter`.
+    pub(crate) fn outlives(&self, longer: &Lifetime, shorter: &Lifetime) -> bool {
+        let mut seen = vec![longer];
+        let mut index = 0;
+        while let Some(&at) = seen.get(index) {
+            if at == shorter || *at == Lifetime::Static {
+                return true;
+            }
+            for (from, to) in &self.0 {
+                if from == at && !seen.contains(&to) {
+                    seen.push(to);
+                }
+            }
+            index += 1;
+        }
+        false
+    }
 }
 
-/// `signature` as its function's body is checked against it.
-pub(crate) fn own(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) -> Own {
-    let read = read(signature, declared);
-    let output: Vec<Region> = read
+/// A function's own signature, as its body is checked against it (T170):
+/// the regions of its receiver, each parameter and its output.
+pub(crate) struct Own {
+    pub(crate) receiver: Regions,
+    pub(crate) parameters: Vec<Regions>,
+    pub(crate) output: Output,
+}
+
+/// A function's output, as what its body returns is checked against it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Output {
+    /// Its regions, the elided ones given by elision.
+    regions: Regions,
+    /// Its positions below which it is invariant: what is returned there
+    /// has its lifetimes exactly.
+    invariant: Vec<Path>,
+    bounds: Bounds,
+}
+
+/// `signature` as its function's body is checked against it. `variance`
+/// says where a crate type is invariant.
+pub(crate) fn own(
+    signature: &Signature<'_>,
+    declared: &dyn Fn(&Target) -> Option<usize>,
+    variance: Variance<'_>,
+) -> Own {
+    let read = read(signature, declared, variance);
+    // A type parameter is the same type wherever the signature names it:
+    // what it holds is the caller's on both sides.
+    let generic = |(_, region): &&(Path, Region)| !matches!(region, Region::Parameter(_));
+    let output: Regions = read
         .output
         .iter()
-        .map(|(_, region)| match region {
-            Region::Elided(_) => read.elided_to.clone().unwrap_or(Region::Unknown),
-            region => region.clone(),
+        .filter(generic)
+        .map(|(path, region)| {
+            let lifetime = match region {
+                Region::Elided(_) => read.elided_to.as_ref().and_then(Lifetime::of),
+                region => Lifetime::of(region),
+            };
+            (*path, lifetime)
         })
         .collect();
-    // A type parameter the output has is the same on both sides: its
-    // regions are the caller's, whatever they are.
-    let generic: Vec<&Region> = output
-        .iter()
-        .filter(|region| matches!(region, Region::Parameter(_)))
-        .collect();
-    let borrows_of = |positions: &Positions, outer: &Option<Region>| {
+    let mut receiver = Regions::new();
+    let mut parameters = Vec::new();
+    for (input, positions) in &read.inputs {
         let regions = positions
             .iter()
-            .map(|(_, region)| region)
-            .filter(|region| !generic.contains(region));
-        match (one(regions), outer) {
-            (Borrows::Several, Some(outer)) => match one(std::iter::once(outer)) {
-                Borrows::One(outer) => Borrows::AtLeast(outer),
-                _ => Borrows::Several,
-            },
-            (borrows, _) => borrows,
-        }
-    };
-    let mut receiver = Borrows::None;
-    let mut parameters = Vec::new();
-    for ((input, positions), outer) in read.inputs.iter().zip(&read.outer) {
-        let borrows = borrows_of(positions, outer);
+            .filter(generic)
+            .map(|(path, region)| (*path, Lifetime::of(region)))
+            .collect();
         match input {
-            Input::Receiver => receiver = borrows,
-            Input::Argument(_) => parameters.push(borrows),
+            Input::Receiver => receiver = regions,
+            Input::Argument(_) => parameters.push(regions),
         }
     }
+    let bounds = Bounds::of(
+        &signature.lifetimes.bounds,
+        std::iter::once(&receiver)
+            .chain(&parameters)
+            .chain(std::iter::once(&output)),
+    );
     Own {
         receiver,
         parameters,
-        output: one(output
-            .iter()
-            .filter(|region| !matches!(region, Region::Parameter(_)))),
+        output: Output {
+            regions: output,
+            invariant: read.invariant,
+            bounds,
+        },
     }
 }
 
-/// The one lifetime `regions` all are.
-fn one<'a>(regions: impl Iterator<Item = &'a Region>) -> Borrows {
-    let mut found = None;
-    for region in regions {
-        let lifetime = match region {
-            Region::Named(name) => Lifetime::Named(name.clone()),
-            Region::Elided(number) => Lifetime::Elided(*number),
-            Region::Static => Lifetime::Static,
-            Region::Parameter(_) | Region::Captures | Region::Unknown => return Borrows::Several,
+/// How an input's lifetime that the body returns at a position of the
+/// output relates to the output's lifetimes there ([`Output::relate`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Relation<'a> {
+    /// As the output's type requires.
+    Holds,
+    /// Not to this lifetime of the output's.
+    Broken(&'a Lifetime),
+    /// These facts can't tell: a lifetime the signature does not say, or
+    /// several the value reaches without telling their positions apart.
+    Unsaid,
+}
+
+impl Output {
+    /// How `lifetime`, which an input holds and the body returns at the
+    /// output's position `at`, relates to the output's lifetimes there. It
+    /// must outlive each lifetime at or below `at`, and be the one at an
+    /// invariant position.
+    pub(crate) fn relate(&self, lifetime: &Lifetime, at: Path) -> Relation<'_> {
+        let at = self.within(at);
+        let mut below: Vec<(Path, &Lifetime)> = Vec::new();
+        for (path, output) in &self.regions {
+            match output {
+                _ if !path.starts_with(at) => {}
+                Some(output) => below.push((*path, output)),
+                None => return Relation::Unsaid,
+            }
+        }
+        let exact = matches!(below[..], [(path, _)] if path == at);
+        if !exact && below.iter().any(|(_, output)| *output != below[0].1) {
+            return Relation::Unsaid;
+        }
+        let invariant = |path: Path| self.invariant.iter().any(|root| path.starts_with(*root));
+        below
+            .into_iter()
+            .find(|&(path, output)| {
+                !self.bounds.outlives(lifetime, output)
+                    || exact && invariant(path) && !self.bounds.outlives(output, lifetime)
+            })
+            .map_or(Relation::Holds, |(_, output)| Relation::Broken(output))
+    }
+
+    /// `at`, or the own region above it that holds it where the output's
+    /// type has no region at or below `at`: what a reborrow keeps below the
+    /// reference it makes is within that reference's region.
+    fn within(&self, at: Path) -> Path {
+        let mut above = at;
+        while !self.regions.iter().any(|(path, _)| path.starts_with(above)) {
+            if above.is_root() {
+                return at;
+            }
+            above = above.parent();
+            if above.is_own() && self.regions.iter().any(|(path, _)| *path == above) {
+                return above;
+            }
+        }
+        at
+    }
+}
+
+/// The positions of the crate type whose field or payload is of type `ty`,
+/// below which it is invariant ([`Variance`]). Its lifetime parameters are
+/// `regions`' and its type parameters `parameters`.
+pub(crate) fn invariant_in(
+    ty: &Type,
+    regions: &crate::resolve::item::TypeRegions,
+    parameters: &[ImmutableString],
+    declared: &dyn Fn(&Target) -> Option<usize>,
+    variance: Variance<'_>,
+) -> Vec<Path> {
+    let mut reader = Reader {
+        lifetimes: &regions.written,
+        declared,
+        variance,
+        elided: Vec::new(),
+        invariant: Vec::new(),
+    };
+    let mut positions = Positions::new();
+    reader.positions(ty, Path::ROOT, true, &mut positions);
+    let mut invariant = Vec::new();
+    for (path, region) in positions {
+        if !reader.invariant.iter().any(|root| path.starts_with(*root)) {
+            continue;
+        }
+        let step = match &region {
+            Region::Named(name) => regions
+                .params
+                .iter()
+                .position(|param| param == name)
+                .map(|index| Step::Lifetime(index as u8)),
+            Region::Parameter(name) => parameters
+                .iter()
+                .position(|param| param == name)
+                .map(|index| Step::Arg(index as u8)),
+            _ => None,
         };
-        match &found {
-            None => found = Some(lifetime),
-            Some(one) if *one == lifetime => {}
-            Some(_) => return Borrows::Several,
+        if let Some(step) = step
+            && !invariant.contains(&Path::of(&[step]))
+        {
+            invariant.push(Path::of(&[step]));
         }
     }
-    found.map_or(Borrows::None, Borrows::One)
-}
-
-/// Whether `longer: shorter` by the signature's outlives `bounds`.
-pub(crate) fn outlives_lifetime(
-    bounds: &[(ImmutableString, ImmutableString)],
-    longer: &Lifetime,
-    shorter: &Lifetime,
-) -> bool {
-    match (longer, shorter) {
-        (Lifetime::Static, _) => true,
-        (longer, shorter) if longer == shorter => true,
-        (Lifetime::Named(longer), Lifetime::Named(shorter)) => outlives(bounds, longer, shorter),
-        (Lifetime::Named(longer), Lifetime::Static) => outlives(bounds, longer, "static"),
-        _ => false,
-    }
+    invariant
 }
 
 /// What a call of `signature` keeps of each of its inputs. `declared` says
@@ -646,7 +810,7 @@ pub(crate) fn summary(
         output,
         elided_to,
         ..
-    } = read(signature, declared);
+    } = read(signature, declared, &covariant);
     let bounds = &signature.lifetimes.bounds;
     let mut taps = Vec::new();
     let known = output.into_iter().all(|(into, region)| {
@@ -740,7 +904,9 @@ pub(crate) fn field_positions(
     let mut reader = Reader {
         lifetimes: &regions.written,
         declared,
+        variance: &covariant,
         elided: Vec::new(),
+        invariant: Vec::new(),
     };
     let mut positions = Positions::new();
     reader.positions(ty, Path::ROOT, true, &mut positions);

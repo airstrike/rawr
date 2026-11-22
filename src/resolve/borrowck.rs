@@ -20,6 +20,7 @@ pub(crate) mod moves;
 pub(crate) mod nll;
 pub(crate) mod record;
 pub(crate) mod region;
+mod returned;
 pub(crate) mod signature;
 
 pub(crate) use region::{Path, Step};
@@ -241,13 +242,10 @@ pub(crate) struct Body {
 /// A function's own signature, as its body is checked against it.
 #[derive(Clone, Debug)]
 pub(crate) struct OwnSignature {
-    /// Each parameter, `self` first, with the lifetimes of its borrows and
+    /// Each parameter, `self` first, with the regions of its type and
     /// whether it is `self`.
-    pub(crate) parameters: Vec<(Local, signature::Borrows, bool)>,
-    /// The lifetimes of the output's borrows.
-    pub(crate) output: signature::Borrows,
-    /// `('b, 'a)` for `'b: 'a`.
-    pub(crate) bounds: Box<[(ImmutableString, ImmutableString)]>,
+    pub(crate) parameters: Vec<(Local, signature::Regions, bool)>,
+    pub(crate) output: signature::Output,
 }
 
 impl Body {
@@ -345,7 +343,7 @@ pub(crate) struct Conflict {
 /// runs, as rustc reports the first of a place's conflicts at one access.
 pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
     let reach = region::reach(body);
-    if let Some(returned) = returned_local(body, &reach).or_else(|| returned_parameter(body)) {
+    if let Some(returned) = returned_local(body, &reach).or_else(|| returned::parameter(body)) {
         return Some(returned);
     }
     if body.loans.is_empty() {
@@ -472,51 +470,6 @@ fn returned_local(body: &Body, reach: &[Vec<bool>]) -> Option<Conflict> {
             access: value,
             borrow: loan.span,
         });
-    }
-    None
-}
-
-/// A parameter's borrow that the function returns, whose lifetime does not
-/// outlive the one its signature gives the output: rustc's E0621 for a
-/// parameter whose lifetime is elided where the output's is named, and its
-/// "lifetime may not live long enough" otherwise.
-fn returned_parameter(body: &Body) -> Option<Conflict> {
-    use signature::{Borrows, Lifetime};
-    let own = body.own.as_ref()?;
-    let Borrows::One(output) = &own.output else {
-        return None;
-    };
-    for &returned in &body.returned {
-        for (local, borrows, receiver) in &own.parameters {
-            let Borrows::One(lifetime) = borrows else {
-                continue;
-            };
-            if !region::reach_from(body, &[(*local, Path::ROOT)])[returned.0 as usize]
-                || borrows.outlive(&own.output, &own.bounds) != Some(false)
-            {
-                continue;
-            }
-            let info = &body.locals[local.0 as usize];
-            let value = body.locals[returned.0 as usize].declaration;
-            let explicit = !receiver
-                && matches!(lifetime, Lifetime::Elided(_))
-                && matches!(output, Lifetime::Named(_));
-            return Some(if explicit {
-                Conflict {
-                    code: "E0621",
-                    message: format!("explicit lifetime required in the type of `{}`", info.name),
-                    access: value,
-                    borrow: info.declaration,
-                }
-            } else {
-                Conflict {
-                    code: LIFETIME,
-                    message: "lifetime may not live long enough".to_string(),
-                    access: value,
-                    borrow: info.declaration,
-                }
-            });
-        }
     }
     None
 }
