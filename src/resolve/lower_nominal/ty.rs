@@ -595,6 +595,12 @@ impl Traits {
         peekable: false,
     };
 
+    /// std's `Peekable`, which has `peek` and keeps both ends.
+    pub(super) const PEEKABLE: Self = Self {
+        double_ended: true,
+        peekable: true,
+    };
+
     /// An iterator walked only from its front, as `0..` is.
     pub(super) const FORWARD: Self = Self {
         double_ended: false,
@@ -1221,7 +1227,14 @@ impl Ty {
             );
         }
         if let Some((item, _)) = ty.iterator_item() {
-            return Self::iter(Self::from_resolved(item));
+            let peekable = matches!(ty, type_ref::Type::Path(path)
+                if path.name.as_str() == crate::item::type_ref::PEEKABLE_TYPE);
+            let traits = if peekable {
+                Traits::PEEKABLE
+            } else {
+                Traits::ANY
+            };
+            return Self::Iter(Box::new(Self::from_resolved(item)), None, traits);
         }
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));

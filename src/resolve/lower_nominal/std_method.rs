@@ -1002,7 +1002,9 @@ fn iterator_shaped(path: &TypePath) -> bool {
     match path.target {
         Target::Builtin => matches!(
             path.name.as_str(),
-            crate::item::type_ref::ITER_TYPE | crate::item::type_ref::INTO_ITER_TYPE
+            crate::item::type_ref::ITER_TYPE
+                | crate::item::type_ref::INTO_ITER_TYPE
+                | crate::item::type_ref::PEEKABLE_TYPE
         ),
         Target::Parameter => path.name.as_str() == ITERATOR_SELF,
         _ => false,

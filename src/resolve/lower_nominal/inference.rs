@@ -451,11 +451,24 @@ impl Inference {
     ) -> Ty {
         match &base {
             Ty::Script(id, arguments) => {
-                if let Some((ty, parameters, _)) = self
+                // `Self::Item` names no trait: the one trait of the type's
+                // that has the type, as rustc finds it.
+                let mut named = self
                     .associated
                     .impls
-                    .get(&(*id, trait_name.clone(), name.clone()))
-                    .and_then(|impls| self.instance_impl(impls, arguments))
+                    .iter()
+                    .filter(|((owner, bound, item), _)| {
+                        owner == id
+                            && item == name
+                            && (trait_name.is_empty() || bound == trait_name)
+                    })
+                    .map(|(_, impls)| impls);
+                let impls = match (named.next(), named.next()) {
+                    (Some(impls), None) => Some(impls),
+                    _ => None,
+                };
+                if let Some((ty, parameters, _)) =
+                    impls.and_then(|impls| self.instance_impl(impls, arguments))
                 {
                     let substitution = parameters
                         .iter()

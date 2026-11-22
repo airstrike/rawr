@@ -58,6 +58,56 @@ const TYPES: &[(&str, &str)] = &[
     ("core::fmt::Result", "Result"),
 ];
 
+/// What a std iterator struct's `Item` is, of its type arguments.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Item {
+    /// The argument at this index: `T` of `vec::IntoIter<T>`.
+    Argument(usize),
+    /// A shared reference to the argument at this index: `&'a T` of
+    /// `slice::Iter<'a, T>`.
+    Borrowed(usize),
+    /// `char`, of `str::Chars<'a>`.
+    Char,
+    /// The `Item` of the iterator at this index: `I::Item` of
+    /// `Peekable<I>`.
+    Inner(usize),
+}
+
+/// std's iterator structs rawr holds as its iterator value, by definition,
+/// each with its `Item` (D711's binding for them, #760). An adapter whose
+/// item a closure gives (`Map<I, F>`) isn't here.
+const ITERATORS: &[(&str, Item)] = &[
+    ("alloc::vec::into_iter::IntoIter", Item::Argument(0)),
+    (
+        "alloc::collections::vec_deque::into_iter::IntoIter",
+        Item::Argument(0),
+    ),
+    ("core::slice::iter::Iter", Item::Borrowed(0)),
+    ("core::str::iter::Chars", Item::Char),
+    (PEEKABLE, Item::Inner(0)),
+    ("core::iter::adapters::rev::Rev", Item::Inner(0)),
+    ("core::iter::adapters::skip::Skip", Item::Inner(0)),
+    ("core::iter::adapters::take::Take", Item::Inner(0)),
+    ("core::iter::adapters::step_by::StepBy", Item::Inner(0)),
+    ("core::iter::adapters::fuse::Fuse", Item::Inner(0)),
+    ("core::iter::adapters::cycle::Cycle", Item::Inner(0)),
+];
+
+/// std's `Peekable`, whose value has `peek`.
+pub(crate) const PEEKABLE: &str = "core::iter::adapters::peekable::Peekable";
+
+/// The std iterator struct `resolved` names, with its `Item`: `None` for
+/// any other path.
+pub(crate) fn iterator(resolved: Resolved) -> Option<(&'static str, Item)> {
+    let Resolved::Path(path) = resolved else {
+        return None;
+    };
+    ITERATORS
+        .iter()
+        .find(|(definition, _)| *definition == path.definition)
+        .copied()
+}
+
 /// The std definition rawr's builtin type `name` is, as `alloc::vec::Vec`
 /// for `Vec`.
 fn definition_of(name: &str) -> Option<&'static str> {

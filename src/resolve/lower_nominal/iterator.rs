@@ -157,6 +157,14 @@ impl Parser<'_> {
             } if matches!(self.inference.resolve(&target), Ty::Script(..)) => {
                 self.iterator_receiver(&target, member)
             }
+            // And of rawr's iterator, with the methods it has: `peek` of a
+            // `&mut Peekable<I>`.
+            Ty::Reference {
+                mutable: true,
+                target,
+            } if let target @ Ty::Iter(..) = self.inference.resolve(&target) => {
+                std_method::inherent(&target, member).is_some()
+            }
             // And of a runtime iterator, which steps its place.
             Ty::Reference {
                 mutable: true,

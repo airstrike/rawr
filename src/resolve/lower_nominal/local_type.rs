@@ -432,6 +432,9 @@ impl<'a> Parser<'a> {
                     "type",
                     name_span,
                 )?;
+                if let Some((definition, item)) = std.and_then(crate::resolve::std_path::iterator) {
+                    return self.parse_iterator_struct_type(definition, item);
+                }
                 if let Some(spelling) = std.and_then(crate::resolve::std_path::spelling) {
                     if spelling == "Cow" {
                         return self.parse_cow_type();
@@ -1692,5 +1695,62 @@ impl<'a> Parser<'a> {
         }
         self.expect_close_angle("'>' after turbofish type arguments")?;
         Ok(types)
+    }
+}
+
+impl Parser<'_> {
+    /// std's iterator struct `definition` in a body, after its path: rawr's
+    /// iterator of its `item`, as `type_ref::iterator_path` reads it in a
+    /// header (#760). `Peekable<I>` has `peek`.
+    fn parse_iterator_struct_type(
+        &mut self,
+        definition: &str,
+        item: crate::resolve::std_path::Item,
+    ) -> Result<Ty, Error> {
+        let mut arguments = Vec::new();
+        let start = self.position();
+        if matches!(self.peek(), Token::LessThan) {
+            self.next();
+            while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                if !self.skip_lifetime() {
+                    arguments.push(self.parse_local_type()?);
+                }
+                if matches!(self.peek(), Token::Comma) {
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+            self.expect_close_angle("'>' after an iterator's type arguments")?;
+        }
+        let argument = |index: usize| {
+            arguments
+                .get(index)
+                .cloned()
+                .ok_or_else(|| Error::InvalidTypeArguments {
+                    ty: definition.rsplit("::").next().unwrap_or(definition).into(),
+                    expected: index + 1,
+                    actual: arguments.len(),
+                    reference: point_span(start),
+                })
+        };
+        let item = match item {
+            crate::resolve::std_path::Item::Argument(index) => argument(index)?,
+            crate::resolve::std_path::Item::Borrowed(index) => Ty::Reference {
+                mutable: false,
+                target: Box::new(argument(index)?),
+            },
+            crate::resolve::std_path::Item::Char => Ty::Char,
+            crate::resolve::std_path::Item::Inner(index) => match argument(index)? {
+                Ty::Iter(item, _, _) => *item,
+                inner => Ty::Projection(Box::new(inner), "Iterator".into(), "Item".into()),
+            },
+        };
+        let traits = if definition == crate::resolve::std_path::PEEKABLE {
+            ty::Traits::PEEKABLE
+        } else {
+            ty::Traits::ANY
+        };
+        Ok(Ty::Iter(Box::new(item), None, traits))
     }
 }

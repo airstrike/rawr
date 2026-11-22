@@ -9265,3 +9265,48 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn std_iterator_structs_are_types() {
+    // `vec::IntoIter<T>` as an `IntoIterator` impl's `IntoIter` and a
+    // local's type, `Peekable<I>` as a field's, which has `peek`, and
+    // `slice::Iter<'a, T>`: rawr's iterator of their items (#760).
+    let output = printed(
+        r#"
+use std::iter::Peekable;
+struct Bag(Vec<i32>);
+impl IntoIterator for Bag {
+    type Item = i32;
+    type IntoIter = std::vec::IntoIter<i32>;
+    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+}
+struct Lex<I: Iterator<Item = char>> {
+    chars: Peekable<I>,
+}
+impl<I: Iterator<Item = char>> Lex<I> {
+    fn digits(&mut self) -> String {
+        let mut out = String::new();
+        while let Some(c) = self.chars.peek() {
+            if !c.is_ascii_digit() { break; }
+            out.push(*c);
+            self.chars.next();
+        }
+        out
+    }
+}
+struct Walk<'a> { rest: std::slice::Iter<'a, u8> }
+fn main() {
+    let total: i32 = Bag(vec![1, 2, 3]).into_iter().sum();
+    let mut lex = Lex { chars: "42x".chars().peekable() };
+    println!("{total} {} {:?}", lex.digits(), lex.chars.next());
+    let bytes = [7u8, 8];
+    let mut w = Walk { rest: bytes.iter() };
+    println!("{:?} {:?}", w.rest.next(), w.rest.next());
+    let mut kept: std::vec::IntoIter<u32> = vec![5u32].into_iter();
+    println!("{:?} {:?}", kept.next(), kept.next());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 42 Some('x')\nSome(7) Some(8)\nSome(5) None\n");
+}

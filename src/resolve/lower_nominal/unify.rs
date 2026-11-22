@@ -35,6 +35,18 @@ impl<'a> Parser<'a> {
                 self.inference.bind(*id, expected);
                 true
             }
+            // The `Item` of an iterator still to be inferred, as a
+            // `Peekable<I>` field's `I::Item`: rawr's iterator of the item
+            // met, which is every std iterator of it.
+            (Ty::Projection(base, trait_name, name), item)
+            | (item, Ty::Projection(base, trait_name, name))
+                if name.as_str() == "Item"
+                    && is_iterator_trait(trait_name)
+                    && let Ty::Infer(id) = self.inference.resolve(base) =>
+            {
+                self.inference.bind(id, Ty::iter(item.clone()));
+                true
+            }
             // A literal's `{integer}` or `{float}` takes the other kind.
             (Ty::Int(Int::Var(id)), Ty::Int(_)) | (Ty::Float(Float::Var(id)), Ty::Float(_)) => {
                 self.inference.bind(*id, actual);
