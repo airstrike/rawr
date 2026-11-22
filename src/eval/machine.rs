@@ -40,6 +40,19 @@ pub(crate) struct Machine {
     /// position, and the blocks of two bodies that differ only in their
     /// positions are the same.
     body: u64,
+    frames: Frames,
+}
+
+/// What becomes of a body's suspended frames.
+#[derive(Clone, Copy)]
+pub(crate) enum Frames {
+    /// Each resumes once, as an async body's does: a `for` loop's cursor
+    /// holds only what it has left to walk.
+    Resumed,
+    /// One may be copied, as a lazy iterator's step is when the iterator
+    /// is cloned (`lower_nominal::lazy`): a `for` loop's cursor keeps the
+    /// value it walks, which a copy walks again to the same item.
+    Copied,
 }
 
 impl Machine {
@@ -131,7 +144,7 @@ pub(crate) struct Unsupported(pub &'static str, pub Position);
 
 /// Lower `function` when its body awaits. Its last parameter is the resume
 /// value: `()` to start, or a [`Frame`].
-pub(crate) fn lower(function: &mut ScriptFuncDef) -> Result<(), Unsupported> {
+pub(crate) fn lower(function: &mut ScriptFuncDef, frames: Frames) -> Result<(), Unsupported> {
     if !function.body.iter().any(stmt_awaits) || function.params.is_empty() {
         return Ok(());
     }
@@ -160,6 +173,7 @@ pub(crate) fn lower(function: &mut ScriptFuncDef) -> Result<(), Unsupported> {
         blocks: builder.blocks.into_boxed_slice(),
         loops: builder.loops.into_boxed_slice(),
         body: hash,
+        frames,
     }));
     Ok(())
 }
@@ -904,7 +918,10 @@ impl Frame {
     pub(crate) fn duplicate(&self) -> Self {
         let mut saved = crate::func::waited_read(&self.0).clone();
         for (_, _, value) in saved.iter_mut().flat_map(|saved| &mut saved.locals) {
-            if let Some(cursor) = value.read_lock::<Cursor>().map(|cursor| cursor.duplicate()) {
+            if let Some(cursor) = value
+                .read_lock::<Cursor>()
+                .and_then(|cursor| cursor.duplicate())
+            {
                 *value = Dynamic::from(cursor);
             }
         }
@@ -928,9 +945,10 @@ struct Cursor(crate::Shared<crate::Locked<Iteration>>);
 
 struct Iteration {
     thread: std::thread::ThreadId,
-    /// The value the loop walks, and how many items it has taken: what a
+    /// The value the loop walks, kept in a body whose frames are copied
+    /// (`Frames::Copied`), and how many items it has taken: what a
     /// duplicate walks again to the same item.
-    walked: Dynamic,
+    walked: Option<Dynamic>,
     taken: usize,
     /// The evaluator's iterator over `walked`, made at the first `next`.
     iterator: Option<std::mem::ManuallyDrop<Walk>>,
@@ -954,15 +972,17 @@ impl Iteration {
 
 impl Cursor {
     /// A cursor of its own at the same item, which walks its value again
-    /// from the start to there at its first `next`.
-    fn duplicate(&self) -> Self {
+    /// from the start to there at its first `next`: `None` when the cursor
+    /// keeps no value to walk.
+    fn duplicate(&self) -> Option<Self> {
         let iteration = crate::func::waited_read(&self.0);
-        Self(crate::Shared::new(crate::Locked::new(Iteration {
+        let walked = iteration.walked.clone()?;
+        Some(Self(crate::Shared::new(crate::Locked::new(Iteration {
             thread: std::thread::current().id(),
-            walked: iteration.walked.clone(),
+            walked: Some(walked),
             taken: iteration.taken,
             iterator: None,
-        })))
+        }))))
     }
 }
 
@@ -1030,7 +1050,14 @@ impl Engine {
             let mut current = enter(machine, scope, &mut marks, start);
             loop {
                 let block = &machine.blocks[current];
-                let step = self.run_block(global, caches, scope, this_ptr.as_deref_mut(), block);
+                let step = self.run_block(
+                    global,
+                    caches,
+                    scope,
+                    this_ptr.as_deref_mut(),
+                    block,
+                    machine.frames,
+                );
                 current = match step {
                     Ok(Step::Jump(jump)) => enter(machine, scope, &mut marks, jump),
                     Ok(Step::Bind(jump, name, value)) => {
@@ -1099,6 +1126,7 @@ impl Engine {
         scope: &mut Scope,
         mut this_ptr: Option<&mut Dynamic>,
         block: &Block,
+        frames: Frames,
     ) -> crate::RawrResultOf<Step> {
         for op in &block.ops {
             match op {
@@ -1122,7 +1150,7 @@ impl Engine {
                     let value = self
                         .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), expr)?
                         .flatten();
-                    let cursor = self.cursor(global, value, expr.start_position())?;
+                    let cursor = self.cursor(global, value, frames, expr.start_position())?;
                     scope.push_entry(name.clone(), AccessMode::ReadWrite, Dynamic::from(cursor));
                 }
                 Op::Bind { from, index, name } => {
@@ -1173,9 +1201,13 @@ impl Engine {
                     let iteration = &mut *iteration;
                     let iterator = match &mut iteration.iterator {
                         Some(iterator) => iterator,
+                        // A duplicate's, which walks its value again.
                         None => {
-                            let mut iterator =
-                                self.walk(global, iteration.walked.clone(), Position::NONE)?;
+                            let walked = iteration
+                                .walked
+                                .clone()
+                                .ok_or_else(|| runtime("a loop's iterator lost its value"))?;
+                            let mut iterator = self.walk(global, walked, Position::NONE)?;
                             for _ in 0..iteration.taken {
                                 iterator.next();
                             }
@@ -1211,12 +1243,17 @@ impl Engine {
         &self,
         global: &GlobalRuntimeState,
         value: Dynamic,
+        frames: Frames,
         position: Position,
     ) -> crate::RawrResultOf<Cursor> {
-        let iterator = self.walk(global, value.clone(), position)?;
+        let walked = match frames {
+            Frames::Resumed => None,
+            Frames::Copied => Some(value.clone()),
+        };
+        let iterator = self.walk(global, value, position)?;
         Ok(Cursor(crate::Shared::new(crate::Locked::new(Iteration {
             thread: std::thread::current().id(),
-            walked: value,
+            walked,
             taken: 0,
             iterator: Some(std::mem::ManuallyDrop::new(iterator)),
         }))))
@@ -1289,7 +1326,7 @@ mod tests {
         let mut ast = engine
             .compile_legacy_script_with_scope_raw(None, script, crate::OptimizationLevel::None)
             .unwrap();
-        ast.for_each_fn_def_mut(|function| lower(function).unwrap());
+        ast.for_each_fn_def_mut(|function| lower(function, super::Frames::Resumed).unwrap());
         let mut awaited = Vec::new();
         let mut resume = Dynamic::UNIT;
         loop {
@@ -1376,7 +1413,7 @@ mod tests {
                 crate::OptimizationLevel::None,
             )
             .unwrap();
-        ast.for_each_fn_def_mut(|function| lower(function).unwrap());
+        ast.for_each_fn_def_mut(|function| lower(function, super::Frames::Resumed).unwrap());
         let Poll::Pending { frame, .. } = engine
             .call_fn::<Poll>(&mut Scope::new(), &ast, "body", (Dynamic::UNIT,))
             .unwrap()

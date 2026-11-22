@@ -314,7 +314,8 @@ pub(super) fn rewrite_pointer(
         let definition = crate::func::shared_make_mut(definition);
         rewrite_statements(definition.body.statements_mut(), rewrites, patterns);
         if definition.machine.is_none() {
-            let lowered = crate::eval::machine::lower(definition);
+            let lowered =
+                crate::eval::machine::lower(definition, crate::eval::machine::Frames::Copied);
             debug_assert!(lowered.is_ok(), "a step's loops are ones a machine lowers");
         }
     }
