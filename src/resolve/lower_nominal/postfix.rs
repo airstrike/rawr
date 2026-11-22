@@ -1036,6 +1036,27 @@ impl<'a> Parser<'a> {
                 )?;
                 continue;
             }
+            // A generic value bounded by `Iterator` has std's iterator
+            // methods, which the runtime protocol runs on the value it
+            // holds (`lazy.rs`), unless another bound has one of the name.
+            if matches!(builtin, Ty::Param(..) | Ty::Projection(..))
+                && matches!(
+                    self.peek(),
+                    Token::LeftParen | Token::Unit | Token::DoubleColon
+                )
+                && self.iterator_receiver(&builtin, &member)
+                && self
+                    .bound_trait_function(&builtin, &member, member_span)?
+                    .is_none_or(|(trait_name, _)| trait_name == "Iterator")
+            {
+                if std_method::iterator(&member, |_| true)
+                    .is_some_and(|found| found.mode == receiver::Mode::Owned)
+                {
+                    self.move_local(&mut value.clone())?;
+                }
+                value = self.parse_iterator_method(value, member, member_span)?;
+                continue;
+            }
             // A generic value has only its bounds' methods: `clone` and
             // the functions of its user trait bounds.
             // An associated type's value likewise has its declared bounds'.

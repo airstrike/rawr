@@ -8135,3 +8135,144 @@ main();
     );
     assert_eq!(output, "3 2\nSome('x') Some(1) [2, 3]\n");
 }
+
+#[test]
+fn an_iterator_passed_returned_or_kept_runs_only_as_far_as_it_is_pulled() {
+    // A runtime iterator pulls its chain item by item (#407): an unbounded
+    // one passed to a function returns, and a closure's side effects come
+    // when rustc's do.
+    let output = printed(
+        r#"
+fn first<I: Iterator<Item = usize>>(i: I) -> Vec<usize> { i.take(3).collect() }
+fn head<I: Iterator>(mut i: I) -> Option<I::Item> { i.next() }
+fn evens() -> impl Iterator<Item = u32> { (0u32..).filter(|x| x % 2 == 0) }
+fn noisy(x: u32) -> u32 { println!("made {x}"); x }
+fn main() {
+    println!("{:?} {:?}", first(1usize..), head(0u32..));
+    println!("{:?}", head((0..4u32).map(noisy)));
+    let mut m = (0..5u32).map(noisy);
+    println!("{:?} {:?}", m.next(), m.next());
+    let firsts: Vec<u32> = m.by_ref().take(1).collect();
+    println!("{:?} {:?}", firsts, m.collect::<Vec<_>>());
+    println!("{:?}", evens().skip(1).take(2).collect::<Vec<_>>());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[1, 2, 3] Some(0)\nmade 0\nSome(0)\nmade 0\nmade 1\nSome(0) Some(1)\nmade 2\nmade 3\n\
+         made 4\n[2] [3, 4]\n[2, 4]\n"
+    );
+}
+
+#[test]
+fn an_impl_over_an_iterator_parameter_iterates_its_value() {
+    // `impl<I: Iterator<Item = X>>`: a field of type `I` has the iterator
+    // methods, run on whatever iterator it holds at run time (#2507).
+    let output = printed(
+        r#"
+struct Count { n: u32 }
+impl Iterator for Count {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> { if self.n < 3 { self.n += 1; Some(self.n) } else { None } }
+}
+struct W<I>(I);
+impl<I: Iterator<Item = i32>> W<I> {
+    fn all(self) -> Vec<i32> { self.0.collect() }
+}
+struct U<I>(I);
+impl<I: Iterator<Item = u32>> U<I> {
+    fn step(&mut self) -> Option<u32> { self.0.next() }
+    fn total(self) -> u32 {
+        let mut t = 0;
+        for x in self.0 { t += x; }
+        t
+    }
+}
+fn main() {
+    println!("{:?}", W(vec![1, 2].into_iter()).all());
+    let mut u = U((10u32..).map(|x| { println!("made {x}"); x }));
+    println!("{:?} {:?}", u.step(), u.step());
+    println!("{} {}", U(Count { n: 0 }).total(), U(0..4u32).total());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2]\nmade 10\nmade 11\nSome(10) Some(11)\n6 6\n");
+}
+
+#[test]
+fn an_associated_iterator_type_is_iterated_by_its_value() {
+    // `type It: Iterator<Item = u32>` set to a program's iterator struct or
+    // to a range: a generic body steps either by what it is (#380).
+    let output = printed(
+        r#"
+struct Count { n: u32 }
+impl Iterator for Count {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> { if self.n < 3 { self.n += 1; Some(self.n) } else { None } }
+}
+trait Source { type It: Iterator<Item = u32>; fn items(&self) -> Self::It; }
+struct S;
+impl Source for S { type It = Count; fn items(&self) -> Count { Count { n: 0 } } }
+struct R;
+impl Source for R { type It = std::ops::Range<u32>; fn items(&self) -> Self::It { 7..9 } }
+fn report<T: Source>(x: &T) -> String {
+    let mut it = x.items();
+    let first = it.next();
+    let rest: Vec<u32> = it.collect();
+    let mut n = 0;
+    for v in x.items() { n += v; }
+    format!("{:?} {:?} {} {}", first, rest, n, x.items().sum::<u32>())
+}
+fn main() {
+    println!("{}", report(&S));
+    println!("{}", report(&R));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Some(1) [2, 3] 6 6\nSome(7) [8] 15 15\n");
+}
+
+#[test]
+fn a_runtime_iterator_is_cloned_peeked_and_borrowed_where_it_is() {
+    // A clone part way through goes on by itself; `&mut it` and `peek`
+    // step the iterator in its place.
+    let output = printed(
+        r#"
+fn two(i: &mut impl Iterator<Item = u32>) -> (Option<u32>, Option<u32>) { (i.next(), i.next()) }
+fn main() {
+    let mut chars = "a1b".chars();
+    let mut seen = Vec::new();
+    while let Some(c) = chars.next() {
+        seen.push(format!("{c}{:?}", chars.clone().next()));
+    }
+    println!("{:?}", seen);
+    let mut part = (0u32..4).map(|x| x * 10);
+    part.next();
+    let copy = part.clone();
+    println!("{:?} {:?}", part.collect::<Vec<_>>(), copy.collect::<Vec<_>>());
+    let mut it = (1u32..6).map(|x| x * 2);
+    println!("{:?}", two(&mut it));
+    for x in &mut it {
+        if x > 6 { break; }
+        println!("x {x}");
+    }
+    println!("{:?}", it.next());
+    let mut p = (1..4).peekable();
+    println!("{:?}", p.peek());
+    println!("{:?}", p.next_if(|x| *x > 1));
+    println!("{:?} {:?}", p.next_if_eq(&1), p.next_if_eq(&2));
+    println!("{:?}", p.next());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"aSome('1')\", \"1Some('b')\", \"bNone\"]\n[10, 20, 30] [10, 20, 30]\n\
+         (Some(2), Some(4))\nx 6\nSome(10)\nSome(1)\nNone\nSome(1) Some(2)\nSome(3)\n"
+    );
+}

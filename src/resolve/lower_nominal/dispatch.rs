@@ -240,6 +240,13 @@ pub(super) fn write_trait_dispatchers(
                         format!("return {compared};")
                     }
                 }
+                // A std iterator is a runtime one (`lazy.rs`), which steps
+                // itself.
+                (true, "Iterator") if function.name.text == "next" => {
+                    let lazy = format!("{SENTINEL}{}", ops.len());
+                    ops.push(ExecutableOp::Prelude(PreludeOp::Lazy));
+                    format!("return self.{lazy}({}, ());", super::lazy::NEXT)
+                }
                 _ if let Some(borrowed) = native_borrow(declared, function) => borrowed.to_string(),
                 _ => format!(
                     "__rawr_throw \"`{trait_name}::{}` has no implementation for this value\";",

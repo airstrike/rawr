@@ -50,6 +50,7 @@ mod iterator;
 pub(crate) mod kept;
 mod keyed;
 mod known_panic;
+pub(crate) mod lazy;
 mod lending;
 mod literal;
 mod local_type;
