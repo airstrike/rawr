@@ -166,7 +166,14 @@ impl Threads {
         let position = context.call_position();
         let thread = builder.spawn(move || {
             let context = NativeCallContext::from((engine, &*function, None, &global, position));
-            let outcome = closure.call_raw(&context, None, []);
+            let mut outcome = closure.call_raw(&context, None, []);
+            // The thread's `thread_local!` values drop as it ends, before a
+            // join returns, as std's destructors run.
+            if let Err(error) = super::thread_local::end(&context)
+                && outcome.is_ok()
+            {
+                outcome = Err(error);
+            }
             // A thread that panics prints its panic as it ends, as
             // Rust's panic hook does; `join` gives the payload.
             if let Err(error) = &outcome

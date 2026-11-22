@@ -560,6 +560,13 @@ fn item_call(
             }
             placed
         }
+        // The call's text is the items', as a program macro's is.
+        None if is_thread_local(&path) => {
+            let (keys, end) = parse_thread_local(input)?;
+            items.extend(keys);
+            inner.push(Span::new(path[0].1, after(end, 1)));
+            true
+        }
         None => match crate_call(input, &path, true)? {
             Some(call) => {
                 CALLS.with_borrow_mut(|calls| calls.push(call));
@@ -1582,6 +1589,143 @@ fn parse_static(
     )?;
     function.static_item = true;
     Ok(crate::item::Parsed::Function(function))
+}
+
+/// Whether a macro call's path is std's `thread_local`, as the prelude or
+/// `std::` names it.
+fn is_thread_local(path: &[(Token, Position)]) -> bool {
+    let name = |token: &Token, text: &str| matches!(token, Token::Identifier(name) if name.as_str() == text);
+    match path {
+        [(last, _)] => name(last, "thread_local"),
+        [(std, _), (Token::DoubleColon, _), (last, _)] => {
+            name(std, "std") && name(last, "thread_local")
+        }
+        _ => false,
+    }
+}
+
+/// The keys of a `thread_local!` call where an item goes, after its path:
+/// `thread_local! { [attributes] [vis] static NAME: T = [const] init; .. }`,
+/// each a constant of `LocalKey<T>` as std's expansion declares it, and
+/// where the call ends. A `const { .. }` initializer is its block, as it is
+/// the value a first access makes either way.
+fn parse_thread_local(
+    input: &mut TokenStream,
+) -> ParseResult<(Vec<crate::item::Parsed>, Position)> {
+    expect(input, Token::Bang, "after `thread_local`")?;
+    let (close, parenthesized) = match input.next().expect("token streams always end with EOF") {
+        (Token::LeftBrace, _) => (Token::RightBrace, false),
+        (Token::LeftParen, _) => (Token::RightParen, true),
+        (Token::LeftBracket, _) => (Token::RightBracket, true),
+        (Token::LexError(error), position) => return Err(error.into_err(position)),
+        (_, position) => {
+            return Err(
+                PERR::MissingToken(Token::LeftBrace.into(), "to open a macro call".into())
+                    .into_err(position),
+            );
+        }
+    };
+    let mut items = Vec::new();
+    let mut end = loop {
+        if let Some((token, position)) = input.peek()
+            && *token == close
+        {
+            let position = *position;
+            input.next();
+            break position;
+        }
+        let mut attributes = Vec::new();
+        while input
+            .peek()
+            .is_some_and(|(token, _)| is_attribute_marker(token))
+        {
+            attributes.extend(parse_attribute(input)?);
+        }
+        let visibility = parse_item_visibility(input)?;
+        let start = match input.next().expect("token streams always end with EOF") {
+            (Token::Reserved(text), position) if text.as_str() == "static" => position,
+            (Token::LexError(error), position) => return Err(error.into_err(position)),
+            (token, position) => return Err(no_thread_local_rule(&token, position)),
+        };
+        let name = parse_name(input, "after 'static'")?;
+        expect(input, Token::Colon, "after a thread-local key's name")?;
+        let output = parse_type(input)?;
+        let equals = expect(input, Token::Equals, "after a thread-local key's type")?;
+        // `const { init }`: the block is the initializer.
+        if matches!(input.peek(), Some((Token::Const, _))) {
+            input.next();
+        }
+        let value_start = input.peek().map_or(equals, |(_, position)| *position);
+        let mut scan = ScanState::default();
+        let mut tokens = Vec::new();
+        let end = loop {
+            if scan.delimiter_depth == 0
+                && let Some((token, position)) = input.peek()
+                && *token == close
+            {
+                break *position;
+            }
+            match scan.next(input).expect("token streams always end with EOF") {
+                (Token::SemiColon, position) if scan.delimiter_depth == 0 => break position,
+                // The next key's `static` where its `;` goes.
+                (Token::Reserved(text), position)
+                    if scan.delimiter_depth == 0 && text.as_str() == "static" =>
+                {
+                    return Err(no_thread_local_rule(&Token::Reserved(text), position));
+                }
+                (Token::EOF, position) => {
+                    return Err(
+                        PERR::MissingToken(close.into(), "to close a macro call".into())
+                            .into_err(position),
+                    );
+                }
+                (Token::LexError(error), position) => return Err(error.into_err(position)),
+                (token, position) => tokens.push(body_token(token, position)),
+            }
+        };
+        if cfg_disabled(&attributes) {
+            continue;
+        }
+        items.push(crate::item::Parsed::Function(crate::item::Function {
+            header: crate::item::Header {
+                attributes: attributes.into_boxed_slice(),
+                visibility,
+                span: Span::new(start, value_start),
+                scope: None,
+            },
+            name,
+            generics: Box::default(),
+            lifetimes: crate::item::Lifetimes::default(),
+            receiver_lifetime: None,
+            receiver: None,
+            parameters: Box::default(),
+            output: Some(output),
+            body_span: Span::new(value_start, end),
+            body_syntax: crate::item::BodySyntax::new(tokens),
+            constant: true,
+            static_item: false,
+            thread_local: true,
+            asynchronous: false,
+            sized_self: None,
+            span: Span::new(start, after(end, 1)),
+        }));
+    };
+    if parenthesized {
+        end = expect(input, Token::SemiColon, "after a macro call in parentheses")?;
+    }
+    Ok((items, end))
+}
+
+/// rustc's error for `token` at `position` in a `thread_local!` call, where
+/// std's `macro_rules!` matcher has no rule for it.
+fn no_thread_local_rule(token: &Token, position: Position) -> crate::ParseError {
+    unexpected(
+        format!("no rules expected {}", found(token)),
+        "no rules expected this token in macro call",
+        None,
+        token,
+        position,
+    )
 }
 
 /// The rest of a named `const` item after `const`: `const NAME: T = v;`,
@@ -3553,6 +3697,7 @@ fn parse_function_rest(
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
             static_item: false,
+            thread_local: false,
             asynchronous: false,
             sized_self,
             span: Span::new(start, semicolon.end()),
@@ -3579,6 +3724,7 @@ fn parse_function_rest(
         body_syntax,
         constant: false,
         static_item: false,
+        thread_local: false,
         asynchronous: false,
         sized_self,
         span,
@@ -4647,6 +4793,7 @@ fn parse_associated_const(
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: true,
             static_item: false,
+            thread_local: false,
             asynchronous: false,
             sized_self: None,
             span: Span::new(start, semicolon.end()),
@@ -4700,6 +4847,7 @@ fn finish_associated_const(
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
         static_item: false,
+        thread_local: false,
         asynchronous: false,
         sized_self: None,
         span,
@@ -4750,6 +4898,7 @@ fn parse_const_rest(
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
         static_item: false,
+        thread_local: false,
         asynchronous: false,
         sized_self: None,
         span,

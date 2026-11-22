@@ -98,6 +98,7 @@ mod std_scope;
 mod stored;
 mod surface;
 pub(crate) mod thread;
+mod thread_local;
 mod time;
 mod tokens;
 mod trait_call;
