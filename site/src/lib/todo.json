@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.7",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"A program type that implements `io::Write`, `io::Read` or `fmt::Write` gets the trait's provided methods (`write_all`, `read_to_string`, `read_exact`, `write_char`), and `write!`/`writeln!` write into an `io::Write`. `lt`, `le`, `gt` and `ge` work on any `PartialOrd` type.","issues":[2461]},
+          {"text":"A function can return `impl Trait` of a program or std trait (`impl Shape`, `impl Display`), and a method call on its value is the trait's, never the hidden type's own namesake.","issues":[2462],"refs":[2099]},
+          {"text":"`r.clone()` of a `&T` with `T` unbounded copies the reference, and a tuple passed to a generic or boxed as a trait object prints as a tuple.","issues":[2474,2473]}
+        ]
+      },
       {
         "version": "0.5.6",
         "date": "2026-11-21",
@@ -6090,8 +6099,8 @@
     {"issue":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"closed","category":"Health"},
     {"issue":2459,"title":"A check's phase line says when Cargo waits for a lock","state":"open","category":"Health"},
     {"issue":2460,"title":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so…","state":"closed","category":"Divergences from rustc","release":"0.5.3"},
-    {"issue":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"open","category":"Divergences from rustc"},
-    {"issue":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
+    {"issue":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
     {"issue":2463,"title":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)`…","state":"closed","category":"Divergences from rustc","release":"0.5.4"},
     {"issue":2464,"title":"`s.parse()` in a generic fn bounded `T: FromStr` is E0277 \"`T: FromStr` is not satisfied\"","state":"closed","category":"Divergences from rustc","release":"0.5.6"},
     {"issue":2465,"title":"A program generic bounded `T: FromStr` called at `u8` is E0277 \"`u8: FromStr` is not satisfied\"","state":"closed","category":"Divergences from rustc","release":"0.5.6"},
@@ -6102,13 +6111,19 @@
     {"issue":2470,"title":"An impl's, struct's or trait's `where` bound on a type other than its parameters is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2471,"title":"A bound met through a program's conditional impl doesn't check the impl's own bounds","state":"open","category":"Divergences from rustc"},
     {"issue":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"open","category":"Divergences from rustc"},
-    {"issue":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"open","category":"Divergences from rustc"},
-    {"issue":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"open","category":"Divergences from rustc"},
+    {"issue":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
+    {"issue":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
     {"issue":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"open","category":"Divergences from rustc"},
     {"issue":2476,"title":"The own-signature check misses `&mut` reborrow chains and `&mut self` bodies","state":"open","category":"Divergences from rustc"},
     {"issue":2477,"title":"The own-signature check misses a `&str` range slice returned as a longer lifetime","state":"open","category":"Divergences from rustc"},
     {"issue":2478,"title":"A borrow stored into a `&mut` parameter isn't checked against the signature's lifetimes","state":"open","category":"Divergences from rustc"},
-    {"issue":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"open","category":"Divergences from rustc"}
+    {"issue":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"open","category":"Divergences from rustc"},
+    {"issue":2480,"title":"`impl Trait` is a per-function opaque type, not a trait object","state":"open","category":"Divergences from rustc"},
+    {"issue":2481,"title":"A program's impl Hasher lacks the provided write_u8..write_usize methods","state":"open","category":"Divergences from rustc"},
+    {"issue":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"open","category":"Divergences from rustc"},
+    {"issue":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"open","category":"Divergences from rustc"},
+    {"issue":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"open","category":"Divergences from rustc"},
+    {"issue":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8720,17 +8735,23 @@
             {"number":2455,"title":"A method call on a program type calls its inherent method, as rustc does, when the type's impl…","state":"closed"},
             {"number":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"closed"},
             {"number":2460,"title":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so…","state":"closed"},
-            {"number":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"open"},
-            {"number":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open"},
+            {"number":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"closed"},
+            {"number":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"closed"},
             {"number":2463,"title":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)`…","state":"closed"},
             {"number":2464,"title":"`s.parse()` in a generic fn bounded `T: FromStr` is E0277 \"`T: FromStr` is not satisfied\"","state":"closed"},
             {"number":2465,"title":"A program generic bounded `T: FromStr` called at `u8` is E0277 \"`u8: FromStr` is not satisfied\"","state":"closed"},
             {"number":2470,"title":"An impl's, struct's or trait's `where` bound on a type other than its parameters is refused","state":"open"},
             {"number":2471,"title":"A bound met through a program's conditional impl doesn't check the impl's own bounds","state":"open"},
             {"number":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"open"},
-            {"number":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"open"},
-            {"number":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"open"},
-            {"number":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"open"}
+            {"number":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"closed"},
+            {"number":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"closed"},
+            {"number":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"open"},
+            {"number":2480,"title":"`impl Trait` is a per-function opaque type, not a trait object","state":"open"},
+            {"number":2481,"title":"A program's impl Hasher lacks the provided write_u8..write_usize methods","state":"open"},
+            {"number":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"open"},
+            {"number":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"open"},
+            {"number":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"open"},
+            {"number":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open"}
           ]
         },
         {

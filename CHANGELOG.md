@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.7 (2026-11-21)
+
+- A program type that implements `io::Write`, `io::Read` or `fmt::Write` gets the trait's provided methods (`write_all`, `read_to_string`, `read_exact`, `write_char`), and `write!`/`writeln!` write into an `io::Write`. `lt`, `le`, `gt` and `ge` work on any `PartialOrd` type. (#2461)
+- A function can return `impl Trait` of a program or std trait (`impl Shape`, `impl Display`), and a method call on its value is the trait's, never the hidden type's own namesake. (#2462; part of #2099)
+- `r.clone()` of a `&T` with `T` unbounded copies the reference, and a tuple passed to a generic or boxed as a trait object prints as a tuple. (#2474, #2473)
+
 ## 0.5.6 (2026-11-21)
 
 - A `where` clause bounds an associated type (`I::Item: AsRef<dyn Item>`, `<I as IntoIterator>::Item: Debug`) or any other type (`Vec<T>: Debug`, `&'a T: Display`), as rustc reads it: the body may rely on the bound, and each call checks it with rustc's E0277. The playground has a new example, "Traits: Display, Add, Iterator, dyn". (#383)
