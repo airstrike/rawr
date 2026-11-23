@@ -53,6 +53,43 @@ impl Callbacks for Expand {
     }
 }
 
+/// The artifact of each crate `wanted` names by its name and stable crate
+/// id, among the crates a run loaded (#2290).
+pub(crate) struct Hidden {
+    pub(crate) wanted: Vec<(String, String)>,
+    pub(crate) found: Vec<(String, PathBuf)>,
+}
+
+impl Callbacks for Hidden {
+    fn after_expansion<'tcx>(
+        &mut self,
+        _compiler: &rustc_interface::interface::Compiler,
+        tcx: TyCtxt<'tcx>,
+    ) -> Compilation {
+        for &krate in tcx.crates(()) {
+            let name = tcx.crate_name(krate).to_string();
+            let id = format!("{:016x}", tcx.stable_crate_id(krate).as_u64());
+            if !self
+                .wanted
+                .iter()
+                .any(|wanted| *wanted == (name.clone(), id.clone()))
+            {
+                continue;
+            }
+            let source = tcx.used_crate_source(krate);
+            let path = source
+                .rmeta
+                .as_ref()
+                .or(source.rlib.as_ref())
+                .or(source.dylib.as_ref());
+            if let Some(path) = path {
+                self.found.push((name, path.clone()));
+            }
+        }
+        Compilation::Stop
+    }
+}
+
 /// Each item of the crate a derive produced, grouped by the derive's name
 /// where the source writes it, and each call's expansion, at the module
 /// that holds it, into `out`. The crate holds each program item and each

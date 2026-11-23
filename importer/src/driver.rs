@@ -515,15 +515,14 @@ fn expand(arguments: &[String]) -> Result<ExitCode, String> {
         compiler_arguments.push("--extern".to_owned());
         compiler_arguments.push(format!("{}={}", crate_.alias, crate_.path));
     }
-    // A crate named by its name alone is found among the dependencies.
+    // A crate the program reaches only through another's hidden segment is
+    // the artifact rustc loads beside the crates the program names (#2290).
     if !request.crates.is_empty() {
-        for directory in &request.dependency_directories {
-            compiler_arguments.push(format!("-Lcrate={directory}"));
+        let hidden = hidden_artifacts(&compiler_arguments, &request)?;
+        for (name, path) in hidden {
+            compiler_arguments.push("--extern".to_owned());
+            compiler_arguments.push(format!("{name}={}", path.display()));
         }
-    }
-    for name in &request.crates {
-        compiler_arguments.push("--extern".to_owned());
-        compiler_arguments.push(name.clone());
     }
     compiler_arguments.push(request.source.clone());
     let mut callbacks = compiler::expand::Expand {
@@ -540,6 +539,37 @@ fn expand(arguments: &[String]) -> Result<ExitCode, String> {
         Some(Ok(())) => Ok(ExitCode::SUCCESS),
         None => Ok(exit),
     }
+}
+
+/// The artifact of each crate `request` names by its stable crate id, as
+/// rustc loads it beside the crates the request names: a run of
+/// `arguments` over a source of an `extern crate` of each, which loads
+/// their dependencies as the dependency graph resolves them.
+fn hidden_artifacts(
+    arguments: &[String],
+    request: &expand_request::Request,
+) -> Result<Vec<(String, PathBuf)>, String> {
+    let source = Path::new(&request.source).with_file_name("hidden.rs");
+    let text = request
+        .externs
+        .iter()
+        .map(|crate_| format!("extern crate {};\n", crate_.alias))
+        .collect::<String>();
+    fs::write(&source, text).map_err(|error| format!("writing {}: {error}", source.display()))?;
+    let mut arguments = arguments.to_vec();
+    arguments.push(source.display().to_string());
+    let mut callbacks = compiler::expand::Hidden {
+        wanted: request
+            .crates
+            .iter()
+            .map(|hidden| (hidden.name.clone(), hidden.id.clone()))
+            .collect(),
+        found: Vec::new(),
+    };
+    let _ = rustc_driver::catch_with_exit_code(|| {
+        crate::compat::compiler_entrypoint(&arguments, &mut callbacks);
+    });
+    Ok(callbacks.found)
 }
 
 fn validate_rustc_stack_authority(value: Option<&OsStr>) -> Result<(), String> {

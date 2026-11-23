@@ -176,7 +176,9 @@ const HIDDEN_CRATE: &str = "__rawr_crate_";
 #[derive(Debug, Default, PartialEq)]
 struct Spelled {
     text: String,
-    crates: std::collections::BTreeSet<String>,
+    crates: std::collections::BTreeSet<super::request::Hidden>,
+    /// The crates the program reaches them through, by their aliases.
+    through: std::collections::BTreeSet<String>,
     /// Each place in `text` a path was written shorter at, and the bytes
     /// taken out there.
     shortened: Vec<(usize, usize)>,
@@ -197,13 +199,10 @@ impl Spelled {
         while let Some(at) = rest.find(HIDDEN_CRATE) {
             let after = &rest[at + HIDDEN_CRATE.len()..];
             let end = after.find(|c: char| !identifier(c)).unwrap_or(after.len());
-            let name = after[..end]
-                .rsplit_once('_')
-                .filter(|(name, id)| {
-                    !name.is_empty() && id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())
-                })
-                .map(|(name, _)| name);
-            let Some(name) = name else {
+            let segment = after[..end].rsplit_once('_').filter(|(name, id)| {
+                !name.is_empty() && id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())
+            });
+            let Some((name, id)) = segment else {
                 spelled.text.push_str(&rest[..at + HIDDEN_CRATE.len()]);
                 rest = after;
                 continue;
@@ -219,7 +218,14 @@ impl Spelled {
             spelled.text.push_str(name);
             let taken = (before.len() - root.len()) + HIDDEN_CRATE.len() + end - name.len();
             spelled.shortened.push((spelled.text.len(), taken));
-            spelled.crates.insert(name.to_owned());
+            spelled.crates.insert(super::request::Hidden {
+                name: name.to_owned(),
+                id: id.to_owned(),
+            });
+            let through = before[root.len()..].trim_end_matches(':');
+            if !through.is_empty() {
+                spelled.through.insert(through.to_owned());
+            }
             rest = &after[end..];
         }
         spelled.text.push_str(rest);
@@ -310,6 +316,7 @@ pub fn expand(
     // hidden segment from that crate's root (#2290).
     let mut modules = Vec::with_capacity(calls.len());
     let mut roots = std::collections::BTreeSet::new();
+    let mut hidden = std::collections::BTreeSet::new();
     for (index, call) in calls.iter().enumerate() {
         let path = Spelled::of(&call.path);
         let input = Spelled::of(&call.input);
@@ -328,12 +335,17 @@ pub fn expand(
         text.push_str(&function);
         text.push_str("}\n");
         roots.insert(path.text.split("::").next().unwrap_or_default().to_owned());
-        roots.extend(path.crates);
-        roots.extend(input.crates.iter().cloned());
+        roots.extend(path.through);
+        roots.extend(input.through.iter().cloned());
+        hidden.extend(path.crates);
+        hidden.extend(input.crates.iter().cloned());
         modules.push((module, offset(start), input));
     }
     let roots = roots.iter().map(String::as_str).collect();
-    let expanded = super::drive(&text, &roots, basis, edition, &directory, native, limits)?;
+    let hidden = hidden.into_iter().collect::<Vec<_>>();
+    let expanded = super::drive(
+        &text, &roots, &hidden, basis, edition, &directory, native, limits,
+    )?;
     for (call, (module, start, input)) in calls.iter().zip(modules) {
         let called = expanded
             .calls
@@ -430,7 +442,15 @@ mod tests {
     fn a_path_through_a_hidden_segment_is_spelled_from_its_crate() {
         let spelled = Spelled::of("relay::__rawr_crate_wrap_e0faf6e3da76dada::seven!(), line!()");
         assert_eq!(spelled.text, "wrap::seven!(), line!()");
-        assert_eq!(spelled.crates.iter().collect::<Vec<_>>(), ["wrap"]);
+        assert_eq!(
+            spelled
+                .crates
+                .iter()
+                .map(|hidden| (hidden.name.as_str(), hidden.id.as_str()))
+                .collect::<Vec<_>>(),
+            [("wrap", "e0faf6e3da76dada")]
+        );
+        assert_eq!(spelled.through.iter().collect::<Vec<_>>(), ["relay"]);
         // `line!` is where the input as written has it.
         let at = spelled.text.find("line").unwrap();
         assert_eq!(

@@ -18,11 +18,24 @@ pub struct Request {
     pub dependency_directories: Vec<String>,
     /// Each crate the source names, by the alias the program uses.
     pub externs: Vec<Extern>,
-    /// Each crate the source names that the program doesn't depend on,
-    /// by its name, which rustc finds among the dependencies.
-    pub crates: Vec<String>,
+    /// Each crate the source names that the program reaches only through
+    /// another crate's hidden segment (#2290).
+    pub crates: Vec<Hidden>,
     /// The source file to expand.
     pub source: String,
+}
+
+/// A crate the program reaches only through another crate's hidden
+/// segment (`relay::__rawr_crate_wrap_<id>`): its name and its stable
+/// crate id, which name the one artifact of it the dependency graph
+/// resolves, as rustc loads it beside the crate it is reached through.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hidden {
+    /// The crate's name, as `wrap`.
+    pub name: String,
+    /// Its stable crate id, as sixteen hex digits.
+    pub id: String,
 }
 
 /// One `--extern alias=path`.

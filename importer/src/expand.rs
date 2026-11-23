@@ -361,17 +361,29 @@ fn run(
         .flat_map(|item| &item.derives)
         .map(|(_, path)| path.split("::").next().unwrap_or_default())
         .collect::<std::collections::BTreeSet<_>>();
-    let expanded = drive(&text, &roots, basis, edition, directory, native, limits)?;
+    let expanded = drive(
+        &text,
+        &roots,
+        &[],
+        basis,
+        edition,
+        directory,
+        native,
+        limits,
+    )?;
     Ok(split(expanded, items, &spans))
 }
 
 /// rustc's expansion of the small crate `text`, whose macros come from the
-/// crates `roots` names, in one driver run in a directory of its own under
-/// `directory`.
+/// crates `roots` names and the crates `hidden` the program reaches only
+/// through another's hidden segment, in one driver run in a directory of
+/// its own under `directory`.
 #[cfg(feature = "rustc-driver")]
+#[allow(clippy::too_many_arguments, reason = "each is one input of the run")]
 fn drive(
     text: &str,
     roots: &std::collections::BTreeSet<&str>,
+    hidden: &[request::Hidden],
     basis: &Basis,
     edition: &str,
     directory: &Path,
@@ -410,13 +422,7 @@ fn drive(
                 path: path.to_string(),
             })
             .collect(),
-        // A crate the program reaches only through another's hidden
-        // segment, which rustc finds among the dependencies (#2290).
-        crates: roots
-            .iter()
-            .filter(|root| !basis.names(root))
-            .map(|root| (*root).to_owned())
-            .collect(),
+        crates: hidden.to_vec(),
         source: source_path.display().to_string(),
     };
     let request_path = work.join("request.json");
