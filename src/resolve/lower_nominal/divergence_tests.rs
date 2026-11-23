@@ -13527,3 +13527,76 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn a_comparison_impl_at_another_type_is_selected_by_both_operands() {
+    // `impl PartialEq<Feet> for Meters` beside the derive: `==`, `!=` and
+    // `<` select by both operands' types, through references too, and a
+    // generic's `T: PartialEq<U>` compares its instances' (#700).
+    let output = printed(
+        r#"
+use std::cmp::Ordering;
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Meters(f64);
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Feet(f64);
+impl PartialEq<Feet> for Meters {
+    fn eq(&self, other: &Feet) -> bool {
+        (self.0 - other.0 * 0.3048).abs() < 1e-9
+    }
+}
+impl PartialEq<Meters> for Feet {
+    fn eq(&self, other: &Meters) -> bool {
+        other == self
+    }
+}
+impl PartialOrd<Feet> for Meters {
+    fn partial_cmp(&self, other: &Feet) -> Option<Ordering> {
+        self.0.partial_cmp(&(other.0 * 0.3048))
+    }
+}
+struct Score(i64);
+impl PartialEq for Score {
+    fn eq(&self, other: &Score) -> bool {
+        self.0 == other.0
+    }
+}
+impl PartialEq<i64> for Score {
+    fn eq(&self, other: &i64) -> bool {
+        self.0 == *other
+    }
+}
+fn same<T: PartialEq<U>, U>(a: &T, b: &U) -> bool {
+    a == b
+}
+fn main() {
+    let m = Meters(0.3048);
+    let f = Feet(1.0);
+    println!("{} {} {} {}", m == f, f == m, m != Feet(2.0), m == Meters(1.0));
+    println!("{} {} {} {}", m < Feet(2.0), m > Feet(2.0), same(&m, &f), same(&m, &m));
+    let s = Score(5);
+    println!("{} {} {} {}", s == Score(5), s == 5, s != 6, s == Score(4));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "true true true false\ntrue false true true\ntrue true true false\n"
+    );
+    // An impl at another type alone: the right operand must be of it.
+    let report = rendered(
+        "struct Meters(f64);\nstruct Feet(f64);\nimpl PartialEq<Feet> for Meters {\n    \
+         fn eq(&self, other: &Feet) -> bool { self.0 == other.0 }\n}\n\
+         fn main() {\n    let m = Meters(1.0);\n    println!(\"{}\", m == Meters(1.0));\n}\n",
+    );
+    let expected = [
+        "error[E0308]: mismatched types",
+        " --> main.rs:8:25",
+        "  |",
+        "8 |     println!(\"{}\", m == Meters(1.0));",
+        "  |                         ^^^^^^^^^^ expected `Feet`, found `Meters`",
+    ]
+    .join("\n");
+    assert!(report.starts_with(&expected), "{report}");
+}

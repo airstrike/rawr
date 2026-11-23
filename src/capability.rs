@@ -587,12 +587,17 @@ pub(crate) fn resolve(
         let item::Kind::Impl(implementation) = &shell.kind else {
             continue;
         };
-        let Some(item::TraitImpl::User { name, .. }) = &implementation.trait_ else {
+        let Some(item::TraitImpl::User { name, arguments }) = &implementation.trait_ else {
             continue;
         };
         let Some(capability) = Kind::from_derive(&name.text) else {
             continue;
         };
+        // `impl PartialEq<Feet> for Meters` compares with another type: the
+        // capability, and a derive, are the comparison with `Self`.
+        if !compares_with_self(arguments, &implementation.owner) {
+            continue;
+        }
         let type_ref::Type::Path(type_ref::Path {
             target: type_ref::Target::Script { definition, .. },
             ..
@@ -1010,6 +1015,23 @@ pub(crate) fn type_supports(
                 .get(definition)
                 .is_some_and(|set| set.contains(capability)),
         },
+    }
+}
+
+/// Whether a trait impl for `owner` whose header writes `arguments` is the
+/// impl at `Self`: no argument, so its default `Rhs = Self`, or `Self` or
+/// the owner itself.
+pub(crate) fn compares_with_self(arguments: &[type_ref::Type], owner: &type_ref::Type) -> bool {
+    match arguments {
+        [] => true,
+        [argument] => {
+            matches!(
+                argument,
+                type_ref::Type::Path(type_ref::Path { name, target: type_ref::Target::Parameter, .. })
+                    if name.as_str() == "Self"
+            ) || crate::resolve::full_type_name(argument) == crate::resolve::full_type_name(owner)
+        }
+        _ => false,
     }
 }
 

@@ -1456,11 +1456,13 @@ impl<'a> Parser<'a> {
             return self.std_implements(&resolved, trait_name, arguments);
         }
         // `PartialEq<Self>` and `PartialOrd<Self>`, their `Rhs = Self`
-        // filled in: a derive or a builtin's comparison is with its own type.
+        // filled in: a derive or a builtin's comparison is with its own
+        // type, and so is a bound's supertrait written without its `Rhs`
+        // (`PartialOrd` of `T: Ord`).
         if let [argument] = arguments
             && let Some(kind) = capability::Kind::from_derive(trait_name)
             && self.unifies(argument, ty)
-            && self.type_provides(ty, kind)
+            && (self.type_provides(ty, kind) || self.type_implements(ty, trait_name))
         {
             return true;
         }
@@ -1785,8 +1787,15 @@ impl<'a> Parser<'a> {
                 .find(|kind| !self.type_provides(&owner, *kind))
                 .map(|kind| ImmutableString::from(kind.name()))
                 .or_else(|| {
+                    // A supertrait with arguments is proved at them, below.
                     traits
                         .iter()
+                        .filter(|bound| {
+                            !declared
+                                .supertrait_arguments
+                                .iter()
+                                .any(|(parent, _)| *parent == bound.text)
+                        })
                         .find(|bound| !self.type_implements(&owner, &bound.text))
                         .map(|bound| bound.text.clone())
                 });
@@ -1812,6 +1821,14 @@ impl<'a> Parser<'a> {
                 .zip(impl_arguments.iter().map(Ty::from_resolved))
                 .collect();
             substitution.insert("Self".into(), owner.clone());
+            // A parameter the header leaves out is its default: `Rhs` of
+            // `impl PartialOrd for C` is `C`.
+            for generic in declared.generics.iter().skip(impl_arguments.len()) {
+                if let Some(default) = &generic.default {
+                    let default = instantiate(&Ty::from_resolved(default), &substitution);
+                    substitution.insert(generic.name.text.clone(), default);
+                }
+            }
             for (parent, arguments) in declared.supertrait_arguments.iter() {
                 let arguments = arguments
                     .iter()

@@ -193,24 +193,12 @@ pub(crate) fn declaration(
     declared
 }
 
-/// The std traits rawr reads without their `Rhs = Self` parameter, which
-/// its runtime compares by (`RUNS`): a binding until #708.
-const SELF_ONLY: &[&str] = &["core::cmp::PartialEq", "core::cmp::PartialOrd"];
-
 fn resolve(
     definition: &'static str,
     provided: &[&str],
     host: &host::Registry,
 ) -> Option<item::Trait> {
-    let mut source = std_table::trait_source(definition, provided, |name| body(definition, name))?;
-    // rawr compares a value with one of its own type (#708, D711 step 3):
-    // `PartialEq` and `PartialOrd` are read with their `Rhs` as `Self`.
-    if SELF_ONLY.contains(&definition) {
-        source = source
-            .replace("<Rhs = Self>", "")
-            .replace("<Rhs>", "")
-            .replace("Rhs", "Self");
-    }
+    let source = std_table::trait_source(definition, provided, |name| body(definition, name))?;
     let mut parsed = crate::parser::parse_trait(&source)?;
     let attempt = |parsed: crate::item::Trait| {
         super::resolve_item(
@@ -941,7 +929,7 @@ mod tests {
         );
         assert_eq!(
             declared("PartialOrd"),
-            "<> : Set(16)  |  | partial_cmp(&self &Self) -> Option<Ordering>"
+            "<Rhs=Self> : Set(0) PartialEq |  | partial_cmp(&self &Rhs) -> Option<Ordering>"
         );
         assert_eq!(
             declared("IndexMut"),

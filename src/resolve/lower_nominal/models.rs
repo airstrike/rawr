@@ -754,16 +754,22 @@ impl Models {
                     type_ref::Argument::Lifetime(_) => None,
                 })
                 .collect();
-            impls.insert((name.text.clone(), *definition));
-            impl_bounds
-                .entry((name.text.clone(), *definition))
-                .or_default()
-                .push(obligation::Impl::new(
-                    shell.source,
-                    implementation,
-                    name.span,
-                    parameters.clone(),
-                ));
+            // `impl PartialEq<Feet> for Meters` is no comparison of a
+            // `Meters` with itself, which the capability is.
+            let at_self = crate::capability::Kind::from_derive(&name.text).is_none()
+                || crate::capability::compares_with_self(trait_arguments, &implementation.owner);
+            if at_self {
+                impls.insert((name.text.clone(), *definition));
+                impl_bounds
+                    .entry((name.text.clone(), *definition))
+                    .or_default()
+                    .push(obligation::Impl::new(
+                        shell.source,
+                        implementation,
+                        name.span,
+                        parameters.clone(),
+                    ));
+            }
             if !trait_arguments.is_empty() {
                 impl_arguments
                     .entry((name.text.clone(), *definition))
@@ -1569,16 +1575,51 @@ impl Models {
         trait_name: &str,
         name: &str,
     ) -> Option<&method::Definition> {
-        if !self.std_traits.contains(trait_name) {
-            return None;
-        }
-        self.trait_methods
-            .get(&(owner, name.into()))?
-            .iter()
-            .find(|definition| {
+        self.std_impls(owner, trait_name, name).next()
+    }
+
+    /// Each hand-written function `name` of the std trait `trait_name` for
+    /// `owner` at its Self type: a comparison trait's impl at another
+    /// `Rhs` (`impl PartialEq<Feet> for Meters`) is `cross_impls`'.
+    fn std_impls<'m, 't>(
+        &'m self,
+        owner: type_def::Id,
+        trait_name: &'t str,
+        name: &str,
+    ) -> impl Iterator<Item = &'m method::Definition> + use<'m, 't> {
+        let comparison = crate::capability::Kind::from_derive(trait_name).is_some();
+        self.std_traits
+            .contains(trait_name)
+            .then(|| self.trait_methods.get(&(owner, name.into())))
+            .flatten()
+            .into_iter()
+            .flatten()
+            .filter(move |definition| {
                 definition
                     .trait_name()
                     .is_some_and(|implemented| implemented == trait_name)
+                    && !(comparison && super::op::crosses_self(definition))
+            })
+    }
+
+    /// Each hand-written function `name` of the comparison trait
+    /// `trait_name` for `owner` at another type than `owner`'s:
+    /// `impl PartialEq<Feet> for Meters`'s `eq`.
+    pub(super) fn cross_impls<'m, 't>(
+        &'m self,
+        owner: type_def::Id,
+        trait_name: &'t str,
+        name: &str,
+    ) -> impl Iterator<Item = &'m method::Definition> + use<'m, 't> {
+        self.trait_methods
+            .get(&(owner, name.into()))
+            .into_iter()
+            .flatten()
+            .filter(move |definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|implemented| implemented == trait_name)
+                    && super::op::crosses_self(definition)
             })
     }
 
@@ -1592,19 +1633,7 @@ impl Models {
         trait_name: &str,
         name: &str,
     ) -> bool {
-        self.std_traits.contains(trait_name)
-            && self
-                .trait_methods
-                .get(&(owner, name.into()))
-                .is_some_and(|definitions| {
-                    definitions
-                        .iter()
-                        .filter(|definition| {
-                            definition.trait_name().is_some_and(|own| own == trait_name)
-                        })
-                        .count()
-                        > 1
-                })
+        self.std_impls(owner, trait_name, name).count() > 1
     }
 
     /// `std_impl` of the impl for `owner`'s instance at `arguments`, of
@@ -1620,10 +1649,7 @@ impl Models {
     ) -> Option<&method::Definition> {
         let first = self.std_impl(owner, trait_name, name)?;
         Some(
-            self.trait_methods
-                .get(&(owner, name.into()))?
-                .iter()
-                .filter(|definition| definition.trait_name().is_some_and(|own| own == trait_name))
+            self.std_impls(owner, trait_name, name)
                 .find(|definition| {
                     super::generics::instance_fits(definition.owner_arguments(), arguments)
                 })
