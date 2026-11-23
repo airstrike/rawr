@@ -2777,6 +2777,66 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `parse_range_or_expr` for a method's `RangeBounds` argument, and the
+    /// statement the call runs first. A range value that is no place
+    /// (`v.drain(make())`) is bound by that statement, and its bounds are
+    /// read from there. A receiver that is no place keeps the value as it
+    /// is, so the receiver is still evaluated before the argument.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn parse_range_argument(
+        &mut self,
+        receiver: &ParsedExpr,
+    ) -> Result<
+        (
+            Result<ParsedExpr, (Option<ParsedExpr>, Option<ParsedExpr>, bool)>,
+            origin::Fragment,
+        ),
+        Error,
+    > {
+        let bounds = self.parse_range_or_expr()?;
+        let value = match bounds {
+            Ok(value)
+                if value.lvalue.is_none()
+                    && receiver.lvalue.is_some()
+                    && range::parts(&self.inference.resolve(&value.ty)).is_some() =>
+            {
+                value
+            }
+            bounds => return Ok((bounds, origin::Fragment::default())),
+        };
+        let bound = self.temporary("range");
+        let mut statement = value.prelude.clone();
+        statement.push_text(format!("let {bound} = "));
+        statement.push(value.source.clone());
+        statement.push_text("; ");
+        let held = ParsedExpr {
+            prelude: origin::Fragment::default(),
+            source: origin::Fragment::plain(bound.clone()),
+            lvalue: Some(Lvalue::Binding {
+                binding: bound.as_str().into(),
+                ty: value.ty.clone(),
+            }),
+            ..value
+        };
+        Ok((self.range_bounds(held), statement))
+    }
+
+    /// `source` run after `statement` (`parse_range_argument`), or itself
+    /// when there is none.
+    pub(super) fn after_statement(
+        statement: origin::Fragment,
+        source: origin::Fragment,
+    ) -> origin::Fragment {
+        if statement.is_empty() {
+            return source;
+        }
+        let mut block = origin::Fragment::plain("{ ");
+        block.push(statement);
+        block.push(source);
+        block.push_text(" }");
+        block
+    }
+
     /// A range value a place holds (`let r = 1..3; v.drain(r)`), as the
     /// bounds `parse_range_or_expr` gives: each bound read from it, as
     /// std's `RangeBounds` reads them. Any other value is itself.
@@ -3218,7 +3278,7 @@ impl<'a> Parser<'a> {
         // `v.drain(range)`: the removed elements, as an iterator.
         if member.as_str() == "drain" {
             let open = self.expect(Token::LeftParen, "'(' after `drain`")?;
-            let bounds = self.parse_range_or_expr()?;
+            let (bounds, first) = self.parse_range_argument(&value)?;
             let end = self.close_arguments("')' after `drain`'s range")?;
             self.range_operand(open, end);
             let Err((low, high, inclusive)) = bounds else {
@@ -3237,6 +3297,7 @@ impl<'a> Parser<'a> {
             operands.push(inclusive.to_string().into());
             let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
             let source = self.mutation_call(&value, &helper, operands)?;
+            let source = Self::after_statement(first, source);
             let ty = Ty::iter(element);
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }

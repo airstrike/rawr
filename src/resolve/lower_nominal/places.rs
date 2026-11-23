@@ -538,6 +538,12 @@ impl Parser<'_> {
         let value = self.parse_postfix();
         self.no_struct = outer;
         let value = value?;
+        // `&mut self.items` of an iterator is the iterator stepped where it
+        // is (`borrowed_iterator`), not a walk over elements.
+        if skip == 1 && self.runtime_iterator(&value.ty) {
+            self.splice_tokens(taken);
+            return Ok(None);
+        }
         let (place, owner) = match &value.lvalue {
             Some(Lvalue::Binding { binding, .. }) => (binding.to_string(), binding.clone()),
             Some(Lvalue::Place { binding, place, .. }) => {

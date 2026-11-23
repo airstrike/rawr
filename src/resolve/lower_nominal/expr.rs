@@ -340,9 +340,9 @@ impl<'a> Parser<'a> {
     /// `column(&mut self.content)` or `.chain(&mut self.actions)` of a
     /// `Box<dyn Iterator>`: the iterator by `&mut`, which the callee runs
     /// to its end, so its items move out and the place is left empty.
-    /// Elsewhere, as `for x in &mut it`, of a local: a chain that steps the
-    /// local where it is. Any other `&mut` outside a function's `&mut`
-    /// argument is refused.
+    /// Elsewhere, as `for x in &mut it` or `for x in &mut self.items`: a
+    /// chain that steps the place where it is. Any other `&mut` outside a
+    /// function's `&mut` argument is refused.
     fn drained_iterator(&mut self, start: Position) -> Result<ParsedExpr, Error> {
         self.next();
         let operand = self.parse_operand()?;
@@ -356,13 +356,9 @@ impl<'a> Parser<'a> {
             return Err(self
                 .unsupported("`&mut` borrow expressions other than a function's `&mut` argument"));
         };
-        let expression = span(start, operand.span.end());
-        if !whole_argument && let Some(Lvalue::Binding { .. }) = &operand.lvalue {
-            return self.borrowed_iterator(&operand, *item, expression);
-        }
+        let expression = span(start, self.written_end());
         if !whole_argument {
-            return Err(self
-                .unsupported("`&mut` borrow expressions other than a function's `&mut` argument"));
+            return self.borrowed_iterator(&operand, *item, expression);
         }
         self.mutable_use(&operand, operand.span);
         let drain = self.push_op(Op::Prelude(PreludeOp::Lazy));
