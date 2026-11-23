@@ -12768,6 +12768,30 @@ fn a_local_key_method_of_another_impl_is_rustcs_e0599_with_its_notes() {
 }
 
 #[test]
+fn cfg_leaves_out_tuple_struct_fields_and_a_block_s_members() {
+    // A tuple struct's field and, in a body, a variant and a tuple field
+    // that a `#[cfg(..)]` leaves out are gone from the constructor, the
+    // patterns and `Debug`, as rustc builds them (#605).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct T(#[cfg(any())] u8, i32, #[cfg(all())] i64);
+fn main() {
+    #[derive(Debug)]
+    enum L { X, #[cfg(any())] Y, Z(#[cfg(any())] String, u8) }
+    #[derive(Debug)]
+    struct U(#[cfg(any())] String, u8);
+    let t = T(1, 2);
+    let n = match L::Z(9) { L::X => 0, L::Z(n) => n };
+    println!("{:?} {} {} {:?} {:?} {}", t, t.0, t.1, L::X, U(7), n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "T(1, 2) 1 2 X U(7) 9\n");
+}
+
+#[test]
 fn a_renamed_std_type_names_its_functions() {
     // `use std::time::Duration as Span;` binds std's `Duration`, so
     // `Span::from_millis` is its function, called or as a value, as a type
