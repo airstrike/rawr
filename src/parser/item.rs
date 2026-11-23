@@ -6322,6 +6322,9 @@ fn parse_body_syntax(
     // Where a `const` that starts a statement is: `const fn f()` is a
     // nested `fn` item.
     let mut const_start: Option<Position> = None;
+    // Where a `static` that starts a statement is: `static move ||` is a
+    // closure, and `static mut` is left to the body's reader.
+    let mut static_start: Option<Position> = None;
 
     loop {
         if (boundary || const_start.is_some())
@@ -6369,6 +6372,30 @@ fn parse_body_syntax(
             let constant = parse_const_rest(input, header, start, name)?;
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(constant)));
             // A statement may start after the item, as after its `;`.
+            boundary = true;
+            ends_expression = false;
+            after_name = false;
+            continue;
+        }
+        // `static NAME: T = value;` is an item of its block too, which the
+        // items nested there name (#1708). The body's reader still makes
+        // its value where it is written (D862).
+        if let Some(start) = static_start.take()
+            && macros.is_empty()
+            && let Some((Token::Identifier(word), _)) = input.peek()
+            && word.as_str() != "move"
+        {
+            tokens.pop();
+            let name = parse_name(input, "after 'static'")?;
+            let header = crate::item::Header {
+                attributes: Box::default(),
+                visibility: None,
+                span: Span::NONE,
+                scope: None,
+            };
+            let mut declared = parse_const_rest(input, header, start, name)?;
+            declared.static_item = true;
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(declared)));
             boundary = true;
             ends_expression = false;
             after_name = false;
@@ -6540,6 +6567,12 @@ fn parse_body_syntax(
         }
         const_start = match input.peek() {
             Some((Token::Const, position)) if boundary => Some(*position),
+            _ => None,
+        };
+        static_start = match input.peek() {
+            Some((Token::Reserved(word), position)) if boundary && word.as_str() == "static" => {
+                Some(*position)
+            }
             _ => None,
         };
         if let Some((token, _)) = input.peek() {

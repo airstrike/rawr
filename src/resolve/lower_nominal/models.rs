@@ -74,8 +74,12 @@ pub(super) struct Tables {
     pub(super) by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
     /// The types blocks declare or import, each with its block (#1631).
     pub(super) block_nominals: Blocks<Nominal>,
-    /// The functions and constants blocks declare or import.
+    /// The functions, constants and statics blocks declare or import.
     pub(super) block_functions: Blocks<ScriptFunction>,
+    /// Each written block static's site, by where its name is: what its key
+    /// is after its file's identity (D862). The body that declares it and
+    /// every item nested there read it by this key.
+    block_static_sites: BTreeMap<(crate::program::source::Id, Position), ImmutableString>,
     /// The imports of blocks' `use`s.
     pub(super) block_imports: Blocks<crate::resolve::item::Binding>,
     /// The source that declares each script type.
@@ -1018,6 +1022,7 @@ impl Models {
             by_name,
             block_nominals,
             block_functions,
+            block_static_sites: super::block_static::sites(program, engine),
             block_imports,
             declared_in,
             variants,
@@ -1716,6 +1721,12 @@ impl Models {
                 .get(&(self.context, name.into()))
                 .filter(|_| self.in_scope(name, self.at))
         })
+    }
+
+    /// The site of the written block static whose name starts at `name`:
+    /// its key after its file's identity.
+    pub(super) fn block_static_site(&self, name: Position) -> Option<&ImmutableString> {
+        self.block_static_sites.get(&(self.context, name))
     }
 
     pub(super) fn qualified_function(&self, span: Span) -> Option<&ScriptFunction> {

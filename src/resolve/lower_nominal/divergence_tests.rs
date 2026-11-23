@@ -6901,6 +6901,49 @@ main();
 }
 
 #[test]
+fn a_block_static_is_named_by_the_items_nested_in_its_block() {
+    // A body's static is an item of its block: a nested `fn` or an impl's
+    // method there reads the value the body reads, and so does the body
+    // before the declaration (#1708). The output is rustc's.
+    let output = printed(
+        r#"
+use std::sync::Mutex;
+fn f() -> u32 {
+    let early = N;
+    static N: u32 = 3;
+    fn g() -> u32 { N + 1 }
+    early + g() + N
+}
+fn tick() -> i32 {
+    static TICKS: Mutex<i32> = Mutex::new(0);
+    fn bump() -> i32 { let mut t = TICKS.lock().unwrap(); *t += 10; *t }
+    let b = bump();
+    let mut ticks = TICKS.lock().unwrap();
+    *ticks += 1;
+    *ticks + b
+}
+fn other() -> i32 {
+    static TICKS: Mutex<i32> = Mutex::new(100);
+    fn bump() -> i32 { let mut t = TICKS.lock().unwrap(); *t += 1; *t }
+    bump()
+}
+fn main() {
+    {
+        static WORD: &str = "block";
+        struct P;
+        impl P { fn len(&self) -> usize { WORD.len() } }
+        fn twice() -> usize { WORD.len() * 2 }
+        println!("{} {}", P.len(), twice());
+    }
+    println!("{} {} {} {}", f(), tick(), tick(), other());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "5 10\n10 21 43 101\n");
+}
+
+#[test]
 fn a_closure_that_changes_self_reaches_self_where_it_is_kept() {
     // A closure kept in a local, called later or nested, changes the
     // receiver's fields where they are, as rustc's capture of them
