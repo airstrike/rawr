@@ -13328,3 +13328,66 @@ fn a_local_key_method_of_another_impl_is_rustcs_e0599_with_its_notes() {
         );
     }
 }
+
+#[test]
+fn try_into_an_integer_beside_a_program_try_from_of_the_same_source() {
+    // A program's `TryFrom<i64>` doesn't take every `try_into()` of an
+    // `i64`: one into an integer is std's, chosen once the target is
+    // known, and the program impl's `Error` is proved `Debug` once it is
+    // selected (#773).
+    let output = printed(
+        r#"
+use std::convert::TryFrom;
+use std::convert::TryInto;
+#[derive(Debug)]
+struct Even(i64);
+impl TryFrom<i64> for Even {
+    type Error = String;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        if v % 2 == 0 { Ok(Even(v)) } else { Err(format!("{v} is odd")) }
+    }
+}
+fn small(v: i64) -> Result<u8, std::num::TryFromIntError> {
+    let b: u8 = v.try_into()?;
+    Ok(b + 1)
+}
+fn main() {
+    let a: Result<Even, _> = 4i64.try_into();
+    let b: Result<Even, String> = 3i64.try_into();
+    let c: Result<u8, _> = 300i64.try_into();
+    let e: i32 = 7i64.try_into().unwrap();
+    println!("{:?} {:?} {:?} {}", a, b, c, e);
+    println!("{:?} {:?}", small(9), small(-1));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Ok(Even(4)) Err(\"3 is odd\") Err(TryFromIntError(PosOverflow)) 7\n\
+         Ok(10) Err(TryFromIntError(NegOverflow))\n"
+    );
+    let report = refused(
+        r#"
+use std::convert::TryFrom;
+use std::convert::TryInto;
+struct Quiet;
+struct Even(i64);
+impl TryFrom<i64> for Even {
+    type Error = Quiet;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        if v % 2 == 0 { Ok(Even(v)) } else { Err(Quiet) }
+    }
+}
+fn main() {
+    let e: Even = 4i64.try_into().unwrap();
+    println!("{}", e.0);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Quiet` doesn't implement `Debug`"),
+        "{report}"
+    );
+}

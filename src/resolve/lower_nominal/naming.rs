@@ -293,3 +293,9 @@ pub(super) fn lent_text_placeholder(index: usize) -> String {
 pub(super) fn conversion_placeholder(index: usize) -> String {
     format!("__rawr_nominal_conversion_{index:010}")
 }
+
+/// The placeholder after the value of the pending `try_into()` at
+/// `index`, which the integer `try_from`'s operands are written over.
+pub(super) fn try_operands_placeholder(index: usize) -> String {
+    format!("__rawr_nominal_try_operands_{index:010}")
+}
