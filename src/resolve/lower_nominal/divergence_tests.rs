@@ -13397,3 +13397,47 @@ main();
          2\"]\n[\"len 2\", \"P 1\", \"P 2\"]\n[\"len 2\", \"u8 1\", \"none\"]\n"
     );
 }
+
+#[test]
+fn a_program_trait_implemented_for_tuples_runs_for_each_arity() {
+    // Each tuple arity is its own Self type, whose impl runs at its
+    // members' types: called directly, through a generic and through a
+    // trait object (#2685).
+    let output = printed(
+        r#"
+trait Tag {
+    fn tag(&self) -> String;
+}
+impl Tag for u8 {
+    fn tag(&self) -> String { format!("u8:{}", self) }
+}
+impl Tag for u32 {
+    fn tag(&self) -> String { format!("u32:{}", self) }
+}
+impl<A: Tag, B: Tag> Tag for (A, B) {
+    fn tag(&self) -> String { self.0.tag() + "," + &self.1.tag() }
+}
+impl<A: Tag, B: Tag, C: Tag> Tag for (A, B, C) {
+    fn tag(&self) -> String { format!("[{} {} {}]", self.0.tag(), self.1.tag(), self.2.tag()) }
+}
+impl Tag for () {
+    fn tag(&self) -> String { "unit".to_string() }
+}
+fn show<T: Tag>(x: &T) -> String {
+    x.tag()
+}
+fn main() {
+    println!("{}", (1u8, 2u32).tag());
+    println!("{}", show(&((1u8, 2u8), 3u32)));
+    println!("{}", show(&(1u8, (), 3u32)));
+    let d: &dyn Tag = &(5u32, 6u8);
+    println!("{}", d.tag());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "u8:1,u32:2\nu8:1,u8:2,u32:3\n[u8:1 unit u32:3]\nu32:5,u8:6\n"
+    );
+}
