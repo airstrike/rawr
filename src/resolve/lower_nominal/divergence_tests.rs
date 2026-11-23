@@ -14120,3 +14120,50 @@ main();
         assert!(refused.starts_with(report), "{body}\n{refused}");
     }
 }
+
+#[test]
+fn a_std_trait_bound_on_a_std_type_holds_where_std_s_impl_does() {
+    // std's impls of its traits for std's types are its table's (#765):
+    // `Cell<T>: Clone` of a `Copy` `T`, `rc::Weak<T>: Clone` of any `T`,
+    // `Option<&T>: Copy`, an ordered `Reverse<Box<u8>>`.
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+use std::cmp::Reverse;
+use std::rc::Rc;
+fn c<T: Clone + std::fmt::Debug>(_: &T) -> &'static str { "clone" }
+fn k<T: Copy>(_: &T) -> &'static str { "copy" }
+fn e<T: Eq + std::hash::Hash + Ord>(_: &T) -> &'static str { "ordered" }
+fn main() {
+    let t = String::new();
+    println!("{} {}", c(&Cell::new(2)), c(&Rc::downgrade(&Rc::new(t.clone()))));
+    println!("{} {}", c(&Rc::new(RefCell::new(1))), k(&Some(&t)));
+    println!("{} {}", k(&Ok::<u8, char>(1)), k(&(..3)));
+    println!("{} {}", e(&Reverse(Box::new(3u8))), e(&vec![Ok::<i32, String>(1)]));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "clone clone\nclone copy\ncopy copy\nordered ordered\n"
+    );
+    // std implements `Debug` for tuples of up to twelve members.
+    let report = refused(
+        r#"
+fn show<T: std::fmt::Debug>(t: &T) -> String { format!("{t:?}") }
+fn main() {
+    let twelve = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    println!("{}", show(&twelve));
+    let thirteen = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
+    println!("{}", show(&thirteen));
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `({integer}, {integer},")
+            && report.contains("{integer})` doesn't implement `Debug`"),
+        "{report}"
+    );
+}

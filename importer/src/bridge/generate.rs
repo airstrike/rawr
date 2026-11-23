@@ -28,35 +28,6 @@ const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
 const BUILD_PATH: &str = "build.rs";
 const SOURCE_PATH: &str = "src/main.rs";
-/// `core::ops`' operator traits, which a crate type's operator is an impl
-/// of: an adapter calls the impl's method, as `receiver.sub(argument)`,
-/// and `receiver.index(argument)` of `grid[i]` (#709).
-const OPERATOR_TRAITS: [&str; 24] = [
-    "Index",
-    "IndexMut",
-    "Add",
-    "Sub",
-    "Mul",
-    "Div",
-    "Rem",
-    "Neg",
-    "Not",
-    "AddAssign",
-    "SubAssign",
-    "MulAssign",
-    "DivAssign",
-    "RemAssign",
-    "BitAnd",
-    "BitOr",
-    "BitXor",
-    "Shl",
-    "Shr",
-    "BitAndAssign",
-    "BitOrAssign",
-    "BitXorAssign",
-    "ShlAssign",
-    "ShrAssign",
-];
 const TOP_LEVEL_SOURCE: &[u8] = include_bytes!("generate/top_level.rs");
 /// The runner's build script. It names only itself as its input: the
 /// manifest carrier is included by the source ([`MANIFEST_CARRIER`]), whose
@@ -8875,11 +8846,13 @@ fn render_source(
     // of adapters imports with the runtime.
     let mut traits = Vec::new();
     // An operator needs no import in Rust: its trait is in scope for every
-    // adapter, which calls the impl's method (`receiver.sub(argument)`).
+    // adapter, which calls the impl's method (`receiver.sub(argument)`,
+    // `receiver.index(argument)` of `grid[i]`, the `deref` a method probe
+    // takes through a crate type's `Deref`; #709, #762).
     writeln!(
         traits,
         "#[allow(unused_imports)]\npub use ::core::ops::{{{}}};",
-        OPERATOR_TRAITS
+        operator_traits()
             .iter()
             .map(|name| format!("{name} as _"))
             .collect::<Vec<_>>()
@@ -8887,14 +8860,11 @@ fn render_source(
     )
     .map_err(request::unwritable)?;
     // std's traits outside the prelude whose members a crate type's impl
-    // gives the program, as `Coords::from_str` of `"1,2".parse()` (#709)
-    // and the `deref` a method probe takes through a crate type's `Deref`
-    // (#762).
+    // gives the program, as `Coords::from_str` of `"1,2".parse()` (#709).
     writeln!(
         traits,
         "#[allow(unused_imports)]\npub use ::core::str::FromStr as _;\n\
-         #[allow(unused_imports)]\npub use ::core::hash::Hash as _;\n\
-         #[allow(unused_imports)]\npub use ::core::ops::{{Deref as _, DerefMut as _}};"
+         #[allow(unused_imports)]\npub use ::core::hash::Hash as _;"
     )
     .map_err(request::unwritable)?;
     // Each trait the program names is in scope for every adapter, so a
@@ -9622,6 +9592,27 @@ impl Support {
             &mut self.base
         }
     }
+}
+
+/// The stable traits `core::ops` exports, by name, from the std table of
+/// the toolchain the runner builds with: a crate type's operator is an
+/// impl of one of them.
+fn operator_traits() -> Vec<String> {
+    const EMBEDDED: &str = include_str!("../../../src/std_table/paths.tsv");
+    let read = crate::cargo::toolchain::std_table()
+        .and_then(|directory| std::fs::read_to_string(directory.join("paths.tsv")).ok());
+    read.as_deref()
+        .unwrap_or(EMBEDDED)
+        .lines()
+        .filter_map(|line| {
+            let [path, "t", "trait", "s", ..] = line.split('\t').collect::<Vec<_>>()[..] else {
+                return None;
+            };
+            path.strip_prefix("core::ops::")
+                .filter(|name| !name.contains("::"))
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 /// `pub fn {name}() { .. }` registering each of `registrations`.
@@ -29404,6 +29395,33 @@ mod tests {
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
+
+    /// An adapter has std's operator traits in scope, as std's table lists
+    /// `core::ops`' stable traits, and none an unstable feature gates.
+    #[test]
+    fn adapters_import_the_stable_traits_core_ops_exports() {
+        let traits = super::operator_traits();
+        for name in [
+            "Index",
+            "IndexMut",
+            "Add",
+            "ShrAssign",
+            "Neg",
+            "Deref",
+            "DerefMut",
+        ] {
+            assert!(
+                traits.iter().any(|known| known == name),
+                "{name} is imported"
+            );
+        }
+        for name in ["Try", "Coroutine", "CoerceUnsized"] {
+            assert!(
+                traits.iter().all(|known| known != name),
+                "{name} is unstable"
+            );
+        }
+    }
 
     /// rawr writes the runner's harness and Cargo writes its lock, so a lock
     /// rawr can't read back is a rawr bug: it panics naming the invariant,

@@ -99,7 +99,7 @@ impl Kind {
     /// The std trait the capability is, by definition: `core::fmt::Debug`
     /// for `Debug`. `None` for `Send` and `Static`, which no impl states,
     /// and `Iterator`, which is never derived.
-    const fn std_trait(self) -> Option<&'static str> {
+    pub(crate) const fn std_trait(self) -> Option<&'static str> {
         match self {
             Self::Default => Some("core::default::Default"),
             Self::Debug => Some("core::fmt::Debug"),

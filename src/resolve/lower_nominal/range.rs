@@ -355,27 +355,15 @@ impl Parser<'_> {
         .then_some(element)
     }
 
-    /// What a range type provides, as std derives and implements it for
-    /// each range struct: `None` for another type.
+    /// What a range type provides beside std's impls of std's traits for
+    /// it: an iterator where its element steps, no error, and rawr's facts
+    /// as its element has them. `None` for another type.
     pub(super) fn range_provides(&self, ty: &Ty, capability: capability::Kind) -> Option<bool> {
-        let (kind, element) = parts(ty)?;
-        let element_provides = || self.type_provides(&element, capability);
+        let (_, element) = parts(ty)?;
         Some(match capability {
             capability::Kind::Iterator => self.stepped_item(ty).is_some(),
-            capability::Kind::Copy => {
-                matches!(kind, Kind::To | Kind::ToInclusive | Kind::Full) && element_provides()
-            }
-            capability::Kind::Default => {
-                matches!(kind, Kind::Range | Kind::Full) && element_provides()
-            }
-            capability::Kind::PartialOrd | capability::Kind::Ord | capability::Kind::Error => false,
-            capability::Kind::Clone
-            | capability::Kind::Debug
-            | capability::Kind::PartialEq
-            | capability::Kind::Eq
-            | capability::Kind::Hash
-            | capability::Kind::Send
-            | capability::Kind::Static => element_provides(),
+            capability::Kind::Error => false,
+            capability => self.type_provides(&element, capability),
         })
     }
 }
