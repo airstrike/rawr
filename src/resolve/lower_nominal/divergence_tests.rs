@@ -6848,6 +6848,59 @@ main();
 }
 
 #[test]
+fn a_default_body_no_impl_receives_is_borrow_checked_at_its_trait() {
+    // rustc checks a default body once, with `Self` a parameter its trait
+    // bounds, whether or not an impl receives it (#191).
+    let twice = |body: &str| {
+        refused(&format!(
+            r#"
+trait T {{
+    fn get(&mut self) -> &mut Vec<i32>;
+    fn step(self) -> Self where Self: Sized;
+    fn both(&mut self) {{ {body} }}
+}}
+fn main() {{ println!("hi"); }}
+main();
+"#
+        ))
+    };
+    let report = twice("let a = self.get(); let b = self.get(); a.push(1); b.push(2);");
+    assert!(
+        report
+            .starts_with("error[E0499]: cannot borrow `*self` as mutable more than once at a time"),
+        "{report}"
+    );
+    let report =
+        twice("let mut v = vec![1]; let a = &mut v; let b = &mut v; a.push(1); b.push(2);");
+    assert!(
+        report.starts_with("error[E0499]: cannot borrow `v` as mutable more than once at a time"),
+        "{report}"
+    );
+    // Bodies rustc accepts still run.
+    let output = printed(
+        r#"
+trait Pair: Copy {
+    fn left(self) -> i32;
+    fn both(self) -> (i32, i32) { let a = self.left(); let b = self.left(); (a, b) }
+}
+trait Holder {
+    fn slot(&mut self) -> &mut i32;
+    fn view(&self) -> &i32;
+    fn bump(&mut self) -> i32 { *self.slot() += 1; let s = self.slot(); *s += 1; *self.view() }
+    fn read(&self) -> i32 { let a = self.view(); let b = self.view(); *a + *b }
+}
+trait Builder: Sized {
+    fn step(self) -> Self;
+    fn twice(self) -> Self { let once = self.step(); once.step() }
+}
+fn main() { println!("ok"); }
+main();
+"#,
+    );
+    assert_eq!(output, "ok\n");
+}
+
+#[test]
 fn a_closure_that_changes_self_reaches_self_where_it_is_kept() {
     // A closure kept in a local, called later or nested, changes the
     // receiver's fields where they are, as rustc's capture of them
