@@ -1696,8 +1696,17 @@ impl<'a> Parser<'a> {
     /// A generic argument: a type, or a const argument's value as
     /// `Ty::Const` (`4`, `-1`, `'a'`, `{ 0 + 1 + 1 }`, a `const`'s name),
     /// which rustc evaluates while it compiles. `N` and `{ N }` of a const
-    /// parameter are the parameter, as a type parameter is.
+    /// parameter are the parameter, as a type parameter is. A path whose
+    /// head is an outside crate holds that head for its own segments alone:
+    /// its generic arguments read names as their scope binds them (#1962).
     pub(super) fn parse_local_argument(&mut self) -> Result<Ty, Error> {
+        let head = self.models.global_head.take();
+        let argument = self.local_argument();
+        self.models.global_head = head;
+        argument
+    }
+
+    fn local_argument(&mut self) -> Result<Ty, Error> {
         let start = self.position();
         let mut tokens = Vec::new();
         match self.peek() {

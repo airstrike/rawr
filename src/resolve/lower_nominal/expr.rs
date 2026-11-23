@@ -242,9 +242,15 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse an expression, on a stack grown when it runs low: Rust limits
-    /// no expression's nesting, so the native stack mustn't (#962).
+    /// no expression's nesting, so the native stack mustn't (#962). A path
+    /// whose head is an outside crate holds that head for its own segments
+    /// alone: an expression inside it, as its call's argument, reads names
+    /// as their scope binds them (#1962).
     pub(super) fn parse_expr(&mut self) -> Result<ParsedExpr, Error> {
-        crate::eval::stack::with_room(|| self.parse_expr_in(false))
+        let head = self.models.global_head.take();
+        let value = crate::eval::stack::with_room(|| self.parse_expr_in(false));
+        self.models.global_head = head;
+        value
     }
 
     pub(super) fn peek_block_like(&mut self) -> bool {
