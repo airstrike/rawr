@@ -13933,3 +13933,190 @@ main();
     .join("\n");
     assert!(report.starts_with(&expected), "{report}");
 }
+
+#[test]
+fn an_impl_for_a_reference_is_an_impl_of_its_own_self_type() {
+    // `impl Describe for &Point` beside `Point`'s is the impl rustc
+    // selects for `&Point`: a method call by its probe's order, a path
+    // call, a generic instance and a trait object each take the one for
+    // their Self type (#381). The output is rustc's.
+    let output = printed(
+        r#"
+#[derive(Clone, Copy)]
+struct Point { x: i32, y: i32 }
+trait Describe { fn describe(&self) -> String; }
+impl Describe for Point { fn describe(&self) -> String { format!("point {} {}", self.x, self.y) } }
+impl Describe for &Point { fn describe(&self) -> String { format!("ref to {}", (**self).describe()) } }
+impl Describe for &mut Point { fn describe(&self) -> String { format!("mut ref to {}", (**self).describe()) } }
+fn show<T: Describe>(t: T) -> String { t.describe() }
+fn show_ref<T: Describe + ?Sized>(t: &T) -> String { t.describe() }
+fn main() {
+    let mut p = Point { x: 1, y: 2 };
+    let r = &p;
+    println!("{} | {} | {} | {}", p.describe(), r.describe(), (&p).describe(), (&&p).describe());
+    println!("{} | {} | {} | {}", show(p), show(&p), show_ref(&p), show_ref(&&p));
+    println!("{} | {}", <&Point as Describe>::describe(&r), Describe::describe(&r));
+    let d: &dyn Describe = &r;
+    println!("{}", d.describe());
+    let ds: Vec<Box<dyn Describe>> = vec![Box::new(p), Box::new(&p)];
+    for d in &ds { println!("{}", d.describe()); }
+    drop(ds);
+    let m = &mut p;
+    println!("{}", m.describe());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "point 1 2 | point 1 2 | point 1 2 | ref to point 1 2\n\
+         point 1 2 | ref to point 1 2 | point 1 2 | ref to point 1 2\n\
+         ref to point 1 2 | ref to point 1 2\n\
+         ref to point 1 2\n\
+         point 1 2\n\
+         ref to point 1 2\n\
+         mut ref to point 1 2\n"
+    );
+    // An impl for `&Point` alone, one taking `self`, and an associated
+    // type of each Self type's own.
+    let output = printed(
+        r#"
+struct Point { x: i32 }
+trait Describe { fn describe(&self) -> String; }
+impl Describe for &Point { fn describe(&self) -> String { format!("only ref {}", self.x) } }
+trait Consume { fn consume(self) -> i32; }
+impl Consume for &Point { fn consume(self) -> i32 { self.x * 10 } }
+impl Consume for Point { fn consume(self) -> i32 { self.x * 100 } }
+trait Out { type O; fn out(&self) -> Self::O; }
+impl Out for Point { type O = i32; fn out(&self) -> i32 { self.x } }
+impl Out for &Point { type O = String; fn out(&self) -> String { format!("s{}", self.x) } }
+fn main() {
+    let p = Point { x: 3 };
+    let r = &p;
+    println!("{} {} {} {}", (&p).describe(), r.consume(), (&p).consume(), Point { x: 4 }.consume());
+    let a: i32 = p.out();
+    let b: <&Point as Out>::O = (&&p).out();
+    println!("{} {}", a + 1, b);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "only ref 3 30 30 400\n4 s3\n");
+    // `Point` itself has no impl of `&Point`'s: rustc's E0277 and E0599.
+    let head = "struct Point { x: i32 }\ntrait Describe { fn describe(&self) -> i32; }\n\
+                impl Describe for &Point { fn describe(&self) -> i32 { self.x } }\n\
+                fn show<T: Describe>(t: T) -> i32 { t.describe() }\n";
+    for (body, report) in [
+        (
+            "let p = Point { x: 3 }; show(p);",
+            "error[E0277]: the trait bound `Point: Describe` is not satisfied",
+        ),
+        (
+            "let p = Point { x: 3 }; p.describe();",
+            "error[E0599]: no method named `describe` found for struct `Point` in the current scope",
+        ),
+    ] {
+        let refused = refused(&format!("{head}fn main() {{ {body} }}\nmain();\n"));
+        assert!(refused.starts_with(report), "{body}\n{refused}");
+    }
+}
+
+#[test]
+fn std_reads_a_byte_slice_through_its_impl_of_read() {
+    // std's `impl io::Read for &[u8]`, read from std's source: a generic
+    // `R: Read` over a `&[u8]`, and the slice's own `read`, `read_exact`
+    // and `read_to_string`, each advance the slice as rustc's build does
+    // (#381).
+    let output = printed(
+        r#"
+use std::io::Read;
+fn take_all<R: Read>(mut r: R) -> Vec<u8> {
+    let mut out = Vec::new();
+    r.read_to_end(&mut out).unwrap();
+    out
+}
+fn first<R: Read>(r: &mut R) -> (usize, [u8; 2]) {
+    let mut buf = [0u8; 2];
+    let n = r.read(&mut buf).unwrap();
+    (n, buf)
+}
+fn main() {
+    let data: &[u8] = b"hello";
+    println!("{:?}", take_all(data));
+    let mut rest: &[u8] = b"abc";
+    println!("{:?} {:?}", first(&mut rest), rest);
+    println!("{:?} {:?}", first(&mut rest), rest);
+    println!("{:?} {:?}", first(&mut rest), rest);
+    let mut s = String::new();
+    let mut text: &[u8] = b"xyz";
+    text.read_to_string(&mut s).unwrap();
+    println!("{s} {}", text.len());
+    let mut exact = [0u8; 3];
+    let mut src: &[u8] = b"12345";
+    src.read_exact(&mut exact).unwrap();
+    println!("{:?} {:?}", exact, src);
+    println!("{:?} {:?} {:?}", src.read_exact(&mut exact).map_err(|e| e.kind()), exact, src);
+    let mut buf = [0u8; 2];
+    let mut more: &[u8] = b"789";
+    let n = <&[u8] as Read>::read(&mut more, &mut buf).unwrap();
+    println!("{} {:?} {:?}", n, buf, more);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[104, 101, 108, 108, 111]\n(2, [97, 98]) [99]\n(1, [99, 0]) []\n(0, [0, 0]) []\n\
+         xyz 0\n[49, 50, 51] [52, 53]\nErr(UnexpectedEof) [49, 50, 51] []\n2 [55, 56] [57]\n"
+    );
+}
+
+#[test]
+fn as_deref_mut_runs_a_programs_deref_mut_on_the_payload_where_it_is() {
+    // `o.as_deref_mut()` of an `Option<W>` whose `W` has the program's
+    // `DerefMut` calls `deref_mut` once on the payload in `o`, so a push
+    // through what it gives changes `o`; `None` gives `None`. Using `o`
+    // while the result lives is rustc's E0502, and an immutable `o` its
+    // E0596 (#816). The output and the reports are rustc's.
+    let head = r#"
+use std::ops::{Deref, DerefMut};
+#[derive(Debug)]
+struct W(Vec<i64>);
+impl Deref for W { type Target = Vec<i64>; fn deref(&self) -> &Vec<i64> { &self.0 } }
+impl DerefMut for W { fn deref_mut(&mut self) -> &mut Vec<i64> { println!("deref_mut"); &mut self.0 } }
+"#;
+    let output = printed(&format!(
+        "{head}{}",
+        r#"
+fn main() {
+    let mut o = Some(W(vec![1]));
+    if let Some(v) = o.as_deref_mut() { v.push(3); }
+    println!("{:?}", o);
+    let mut n: Option<W> = None;
+    println!("{:?}", n.as_deref_mut());
+    let v: Option<&mut Vec<i64>> = o.as_deref_mut();
+    v.unwrap().push(4);
+    println!("{:?} {:?}", o.as_deref(), o.as_ref().map(|w| w.len()));
+}
+main();
+"#
+    ));
+    assert_eq!(
+        output,
+        "deref_mut\nSome(W([1, 3]))\nNone\nderef_mut\nSome([1, 3, 4]) Some(3)\n"
+    );
+    for (body, report) in [
+        (
+            "let mut o = Some(W(vec![])); let v = o.as_deref_mut(); o.is_some(); \
+             v.unwrap().push(1);",
+            "error[E0502]: cannot borrow `o` as immutable because it is also borrowed as mutable",
+        ),
+        (
+            "let o = Some(W(vec![])); o.as_deref_mut();",
+            "error[E0596]: cannot borrow `o` as mutable, as it is not declared as mutable",
+        ),
+    ] {
+        let refused = refused(&format!("{head}fn main() {{ {body} }}\nmain();\n"));
+        assert!(refused.starts_with(report), "{body}\n{refused}");
+    }
+}

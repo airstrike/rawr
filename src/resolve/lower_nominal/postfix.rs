@@ -2296,7 +2296,9 @@ impl<'a> Parser<'a> {
         let self_typed =
             match self.self_typed_method(owner, &member, Some(&value.ty), member_span)? {
                 Some(inherent) => Some(inherent),
-                None => self.self_typed_function(owner, &member, &value.ty),
+                None => self
+                    .probed_reference_function(owner, &member, &value.ty)
+                    .or_else(|| self.self_typed_function(owner, &member, &value.ty)),
             };
         // Two impls of one generic trait: the call's trait arguments
         // pick one, by inference.
@@ -2329,7 +2331,12 @@ impl<'a> Parser<'a> {
         let spliced = None;
         let found = match (spliced, self_typed) {
             (Some(definition), _) | (None, Some(definition)) => Some(definition),
-            (None, None) => self.probed_method(owner, &member, &value.ty),
+            // An impl for a reference the probe above passes by is no
+            // method of the receiver's (`p.describe()` of `impl Describe
+            // for &Point` alone).
+            (None, None) => self
+                .probed_method(owner, &member, &value.ty)
+                .filter(|definition| definition.reference_self().is_none()),
         };
         // Blanket impls of two traits that give one name: the one whose
         // where-clauses hold for the receiver, as rustc's probe takes it.

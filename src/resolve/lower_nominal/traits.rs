@@ -746,20 +746,101 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|definition| impl_self_ty(definition, &BTreeMap::new()).name(&self.models))
             .collect::<BTreeSet<_>>();
-        if selves.len() < 2 {
+        if selves.len() < 2 && !for_references(&definitions) {
             return None;
         }
         self.fitting_impl(definitions, self_ty)
     }
 
-    /// The one of `definitions` whose impl's Self type is `self_ty`'s
-    /// (through its references), as rustc selects it.
+    /// The trait function `member` of `owner` that a method call on a
+    /// receiver of type `receiver` reaches, where one of its impls is for a
+    /// reference (`impl Describe for &Point` beside `Point`'s), as rustc's
+    /// probe finds it: each type of the receiver's autoderef in turn, by
+    /// value, then borrowed, then mutably borrowed, is the method's
+    /// receiver type of the first impl that takes it. `None` where no impl
+    /// is for a reference, which `self_typed_function` selects among, or
+    /// where none takes the receiver.
+    pub(super) fn probed_reference_function(
+        &mut self,
+        owner: type_def::Id,
+        member: &str,
+        receiver: &Ty,
+    ) -> Option<method::Definition> {
+        let definitions = self
+            .models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .clone();
+        if !for_references(&definitions) {
+            return None;
+        }
+        let mut step = self.inference.resolve(receiver);
+        loop {
+            let borrowed = |mutable| Ty::Reference {
+                mutable,
+                target: Box::new(step.clone()),
+            };
+            for adjusted in [step.clone(), borrowed(false), borrowed(true)] {
+                let fitting = definitions
+                    .iter()
+                    .filter(|definition| self.takes_receiver(definition, &adjusted))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                match &fitting[..] {
+                    [] => continue,
+                    [definition] => return Some(definition.clone()),
+                    // `Foo { value: 1 }` of `Foo<i32>` and `Foo<i64>`.
+                    _ => {
+                        let fallback = super::generics::substitute(&adjusted, &literal_fallback);
+                        let mut fitting = fitting
+                            .into_iter()
+                            .filter(|definition| self.takes_receiver(definition, &fallback));
+                        return match (fitting.next(), fitting.next()) {
+                            (Some(definition), None) => Some(definition),
+                            _ => None,
+                        };
+                    }
+                }
+            }
+            step = match step {
+                Ty::Reference { target, .. } | Ty::Boxed(target) => self.inference.resolve(&target),
+                _ => return None,
+            };
+        }
+    }
+
+    /// Whether `definition`'s method, of its impl at any of its
+    /// parameters, takes a receiver of type `receiver`: `&Self` of `&self`.
+    fn takes_receiver(&mut self, definition: &method::Definition, receiver: &Ty) -> bool {
+        let probe = definition
+            .generics()
+            .iter()
+            .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+            .collect();
+        let self_ty = impl_self_ty(definition, &probe);
+        let takes = match definition.receiver() {
+            Some(crate::receiver::Mode::Shared) => Ty::Reference {
+                mutable: false,
+                target: Box::new(self_ty),
+            },
+            Some(crate::receiver::Mode::Mutable) => Ty::Reference {
+                mutable: true,
+                target: Box::new(self_ty),
+            },
+            Some(crate::receiver::Mode::Owned) | None => self_ty,
+        };
+        self.unifies(&takes, receiver)
+    }
+
+    /// The one of `definitions` whose impl's Self type is `self_ty`'s, as
+    /// rustc selects it: through its references, unless one of them is
+    /// for a reference.
     pub(super) fn fitting_impl(
         &mut self,
         definitions: Vec<method::Definition>,
         self_ty: &Ty,
     ) -> Option<method::Definition> {
-        let self_ty = self.unreferenced(self_ty);
+        let self_ty = self.impl_self_of(&definitions, self_ty);
         let fitting = self.fitting_impls(definitions, &self_ty);
         if let [definition] = &fitting[..] {
             return Some(definition.clone());
@@ -812,6 +893,16 @@ impl<'a> Parser<'a> {
                 note: None,
                 reference: Span::new(member_span.start(), text_end(member_span.start(), member)),
             }),
+        }
+    }
+
+    /// The Self type of `definitions`' impls that `ty` is: `ty` through
+    /// its references, unless one of them is for a reference.
+    pub(super) fn impl_self_of(&self, definitions: &[method::Definition], ty: &Ty) -> Ty {
+        if for_references(definitions) {
+            self.inference.resolve(ty)
+        } else {
+            self.unreferenced(ty)
         }
     }
 
@@ -1413,6 +1504,9 @@ impl<'a> Parser<'a> {
             // has its other bounds.
             Ty::Reference { mutable, target } => {
                 let target = self.inference.resolve(target);
+                if self.reference_impl_holds(trait_name, &target, *mutable) {
+                    return true;
+                }
                 self.models
                     .traits
                     .get(trait_name)
@@ -2315,4 +2409,13 @@ pub(super) struct Assigned<'a> {
     pub(super) name: &'a crate::item::Name,
     pub(super) ty: &'a Ty,
     pub(super) written: Span,
+}
+
+/// Whether one of `definitions` is of an impl for a reference (`impl
+/// Describe for &Point`), whose Self type its referent's references don't
+/// reach through.
+pub(super) fn for_references(definitions: &[method::Definition]) -> bool {
+    definitions
+        .iter()
+        .any(|definition| definition.reference_self().is_some())
 }

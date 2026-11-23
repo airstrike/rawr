@@ -1471,11 +1471,19 @@ impl<'a> Parser<'a> {
         if let Some(receiver) = receiver
             && (!definition.owner_arguments().is_empty() || blanket)
         {
-            let receiver = match self.inference.resolve(receiver) {
-                Ty::Reference { target, .. } => *target,
-                ty => ty,
-            };
             let owner = impl_self_ty(definition, &substitution);
+            let mut receiver = self.inference.resolve(receiver);
+            // An impl for a reference (`impl Take for &[u8]`) is for the
+            // step of the receiver's autoderef its Self type is.
+            if definition.reference_self().is_some() {
+                while !self.unifies(&owner, &receiver)
+                    && let Ty::Reference { target, .. } = &receiver
+                {
+                    receiver = self.inference.resolve(target);
+                }
+            } else if let Ty::Reference { target, .. } = receiver {
+                receiver = *target;
+            }
             self.require_type(&owner, &receiver, call)?;
         }
         // `v.by_name::<String>(..)`: the method's own parameters take its

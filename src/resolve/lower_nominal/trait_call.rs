@@ -88,7 +88,7 @@ impl<'a> Parser<'a> {
         // `f32::unit()` beside `f64::unit()`: one runtime type, so the impl
         // is the Self type's, selected here.
         let resolved = self.inference.resolve(&self_ty);
-        if let Some(definition) = owner_id(&resolved)
+        if let Some(definition) = owner_id(&self.unreferenced(&resolved))
             .and_then(|owner| self.self_typed_function(owner, &function.name.text, &resolved))
         {
             let source = origin::Fragment::call(
@@ -849,8 +849,13 @@ impl<'a> Parser<'a> {
     fn parse_self_typed_receiver(&mut self, self_ty: &Ty) -> Result<(ParsedExpr, Ty), Error> {
         let value = self.parse_primary()?;
         let mut actual = self.inference.resolve(&value.ty);
-        while let Ty::Reference { target, .. } = actual {
-            actual = self.inference.resolve(&target);
+        // `<&[u8] as Read>::read(&mut s, ..)` keeps the reference the
+        // written `Self` is.
+        let referenced = matches!(self.inference.resolve(self_ty), Ty::Reference { .. });
+        while let Ty::Reference { target, .. } = &actual
+            && !(referenced && self.unifies(self_ty, &actual))
+        {
+            actual = self.inference.resolve(target);
         }
         self.require_type(self_ty, &actual, value.span)?;
         Ok((value, actual))
@@ -1542,8 +1547,7 @@ impl<'a> Parser<'a> {
         // `Foo<i32>`'s and `Foo<i64>`'s, or `Show::show(&w)` of a generic
         // impl's: the impl rustc selects by the full Self type, at its
         // arguments, which the runtime type can't tell.
-        let resolved = self.unreferenced(&self_ty);
-        let selected = owner_id(&resolved)
+        let selected = owner_id(&self.unreferenced(&self_ty))
             .filter(|owner| {
                 owner.builtin_code() != Some(crate::resolve::BLANKET_OWNER)
                     && trait_arguments.is_empty()
@@ -1556,10 +1560,11 @@ impl<'a> Parser<'a> {
                     .iter()
                     .filter(|definition| definition.trait_name() == Some(trait_name))
                     .cloned()
-                    .collect();
-                self.fitting_impl(definitions, &resolved)
+                    .collect::<Vec<_>>();
+                let resolved = self.impl_self_of(&definitions, &self_ty);
+                Some((self.fitting_impl(definitions, &resolved)?, resolved))
             });
-        let dispatcher = if let Some(definition) = selected {
+        let dispatcher = if let Some((definition, resolved)) = selected {
             let substitution = definition
                 .generics()
                 .iter()

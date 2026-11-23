@@ -158,6 +158,11 @@ pub(super) struct Tables {
     /// arguments, by trait and owner: `T: Debug` of `impl<T: Debug> Summary
     /// for Wrapper<T>`.
     pub(super) impl_bounds: BTreeMap<(ImmutableString, type_def::Id), Vec<obligation::Impl>>,
+    /// The bounds each `impl Trait for &Owner<..>` (or, `true`, `&mut
+    /// Owner<..>`) asks of the owner's arguments, by trait, owner and
+    /// mutability: an impl of the reference's own, apart from `Owner`'s.
+    pub(super) reference_impls:
+        BTreeMap<(ImmutableString, type_def::Id, bool), Vec<obligation::Impl>>,
     /// The distinct argument lists without parameters of each generic
     /// trait's impls: one dispatcher per instance.
     pub(super) trait_instances: BTreeMap<ImmutableString, Vec<Box<[type_ref::Type]>>>,
@@ -322,7 +327,9 @@ impl Models {
         let mut impls = BTreeSet::new();
         for method in program.methods.iter().chain(&program.builtin_methods) {
             if let Some(trait_name) = method.trait_name() {
-                impls.insert((trait_name.clone(), method.owner()));
+                if method.reference_self().is_none() {
+                    impls.insert((trait_name.clone(), method.owner()));
+                }
                 trait_methods
                     .entry((method.owner(), method.name().into()))
                     .or_default()
@@ -716,25 +723,33 @@ impl Models {
         let mut associated = AssociatedTypes::default();
         let mut impl_arguments = BTreeMap::<(ImmutableString, type_def::Id), ImplArguments>::new();
         let mut impl_bounds = BTreeMap::<_, Vec<obligation::Impl>>::new();
+        let mut reference_impls = BTreeMap::<_, Vec<obligation::Impl>>::new();
         let mut trait_instances = BTreeMap::<ImmutableString, Vec<Box<[type_ref::Type]>>>::new();
         for shell in program.items.iter() {
             let item::Kind::Impl(implementation) = &shell.kind else {
                 continue;
             };
-            let (
-                Some(item::TraitImpl::User {
-                    name,
-                    arguments: trait_arguments,
-                }),
-                type_ref::Type::Path(owner),
-            ) = (&implementation.trait_, &implementation.owner)
+            let Some(item::TraitImpl::User {
+                name,
+                arguments: trait_arguments,
+            }) = &implementation.trait_
             else {
+                continue;
+            };
+            // `impl Describe for &Point` is `Point`'s impl for `&Point`.
+            let (reference, referent) = match &implementation.owner {
+                type_ref::Type::Reference {
+                    mutable, target, ..
+                } => (Some(*mutable), &**target),
+                owner => (None, owner),
+            };
+            let type_ref::Type::Path(owner) = referent else {
                 continue;
             };
             // An impl for a builtin type is keyed by its witness.
             let definition = &match &owner.target {
                 type_ref::Target::Script { definition, .. } => *definition,
-                _ => match crate::resolve::builtin_owner(&implementation.owner) {
+                _ => match crate::resolve::builtin_owner(referent) {
                     Some((code, _)) => type_def::Id::builtin(code),
                     None => continue,
                 },
@@ -754,6 +769,38 @@ impl Models {
                     type_ref::Argument::Lifetime(_) => None,
                 })
                 .collect();
+            if let Some(mutable) = reference {
+                let written: Box<[type_ref::Type]> = owner
+                    .arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        type_ref::Argument::Type(ty) => Some(ty.clone()),
+                        type_ref::Argument::Lifetime(_) => None,
+                    })
+                    .collect();
+                for (assoc, ty) in &implementation.associated {
+                    let key = (*definition, name.text.clone(), assoc.text.clone(), mutable);
+                    let mut impls = associated
+                        .reference_impls
+                        .remove(&key)
+                        .map(Vec::from)
+                        .unwrap_or_default();
+                    impls.push((ty.clone(), parameters.clone(), written.clone()));
+                    associated
+                        .reference_impls
+                        .insert(key, impls.into_boxed_slice());
+                }
+                reference_impls
+                    .entry((name.text.clone(), *definition, mutable))
+                    .or_default()
+                    .push(obligation::Impl::new(
+                        shell.source,
+                        implementation,
+                        name.span,
+                        parameters,
+                    ));
+                continue;
+            }
             // `impl PartialEq<Feet> for Meters` is no comparison of a
             // `Meters` with itself, which the capability is.
             let at_self = crate::capability::Kind::from_derive(&name.text).is_none()
@@ -1084,6 +1131,7 @@ impl Models {
                 .collect(),
             impl_arguments,
             impl_bounds,
+            reference_impls,
             trait_instances,
             associated: Shared::new(associated),
             std_traits,

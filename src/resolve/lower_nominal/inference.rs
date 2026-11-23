@@ -62,6 +62,11 @@ pub(super) struct AssociatedTypes {
     /// The traits whose impl for `&T` (or, `true`, `&mut T`) forwards to
     /// `T`'s (`resolve::forward`): `<&T as For>::Fore` is `T`'s.
     pub(super) reference_forwards: BTreeSet<(ImmutableString, bool)>,
+    /// `type Name = T;` of each impl for a reference to an owner (`impl
+    /// Out for &Point`), by owner, trait, name and mutability (`true` of
+    /// `&mut Point`), as `impls` has the owner's own.
+    pub(super) reference_impls:
+        BTreeMap<(type_def::Id, ImmutableString, ImmutableString, bool), Box<[AssociatedType]>>,
     /// Each trait's associated types bounded by `Iterator` with no `Item =`,
     /// by trait and name: `type Fore: Iterator;`, whose item is the opaque
     /// `<T::Fore as Iterator>::Item`.
@@ -448,6 +453,44 @@ impl Inference {
             .then_some(*last)
     }
 
+    /// `<&target as trait_name>::name` (or `&mut`, `mutable`) of the
+    /// program's impl for that reference, at `target`'s arguments.
+    fn reference_projection(
+        &self,
+        target: &Ty,
+        mutable: bool,
+        trait_name: &ImmutableString,
+        name: &ImmutableString,
+    ) -> Option<Ty> {
+        let target = self.resolve(target);
+        let id = super::owner_id(&target)?;
+        let arguments = match &target {
+            Ty::Script(_, arguments) => &arguments[..],
+            _ => &[],
+        };
+        let mut named = self
+            .associated
+            .reference_impls
+            .iter()
+            .filter(|((owner, bound, item, by_mut), _)| {
+                *owner == id
+                    && item == name
+                    && *by_mut == mutable
+                    && (trait_name.is_empty() || bound == trait_name)
+            })
+            .map(|(_, impls)| impls);
+        let (Some(impls), None) = (named.next(), named.next()) else {
+            return None;
+        };
+        let (ty, parameters, _) = self.instance_impl(impls, arguments)?;
+        let substitution = parameters
+            .iter()
+            .zip(arguments)
+            .filter_map(|(parameter, argument)| Some((parameter.clone()?, self.resolve(argument))))
+            .collect();
+        Some(self.resolve(&instantiate(&Ty::from_resolved(ty), &substitution)))
+    }
+
     /// `base::name`: the impl's associated type once `base` is a known
     /// type, the bound's for a parameter with `T: Trait<name = U>`, else
     /// the opaque projection, as Rust normalises it.
@@ -579,6 +622,12 @@ impl Inference {
                         &substitution,
                     ));
                 }
+            }
+            // `<&Point as Out>::O` of `impl Out for &Point`.
+            Ty::Reference { mutable, target }
+                if let Some(ty) = self.reference_projection(target, *mutable, trait_name, name) =>
+            {
+                return ty;
             }
             // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.
             Ty::Reference { mutable, target }

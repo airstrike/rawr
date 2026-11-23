@@ -523,7 +523,59 @@ const IMPLS: &[(&str, &str)] = &[
     }
 }",
     ),
+    (
+        "std::io::Read",
+        r#"impl {trait} for &[u8] {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let amt = std::cmp::min(buf.len(), self.len());
+        let (a, b) = self.split_at(amt);
+        buf[..amt].copy_from_slice(a);
+        *self = b;
+        Ok(amt)
+    }
+    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        if buf.len() > self.len() {
+            *self = &self[self.len()..];
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "failed to fill whole buffer",
+            ));
+        }
+        let (a, b) = self.split_at(buf.len());
+        buf.copy_from_slice(a);
+        *self = b;
+        Ok(())
+    }
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+        let len = self.len();
+        buf.extend_from_slice(*self);
+        *self = &self[len..];
+        Ok(len)
+    }
+    fn read_to_string(&mut self, buf: &mut String) -> std::io::Result<usize> {
+        let content = String::from_utf8(self.to_vec()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })?;
+        let len = self.len();
+        buf.push_str(&content);
+        *self = &self[len..];
+        Ok(len)
+    }
+}"#,
+    ),
 ];
+
+/// Whether rawr calls the std trait `definition`'s impls as it calls a
+/// program trait's, through the trait's dispatcher: a trait std's own
+/// impls of are read from std's source (`IMPLS`).
+pub(crate) fn runs_impls(definition: &str) -> bool {
+    IMPLS
+        .iter()
+        .any(|(implemented, _)| *implemented == definition)
+}
 
 /// The definition of std's `Hasher`.
 const HASHER: &str = "core::hash::Hasher";

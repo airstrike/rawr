@@ -1105,18 +1105,35 @@ impl<'a> Parser<'a> {
                     .map(|(_, trait_name, _)| trait_name.clone())
                     .collect()
             }
-            // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.
-            Ty::Reference { mutable, target } => self
-                .projection_trait(&target, written.clone(), member, span)
-                .ok()
-                .filter(|trait_name| {
-                    self.models
-                        .associated
-                        .reference_forwards
-                        .contains(&(trait_name.clone(), mutable))
-                })
-                .into_iter()
-                .collect(),
+            // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s,
+            // and `<&Point as Out>::O` of `impl Out for &Point`.
+            Ty::Reference { mutable, target } => {
+                let id = owner_id(&self.inference.resolve(&target));
+                let own = self
+                    .models
+                    .associated
+                    .reference_impls
+                    .keys()
+                    .filter(|(owner, _, name, by_mut)| {
+                        Some(*owner) == id && name == member && *by_mut == mutable
+                    })
+                    .map(|(_, trait_name, ..)| trait_name.clone())
+                    .collect::<Vec<_>>();
+                if own.is_empty() {
+                    self.projection_trait(&target, written.clone(), member, span)
+                        .ok()
+                        .filter(|trait_name| {
+                            self.models
+                                .associated
+                                .reference_forwards
+                                .contains(&(trait_name.clone(), mutable))
+                        })
+                        .into_iter()
+                        .collect()
+                } else {
+                    own
+                }
+            }
             _ => Vec::new(),
         };
         let owner = base.name(&self.models);

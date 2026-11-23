@@ -6,7 +6,9 @@
 //! when each of its items forwards to `T`'s (`<T as For>::f(*self)`,
 //! `type A = <T as For>::A;`). Such an impl is folded into its trait as a
 //! `ReferenceForward`, which the checker reads as "`&T` implements the trait
-//! where `T` does"; any other impl for a reference is an error.
+//! where `T` does"; any other impl for `&T` is an error. An impl for a
+//! reference to a named type (`impl Describe for &Point`) is that Self
+//! type's own, which `resolve_methods` keys apart from the referent's.
 
 use super::item::{self, ReferenceForward};
 use super::{type_ref, Error, LocatedError};
@@ -57,13 +59,18 @@ pub(super) fn fold_reference_impls(items: &mut Vec<item::Shell>) -> Result<(), L
                 },
             )
         };
+        let type_ref::Type::Path(referent) = &**target else {
+            return Err(refuse("to a reference"));
+        };
+        // `impl Describe for &Point` is an impl of its own Self type, which
+        // `resolve_methods` keys apart from `Point`'s.
+        if referent.target != type_ref::Target::Parameter {
+            continue;
+        }
         if !arguments.is_empty() || !declared.generics.is_empty() {
             return Err(refuse("of a generic trait"));
         }
-        let type_ref::Type::Path(referent) = &**target else {
-            return Err(refuse("to a type other than the impl's parameter"));
-        };
-        if referent.target != type_ref::Target::Parameter || !referent.arguments.is_empty() {
+        if !referent.arguments.is_empty() {
             return Err(refuse("to a type other than the impl's parameter"));
         }
         let [generic] = &implementation.generics[..] else {

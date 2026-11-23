@@ -96,6 +96,35 @@ impl Parser<'_> {
             .any(|implementation| self.impl_fails(implementation, arguments).is_none())
     }
 
+    /// Whether the program's impl of `trait_name` for a reference (or,
+    /// `mutable`, a `&mut`) to `target` holds: `impl Describe for &Point`
+    /// of `&Point`, with each bound it writes holding of the argument it
+    /// bounds.
+    pub(super) fn reference_impl_holds(
+        &self,
+        trait_name: &str,
+        target: &Ty,
+        mutable: bool,
+    ) -> bool {
+        let Some(id) = owner_id(target) else {
+            return false;
+        };
+        let Some(impls) = self
+            .models
+            .reference_impls
+            .get(&(trait_name.into(), id, mutable))
+        else {
+            return false;
+        };
+        let arguments = match target {
+            Ty::Script(_, arguments) => &arguments[..],
+            _ => &[],
+        };
+        impls
+            .iter()
+            .any(|implementation| self.impl_fails(implementation, arguments).is_none())
+    }
+
     /// Whether the program writes an impl of `trait_name` for its type
     /// `id` by hand, whose own bounds then decide what it asks.
     pub(super) fn implemented_by_hand(&self, trait_name: &str, id: type_def::Id) -> bool {

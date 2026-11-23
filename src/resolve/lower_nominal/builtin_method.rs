@@ -866,6 +866,9 @@ impl<'a> Parser<'a> {
         let o = self.temporary("option");
         // `o.as_mut().unwrap()`'s place: the payload of `o`'s.
         let mut payload_place = None;
+        // `o.as_mut()` lends `o`'s place, unless the call stores what it
+        // gives instead.
+        let mut lent = true;
         let is = |this: &mut Self| this.prelude_op(PreludeOp::IsSome, [o.as_str().into()]);
         let unwrap = |this: &mut Self| this.prelude_op(PreludeOp::Unwrap, [o.as_str().into()]);
         let mut source = origin::Fragment::plain(format!("{{ let {o} = "));
@@ -1189,9 +1192,34 @@ impl<'a> Parser<'a> {
                     mutable,
                     target: Box::new(self.inference.resolve(&element)),
                 };
-                match self.deref_reference(&reference, false) {
+                let deref = self.deref_reference(&reference, false);
+                let payload = match &deref {
+                    Some((_, std_impl::DerefCall::Program(_))) if mutable => {
+                        self.payload_deref_mut(&value, &element, member_span)?
+                    }
+                    _ => None,
+                };
+                match deref {
                     Some((target, std_impl::DerefCall::Value)) => {
                         source.push_text(o.as_str());
+                        Ty::Option(Box::new(target))
+                    }
+                    // A program's `deref_mut` runs on the payload where it
+                    // is, and its `&mut` is stored in the `Some`.
+                    Some((target, std_impl::DerefCall::Program(_)))
+                        if let Some(payload) = payload =>
+                    {
+                        source.push_text("if ");
+                        let test = is(self);
+                        source.push(test);
+                        source.push_text(" { ");
+                        let some = self.prelude_op(PreludeOp::Some, [payload]);
+                        source.push(some);
+                        source.push_text(" } else { ");
+                        let none = self.prelude_op(PreludeOp::None, []);
+                        source.push(none);
+                        source.push_text(" }");
+                        lent = false;
                         Ty::Option(Box::new(target))
                     }
                     // A program's `deref` runs on the value inside.
@@ -1358,15 +1386,17 @@ impl<'a> Parser<'a> {
             }
             _ => payload_place,
         };
-        if matches!(
-            member.as_str(),
-            "as_mut"
-                | "as_deref_mut"
-                | "insert"
-                | "get_or_insert"
-                | "get_or_insert_with"
-                | "get_or_insert_default"
-        ) {
+        if lent
+            && matches!(
+                member.as_str(),
+                "as_mut"
+                    | "as_deref_mut"
+                    | "insert"
+                    | "get_or_insert"
+                    | "get_or_insert_with"
+                    | "get_or_insert_default"
+            )
+        {
             self.lend_place(&value, expression);
         }
         let mut parsed = self.operator_expr(source, ty, expression);
@@ -1413,6 +1443,60 @@ impl<'a> Parser<'a> {
             Lvalue::Slice(_) => return None,
             lvalue => lvalue::nested_step(lvalue, step, element.clone()),
         })
+    }
+
+    /// `o.as_deref_mut()`'s payload, of the place `value` of an
+    /// `Option<element>` whose type has the program's `DerefMut`: the
+    /// reference its `deref_mut` gives, called on the payload where it is,
+    /// as a `&mut` stored in a value is (`store_borrow`). `None` for a
+    /// value that is no place, or a type without `DerefMut`.
+    fn payload_deref_mut(
+        &mut self,
+        value: &ParsedExpr,
+        element: &Ty,
+        member_span: Span,
+    ) -> Result<Option<origin::Fragment>, Error> {
+        let Some(lvalue) = value
+            .lvalue
+            .as_ref()
+            .filter(|lvalue| !matches!(lvalue, Lvalue::Slice(_)))
+        else {
+            return Ok(None);
+        };
+        let element = self.inference.resolve(element);
+        let Ty::Script(id, _) = element else {
+            return Ok(None);
+        };
+        if !matches!(
+            self.deref_target(&element, true),
+            Some((_, std_impl::DerefCall::Program(_)))
+        ) {
+            return Ok(None);
+        }
+        // An option's `Some` value is the step `0` of a place's path.
+        let step = PlaceStep::Path {
+            path: "0".into(),
+            call: None,
+        };
+        let place = places::place_step(lvalue, step, element.clone());
+        let read = self.prelude_op(PreludeOp::Unwrap, [value.rendered_source()]);
+        let mut payload = self.operator_expr(read, element, value.span);
+        payload.lvalue = Some(place);
+        let name = self.models.definition(id).name().into();
+        let called = self.call_owner_method(
+            payload,
+            id,
+            name,
+            &"deref_mut".into(),
+            member_span,
+            Vec::new(),
+            member_span.end(),
+        )?;
+        let Ok(mut dereferenced) = called else {
+            unreachable!("`DerefMut` has `deref_mut`");
+        };
+        self.store_borrow(&mut dereferenced)?;
+        Ok(Some(dereferenced.rendered_source()))
     }
 
     /// `b.then_some(v)` (`v` evaluated eagerly, as Rust does) and

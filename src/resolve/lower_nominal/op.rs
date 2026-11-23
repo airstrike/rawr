@@ -1859,7 +1859,10 @@ pub(super) fn impl_self_ty(
     definition: &method::Definition,
     substitution: &BTreeMap<ImmutableString, Ty>,
 ) -> Ty {
-    if let Some(owner) = definition.builtin_owner() {
+    if let Some(owner) = definition
+        .builtin_owner()
+        .or_else(|| definition.reference_self())
+    {
         return instantiate(&Ty::from_resolved(owner), substitution);
     }
     Ty::Script(
