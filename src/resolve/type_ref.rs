@@ -1788,6 +1788,111 @@ impl Type {
         }
     }
 
+    /// Each part of this type, an impl's method's output, written where
+    /// `declared`, the trait's, writes an opaque output, with that opaque
+    /// path: what the impl refines the trait's `impl Trait` to, which
+    /// rustc accepts (RFC 3245). Positions the two types don't share are
+    /// left out.
+    pub(crate) fn refinements<'a>(
+        &'a self,
+        declared: &'a Self,
+        found: &mut Vec<(&'a Self, &'a Path)>,
+    ) {
+        match (self, declared) {
+            (_, Self::Path(opaque)) if matches!(opaque.target, Target::Opaque(Some(_))) => {
+                found.push((self, opaque));
+            }
+            (
+                Self::Tuple { members, .. },
+                Self::Tuple {
+                    members: declared, ..
+                },
+            ) if members.len() == declared.len() => {
+                for (member, declared) in members.iter().zip(declared.iter()) {
+                    member.refinements(declared, found);
+                }
+            }
+            (
+                Self::Reference { target, .. },
+                Self::Reference {
+                    target: declared, ..
+                },
+            ) => target.refinements(declared, found),
+            (Self::Path(path), Self::Path(declared))
+                if path.name == declared.name
+                    && path.arguments.len() == declared.arguments.len() =>
+            {
+                for (argument, declared) in path.arguments.iter().zip(declared.arguments.iter()) {
+                    if let (Argument::Type(argument), Argument::Type(declared)) =
+                        (argument, declared)
+                    {
+                        argument.refinements(declared, found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// This type with each part [`Self::refinements`] finds written as
+    /// the trait's opaque path, as the trait's signature writes it.
+    pub(crate) fn unrefined(&self, declared: &Self) -> Self {
+        match (self, declared) {
+            (_, Self::Path(opaque)) if matches!(opaque.target, Target::Opaque(Some(_))) => {
+                declared.clone()
+            }
+            (
+                Self::Tuple { members, span },
+                Self::Tuple {
+                    members: declared, ..
+                },
+            ) if members.len() == declared.len() => Self::Tuple {
+                members: members
+                    .iter()
+                    .zip(declared.iter())
+                    .map(|(member, declared)| member.unrefined(declared))
+                    .collect(),
+                span: *span,
+            },
+            (
+                Self::Reference {
+                    mutable,
+                    lifetime,
+                    target,
+                    span,
+                },
+                Self::Reference {
+                    target: declared, ..
+                },
+            ) => Self::Reference {
+                mutable: *mutable,
+                lifetime: *lifetime,
+                target: Box::new(target.unrefined(declared)),
+                span: *span,
+            },
+            (Self::Path(path), Self::Path(declared))
+                if path.name == declared.name
+                    && path.arguments.len() == declared.arguments.len() =>
+            {
+                Self::Path(Path {
+                    arguments: path
+                        .arguments
+                        .iter()
+                        .zip(declared.arguments.iter())
+                        .map(|(argument, declared)| match (argument, declared) {
+                            (Argument::Type(argument), Argument::Type(declared)) => {
+                                Argument::Type(argument.unrefined(declared))
+                            }
+                            (argument, _) => argument.clone(),
+                        })
+                        .collect(),
+                    ..path.clone()
+                })
+            }
+            _ => self.clone(),
+        }
+    }
+
     /// The type as rustc writes it with its lifetimes erased: `&i32` of
     /// `&'a i32`, `S<'_>` of `S<'a>`.
     pub(crate) fn erased(&self) -> String {

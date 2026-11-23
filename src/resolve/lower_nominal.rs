@@ -199,7 +199,9 @@ pub(super) use entry::runtime_entry;
 #[cfg(feature = "rust-import")]
 pub(crate) use entry::with_uses;
 pub(crate) use entry::Output;
-use entry::{expand_imported_variants, trait_objects, use_blocks, Hidden, Lowered, Witnessed};
+use entry::{
+    expand_imported_variants, trait_objects, use_blocks, Filled, Hidden, Lowered, Witnessed,
+};
 use expr::ParsedExpr;
 use format::PANIC_MACROS;
 use from_str::{parse_text, ParseError};
@@ -409,8 +411,9 @@ struct Parser<'a> {
     #[cfg(feature = "rust-import")]
     revealing: Option<Ty>,
     /// The hidden type the body gives each opaque output of its own
-    /// (D1109): the fresh type `return_ty` has in its place.
-    hidden_outputs: BTreeMap<type_ref::Opaque, Ty>,
+    /// (D1109): the fresh type `return_ty` has in its place, with the
+    /// output's type arguments as the body's signature names them.
+    hidden_outputs: BTreeMap<type_ref::Opaque, (Ty, Box<[Ty]>)>,
     loops: Vec<LoopFrame>,
     closures: Vec<closure::Scope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
@@ -1351,6 +1354,9 @@ impl<'a> Parser<'a> {
                 .is_some();
         parser.read_generics(definition.generics());
         parser.define_opaque_outputs(definition.output());
+        if let Some(trait_name) = definition.trait_name() {
+            parser.prove_refinements(trait_name, definition.name(), definition.output());
+        }
         parser.constants = const_generics(definition.generics());
         parser.assumed = assumed_generics(definition.generics());
         parser.opaque = definition.opaque().clone();
