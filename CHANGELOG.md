@@ -6,6 +6,18 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.22 (2026-11-22)
+
+- A trait's method can return `impl Trait`. Each impl's method gives its own opaque type, as in rustc, so a generic call on the result dispatches on that impl's hidden type. That holds in generic bodies and for a provided method each impl keeps. An impl may refine the output to its own type, which its callers then see, and a type that doesn't meet the trait's bounds is rustc's E0277. A trait with such a method is no `dyn` type (E0038). (#2680)
+- A function's `impl Trait` of a crate's trait that names its associated types, as `impl Staged<State = u32, Note = String>`, fixes the body's: a literal there takes the bound's type and an empty `Vec` its element, as in rustc. Two functions' results are two types, so assigning one where the other was is rustc's E0308, and a method of the result is the trait's wherever the value is passed or kept. (#2106)
+- A `&mut` of a std iterator field steps the field where it is: `for x in &mut self.it`, `self.it.by_ref()`, `f(&mut s.it)` for a generic `&mut I`, and a chain kept from `(&mut self.it)`. (#2500)
+- A declared std io trait no longer reroutes a std receiver's own method: `Cursor::read_to_string` and `Stdout`'s `write_all` and `flush` run std's own beside a program's `impl Read` or `impl Write` and `dyn` of them. (#1286)
+- rawr's check now reports rustc's E0597 and E0506 for a borrow held past a `?`, `return`, `break` or `continue`, which ends the locals of the scopes it leaves after their drops. A value whose parts' `Drop` uses some of its borrows keeps only those. (#2689; part of #185)
+- rawr's check now refuses a write, a move or a conflicting borrow of a place that an imported async fn's pending future borrows, with rustc's E0506, E0505 or E0502. (#2690; part of #651)
+- rawr's check now follows a closure that stores its parameter in a capture (`|r| w.push(r)`): each call's argument is stored, as rustc infers it. (#2691; part of #148)
+- A trait object runs the impl its concrete type has: a generic impl's trait method at the value's type arguments, with the witnesses a const or `T: Default`-style parameter takes, and `Foo<i32>`'s impl beside `Foo<i64>`'s through `dyn Trait`, `Box<dyn Trait>`, `&mut dyn Trait` and `dyn Trait<Arg>`. `{}` of a `Buf<3>` with `impl<const N: usize> Display` and `Show::show(&w)` run the instance too. (#2622, #2212)
+- `&dyn Debug` and `&dyn Display` of an f32 write f32 digits, as a box of one does. (#2622)
+
 ## 0.5.21 (2026-11-22)
 
 - `thread_local!` runs as std's: keys where an item goes and in bodies are `LocalKey<T>`, each thread makes its own value at its first access, `with`, `with_borrow`, `with_borrow_mut`, `get`, `set`, `take`, `replace` and `update` run as std defines them, a reload keeps each thread's value while its initializer is unchanged, and a thread's values drop as it ends, the last made first. (#1765)

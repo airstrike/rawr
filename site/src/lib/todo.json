@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-22",
-  "version": "0.5.21",
+  "version": "0.5.22",
   "examples": {
     "running": 55,
     "total": 56,
@@ -11,6 +11,21 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.22",
+        "date": "2026-11-22",
+        "entries": [
+          {"text":"A trait's method can return `impl Trait`. Each impl's method gives its own opaque type, as in rustc, so a generic call on the result dispatches on that impl's hidden type. That holds in generic bodies and for a provided method each impl keeps. An impl may refine the output to its own type, which its callers then see, and a type that doesn't meet the trait's bounds is rustc's E0277. A trait with such a method is no `dyn` type (E0038).","issues":[2680]},
+          {"text":"A function's `impl Trait` of a crate's trait that names its associated types, as `impl Staged<State = u32, Note = String>`, fixes the body's: a literal there takes the bound's type and an empty `Vec` its element, as in rustc. Two functions' results are two types, so assigning one where the other was is rustc's E0308, and a method of the result is the trait's wherever the value is passed or kept.","issues":[2106]},
+          {"text":"A `&mut` of a std iterator field steps the field where it is: `for x in &mut self.it`, `self.it.by_ref()`, `f(&mut s.it)` for a generic `&mut I`, and a chain kept from `(&mut self.it)`.","issues":[2500]},
+          {"text":"A declared std io trait no longer reroutes a std receiver's own method: `Cursor::read_to_string` and `Stdout`'s `write_all` and `flush` run std's own beside a program's `impl Read` or `impl Write` and `dyn` of them.","issues":[1286]},
+          {"text":"rawr's check now reports rustc's E0597 and E0506 for a borrow held past a `?`, `return`, `break` or `continue`, which ends the locals of the scopes it leaves after their drops. A value whose parts' `Drop` uses some of its borrows keeps only those.","issues":[2689],"refs":[185]},
+          {"text":"rawr's check now refuses a write, a move or a conflicting borrow of a place that an imported async fn's pending future borrows, with rustc's E0506, E0505 or E0502.","issues":[2690],"refs":[651]},
+          {"text":"rawr's check now follows a closure that stores its parameter in a capture (`|r| w.push(r)`): each call's argument is stored, as rustc infers it.","issues":[2691],"refs":[148]},
+          {"text":"A trait object runs the impl its concrete type has: a generic impl's trait method at the value's type arguments, with the witnesses a const or `T: Default`-style parameter takes, and `Foo<i32>`'s impl beside `Foo<i64>`'s through `dyn Trait`, `Box<dyn Trait>`, `&mut dyn Trait` and `dyn Trait<Arg>`. `{}` of a `Buf<3>` with `impl<const N: usize> Display` and `Show::show(&w)` run the instance too.","issues":[2622,2212]},
+          {"text":"`&dyn Debug` and `&dyn Display` of an f32 write f32 digits, as a box of one does.","issues":[2622]}
+        ]
+      },
       {
         "version": "0.5.21",
         "date": "2026-11-22",
@@ -5168,7 +5183,7 @@
     {"issue":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1284,"title":"`dyn Any`: coercion and `downcast_ref`/`is`","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":1285,"title":"A literal passed to a trait-object parameter coerces each element","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"open","category":"Divergences from rustc"},
+    {"issue":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
     {"issue":1287,"title":"A non-exhaustive match names integer ranges inside a constructor as `_`, not rustc's ranges","state":"closed","category":"Divergences from rustc","release":"0.5.14"},
     {"issue":1288,"title":"A constant path in a range pattern (`i32::MIN..=-5`) is refused with E0308","state":"closed","category":"Divergences from rustc","release":"0.5.14"},
     {"issue":1289,"title":"A refutable pattern in `let` is RAWR-RESOLVE-UNSUPPORTED-SYNTAX, not rustc's E0005","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -5987,7 +6002,7 @@
     {"issue":2103,"title":"A crate method parameter `impl IntoIterator<Item = &'static str>` is refused as borrowing a type that can't be lent yet","state":"open","category":"Divergences from rustc"},
     {"issue":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open","category":"Divergences from rustc"},
     {"issue":2105,"title":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the…","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
-    {"issue":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open","category":"Divergences from rustc"},
+    {"issue":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
     {"issue":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open","category":"Divergences from rustc"},
     {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"closed","category":"Divergences from rustc"},
     {"issue":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open","category":"Divergences from rustc"},
@@ -6093,7 +6108,7 @@
     {"issue":2209,"title":"A crate function whose return type has no public path can't be called","state":"open","category":"Divergences from rustc"},
     {"issue":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"closed","category":"Divergences from rustc","release":"0.4.0"},
     {"issue":2211,"title":"A qualified path through a crate trait's generic associated type is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open","category":"Divergences from rustc"},
+    {"issue":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
     {"issue":2213,"title":"An array whose length is a const parameter isn't supported","state":"closed","category":"Divergences from rustc","release":"0.4.1"},
     {"issue":2214,"title":"A program's trait impl for an array type (`impl Total for [i32; 3]`) is refused as an inherent impl","state":"closed","category":"Divergences from rustc","release":"0.5.20"},
     {"issue":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
@@ -6381,7 +6396,7 @@
     {"issue":2497,"title":"A `use` that collides with a same-named declaration reports `duplicate item` where rustc reports E0255","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2499,"title":"Hash::hash into a program's Hasher is refused: derive(Hash) and impl Hash bodies don't run","state":"open","category":"Divergences from rustc"},
-    {"issue":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"open","category":"Divergences from rustc"},
+    {"issue":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
     {"issue":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open","category":"Divergences from rustc"},
     {"issue":2502,"title":"A `&mut` moved outside an untyped `let` or a generic parameter is not followed","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2503,"title":"`&mut *self.a` of a `&mut` field is refused as not a place","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
@@ -6503,7 +6518,7 @@
     {"issue":2619,"title":"Option::map_or_else is the not-yet error","state":"open","category":"Divergences from rustc"},
     {"issue":2620,"title":"RefCell's borrow() and borrow_mut() give `&T`, not the `Ref` and `RefMut` guards","state":"closed","category":"Divergences from rustc","release":"0.5.20"},
     {"issue":2621,"title":"Before edition 2024, a block's tail temporaries drop after its locals at runtime too","state":"closed","category":"Divergences from rustc","release":"0.5.20"},
-    {"issue":2622,"title":"A generic impl's trait method reached through a dispatcher runs its erased body","state":"open","category":"Divergences from rustc"},
+    {"issue":2622,"title":"A generic impl's trait method reached through a dispatcher runs its erased body","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
     {"issue":2623,"title":"`&dyn Debug` of an f32 prints f64 digits","state":"open","category":"Divergences from rustc"},
     {"issue":2624,"title":"The generated runner's own error lines are hand-formatted and never coloured","state":"open","category":"Divergences from rustc"},
     {"issue":2625,"title":"A `?`, `return`, `break` or `continue` inside a nested block drops only the innermost temporary scope's temporaries","state":"closed","category":"Divergences from rustc","release":"0.5.21"},
@@ -6560,7 +6575,23 @@
     {"issue":2676,"title":"E0277 for a program trait with no impls lacks rustc's 'this trait has no implementations' help","state":"open","category":"Divergences from rustc"},
     {"issue":2677,"title":"A parenthesized receiver's E0596 marks one character short","state":"open","category":"Divergences from rustc"},
     {"issue":2678,"title":"E0599 of an Iterator method on a std type that isn't one lacks rustc's label and help","state":"open","category":"Divergences from rustc"},
-    {"issue":2679,"title":"Two lib tests fail or hang only under the full lib suite: an inspect breakpoint test and std Command output","state":"open","category":"Health"}
+    {"issue":2679,"title":"Two lib tests fail or hang only under the full lib suite: an inspect breakpoint test and std Command output","state":"open","category":"Health"},
+    {"issue":2680,"title":"A trait's method can return `impl Trait`. Each impl's method gives its own opaque type, as in rustc, so a","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
+    {"issue":2681,"title":"A program opaque output's captured lifetimes don't keep its inputs borrowed: `+ '_`, and a trait method's `impl Trait` c","state":"open","category":"Divergences from rustc"},
+    {"issue":2682,"title":"A generic type without a `Send` bound, or a trait method's opaque output at a generic `Self`, crosses into a thread unch","state":"open","category":"Divergences from rustc"},
+    {"issue":2683,"title":"A crate trait's opaque output can still call its hidden type's own methods and be named as its hidden type","state":"open","category":"Divergences from rustc"},
+    {"issue":2684,"title":"A crate trait's opaque output nested in the output type, or with a program hidden type, carries no opaque tag","state":"open","category":"Divergences from rustc"},
+    {"issue":2685,"title":"A program trait implemented for a tuple type is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2686,"title":"A generic call with &str for a program trait implemented for str is E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":2687,"title":"std's DefaultHasher doesn't run","state":"open","category":"Divergences from rustc"},
+    {"issue":2688,"title":"&mut of a unit struct temporary passed as an argument is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2689,"title":"rawr's check now reports rustc's E0597 and E0506 for a borrow held past a `?`, `return`, `break` or","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
+    {"issue":2690,"title":"rawr's check now refuses a write, a move or a conflicting borrow of a place that an imported async fn's","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
+    {"issue":2691,"title":"rawr's check now follows a closure that stores its parameter in a capture (`|r| w.push(r)`): each call's","state":"closed","category":"Divergences from rustc","release":"0.5.22"},
+    {"issue":2692,"title":"A std trait's default body is noted as one no impl receives, which hides three borrow misses","state":"open","category":"Divergences from rustc"},
+    {"issue":2693,"title":"A closure capturing a `Drop` value by move is refused as unsupported syntax","state":"open","category":"Divergences from rustc"},
+    {"issue":2694,"title":"A const-generic function's trait object of a type naming its parameter runs with an unknown witness","state":"open","category":"Divergences from rustc"},
+    {"issue":2695,"title":"A const's array of trait objects is refused as a type mismatch","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -7704,10 +7735,22 @@
           "milestone": "0.4"
         },
         {
+          "id": "program-impls-cross-0-5",
+          "name": "A program's trait impls reach native code",
+          "start": 52,
+          "size": 0.5,
+          "state": "done",
+          "note": "A crate sees a program type's Debug, Default, Eq, Hash and its own traits. Left: hand-written Debug (#343, #1169), derive(Default) of crate fields (#619), Copy, Hash and Ord on proxies (#249).",
+          "issues": [
+            {"number":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"closed"}
+          ],
+          "milestone": "0.5"
+        },
+        {
           "id": "program-impls-cross",
           "name": "A program's trait impls reach native code",
           "start": 52,
-          "size": 1.7,
+          "size": 1.6,
           "state": "next",
           "note": "A crate sees a program type's Debug, Default, Eq, Hash and its own traits. Left: hand-written Debug (#343, #1169), derive(Default) of crate fields (#619), Copy, Hash and Ord on proxies (#249).",
           "issues": [
@@ -7722,7 +7765,6 @@
             {"number":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open"},
             {"number":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open"},
             {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"},
-            {"number":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
             {"number":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open"},
             {"number":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open"},
@@ -9645,7 +9687,7 @@
             {"number":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"closed"},
             {"number":2099,"title":"A method call on a script fn's `impl Trait` value resolves to the hidden type's inherent method (false E0061)","state":"closed"},
             {"number":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open"},
-            {"number":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open"},
+            {"number":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"closed"},
             {"number":2214,"title":"A program's trait impl for an array type (`impl Total for [i32; 3]`) is refused as an inherent impl","state":"closed"},
             {"number":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open"},
             {"number":2229,"title":"A closure local that shadows a capture (`let c = c.borrow(); c.method()`) panics with \"Function not found\"","state":"closed"},
@@ -9813,7 +9855,7 @@
             {"number":1253,"title":"std::rc::Rc::new by its full path says rawr doesn't run it, while Rc::new after a use runs","state":"closed"},
             {"number":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"closed"},
             {"number":1284,"title":"`dyn Any`: coercion and `downcast_ref`/`is`","state":"closed"},
-            {"number":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"open"},
+            {"number":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"closed"},
             {"number":1471,"title":"`SystemTime` values don't compare: `SystemTime::now() >= UNIX_EPOCH` is a type mismatch…","state":"closed"},
             {"number":1978,"title":"std's enum variants with fields (`io::SeekFrom::Start(u64)`) can't be constructed","state":"closed"},
             {"number":1979,"title":"`Write` for `io::Cursor<Vec<u8>>` is missing from the std table","state":"open"},
@@ -9826,7 +9868,7 @@
             {"number":2090,"title":"str::matches, match_indices and replacen do not run","state":"closed"},
             {"number":2091,"title":"std::io::Error does not implement Display or std::error::Error, so ? into Box<dyn Error> fails E0277","state":"closed"},
             {"number":2499,"title":"Hash::hash into a program's Hasher is refused: derive(Hash) and impl Hash bodies don't run","state":"open"},
-            {"number":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"open"},
+            {"number":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"closed"},
             {"number":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open"},
             {"number":2519,"title":"A program static is evaluated again at each read, so a Mutex or atomic static loses its state","state":"closed"},
             {"number":2521,"title":"String::drain and String::replace_range are not run","state":"closed"},
