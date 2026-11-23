@@ -2025,18 +2025,18 @@ impl<'a> Parser<'a> {
         substitution: &BTreeMap<ImmutableString, Ty>,
     ) -> Result<(), Error> {
         if arguments.len() != definition.parameters().len() {
-            let declared = self.models.in_this_file(definition.source());
             let inputs: Vec<Ty> = definition
                 .parameters()
                 .iter()
                 .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), substitution))
                 .collect();
+            let declaration = self.declaration_of(definition);
             let callee = self.callee_path(call, definition.name());
             let places = self.argument_places(
                 callee,
                 &inputs,
-                definition.parameters(),
-                declared,
+                &declaration.parameters,
+                declaration.here,
                 arguments,
             );
             return Err(Error::ArgumentCount {
@@ -2051,7 +2051,7 @@ impl<'a> Parser<'a> {
                 expected: definition.parameters().len(),
                 found: arguments.len(),
                 call,
-                definition: declared.then_some(definition.name_span()),
+                definition: declaration.here.then_some(declaration.name),
                 arguments: Some(places),
             });
         }
@@ -2079,6 +2079,132 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// How many arguments the call whose `(` or `()` is next gives, read
+    /// without consuming it: its top-level commas, a trailing one aside.
+    /// `None` when no call is next, and where an argument holds a closure
+    /// or a generic argument list outside brackets, whose commas the
+    /// tokens alone don't tell apart.
+    pub(super) fn arity_ahead(&self) -> Option<usize> {
+        let mut ahead = self.input.clone().map(|(token, _)| token);
+        match ahead.next()? {
+            Token::Unit => return Some(0),
+            Token::LeftParen => {}
+            _ => return None,
+        }
+        let (mut depth, mut count, mut pending) = (0_usize, 0_usize, false);
+        loop {
+            match ahead.next()? {
+                Token::RightParen if depth == 0 => return Some(count + usize::from(pending)),
+                Token::Comma if depth == 0 => {
+                    count += 1;
+                    pending = false;
+                }
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                    pending = true;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.checked_sub(1)?;
+                }
+                Token::Pipe | Token::Or | Token::LessThan if depth == 0 => return None,
+                Token::EOF => return None,
+                _ => pending = true,
+            }
+        }
+    }
+
+    /// rustc's E0061 for the method `name` called by its path from
+    /// `start` (`Trait::method(..)`, `Type::method(..)`), with `arguments`
+    /// up to `end`, its receiver among them: the receiver is its first
+    /// input, `inputs[0]`, and the note marks `declaration`.
+    pub(super) fn path_argument_count(
+        &mut self,
+        name: ImmutableString,
+        start: Position,
+        inputs: &[Ty],
+        declaration: Option<Declaration>,
+        arguments: &[ParsedExpr],
+        end: Position,
+    ) -> Error {
+        let here = declaration.as_ref().is_some_and(|declared| declared.here);
+        let (receiver, parameters) = declaration.as_ref().map_or((None, &[][..]), |declared| {
+            (declared.receiver, &declared.parameters[..])
+        });
+        let call = span(start, end);
+        let callee = self.callee_path(call, &name);
+        let places =
+            self.path_argument_places(callee, inputs, receiver, parameters, here, arguments);
+        Error::ArgumentCount {
+            callee: Callee::MethodPath,
+            name,
+            expected: inputs.len(),
+            found: arguments.len(),
+            call,
+            definition: declaration
+                .filter(|declared| declared.here)
+                .map(|declared| declared.name),
+            arguments: Some(places),
+        }
+    }
+
+    /// Where rustc's E0061 note marks the method `definition`: an impl's
+    /// method of a trait the program declares is the trait's declaration
+    /// of it, as rustc resolves the call to the trait's item. A required
+    /// method's parameters are marked by their names alone, since a
+    /// declaration without a body has no patterns.
+    pub(super) fn declaration_of(&self, definition: &method::Definition) -> Declaration {
+        let own = Declaration {
+            here: self.models.in_this_file(definition.source()),
+            name: definition.name_span(),
+            receiver: definition.receiver_span(),
+            parameters: definition.parameters().to_vec(),
+        };
+        if definition.trait_default().is_some() {
+            return own;
+        }
+        definition
+            .trait_name()
+            .and_then(|name| self.trait_declaration(name, definition.name()))
+            .filter(|declared| declared.parameters.len() == definition.parameters().len())
+            .unwrap_or(own)
+    }
+
+    /// The declaration of `member` in the program's trait `trait_name`,
+    /// as rustc's E0061 note marks it (`declaration_of`).
+    pub(super) fn trait_declaration(&self, trait_name: &str, member: &str) -> Option<Declaration> {
+        let (source, declared) = self.models.traits.get(trait_name)?;
+        let (function, provided) = declared
+            .functions
+            .iter()
+            .zip(declared.provided.iter())
+            .find(|(function, _)| function.name.text == member)?;
+        let parameters = function
+            .parameters
+            .iter()
+            .map(|parameter| item::Parameter {
+                span: if *provided {
+                    parameter.span
+                } else {
+                    parameter.name.span
+                },
+                ..parameter.clone()
+            })
+            .collect();
+        let receiver = function.receiver.as_ref().map(|receiver| {
+            if *provided {
+                receiver.span()
+            } else {
+                self_word(receiver.span())
+            }
+        });
+        Some(Declaration {
+            here: self.models.in_this_file(*source),
+            name: function.name.span,
+            receiver,
+            parameters,
+        })
+    }
+
     /// The places rustc's E0061 labels at a call, written `callee`, of a
     /// callee taking `inputs` with `arguments`: the arguments past the
     /// inputs, or the inputs the call gives nothing. Each argument fills
@@ -2091,6 +2217,22 @@ impl<'a> Parser<'a> {
         &mut self,
         callee: Span,
         inputs: &[Ty],
+        parameters: &[item::Parameter],
+        declared: bool,
+        arguments: &[ParsedExpr],
+    ) -> Box<crate::resolve::Arguments> {
+        self.path_argument_places(callee, inputs, None, parameters, declared, arguments)
+    }
+
+    /// `argument_places` of a method called by its path
+    /// (`Trait::method(&value, ..)`), whose first input is the receiver
+    /// `receiver` marks in the declaration, and `parameters` name the
+    /// inputs after it. rustc names a receiver it can't write `value`.
+    pub(super) fn path_argument_places(
+        &mut self,
+        callee: Span,
+        inputs: &[Ty],
+        receiver: Option<Span>,
         parameters: &[item::Parameter],
         declared: bool,
         arguments: &[ParsedExpr],
@@ -2133,7 +2275,13 @@ impl<'a> Parser<'a> {
         let missing = missing
             .into_iter()
             .map(|index| {
-                let parameter = parameters.get(index);
+                // The parameter's name, `None` where rustc writes `value`,
+                // and its place.
+                let (name, place) = match receiver {
+                    Some(place) if index == 0 => (None, Some(place)),
+                    Some(_) => parameter_mark(parameters.get(index - 1)),
+                    None => parameter_mark(parameters.get(index)),
+                };
                 let ty = self.inference.resolve(&inputs[index]);
                 let open = matches!(ty, Ty::Infer(_) | Ty::Param(..) | Ty::Unknown);
                 // rustc writes a type it knows whole, and the parameter's
@@ -2141,10 +2289,7 @@ impl<'a> Parser<'a> {
                 let placeholder = if ty == Ty::Unit {
                     "()".into()
                 } else if open || contains_inference(&ty) || contains_open_literal(&ty) {
-                    let name = parameter
-                        .filter(|parameter| parameter.pattern.is_none())
-                        .map_or("value", |parameter| parameter.name.text.as_str());
-                    format!("/* {name} */")
+                    format!("/* {} */", name.unwrap_or("value"))
                 } else {
                     format!("/* {} */", ty.name(&self.models))
                 };
@@ -2152,9 +2297,7 @@ impl<'a> Parser<'a> {
                     index,
                     ty: (!open).then(|| ty.name(&self.models)),
                     placeholder: placeholder.into(),
-                    declared: parameter
-                        .filter(|_| declared)
-                        .map(|parameter| parameter.span),
+                    declared: place.filter(|_| declared),
                 }
             })
             .collect();
@@ -2295,6 +2438,47 @@ pub(super) fn mentions(ty: &type_ref::Type, name: &str) -> bool {
         }
         type_ref::Type::Unit(_) => false,
     }
+}
+
+/// The name rustc writes for `parameter` in a missing argument's
+/// placeholder, none for a pattern, and its place.
+fn parameter_mark(parameter: Option<&item::Parameter>) -> (Option<&str>, Option<Span>) {
+    match parameter {
+        Some(parameter) => (
+            parameter
+                .pattern
+                .is_none()
+                .then_some(parameter.name.text.as_str()),
+            Some(parameter.span),
+        ),
+        None => (None, None),
+    }
+}
+
+/// The receiver's mark in a declaration without a body: its `self`
+/// alone, the last four characters of `&mut self`.
+fn self_word(receiver: Span) -> Span {
+    let end = receiver.end();
+    let start = match (end.line(), end.position()) {
+        (Some(line), Some(column)) if column > 4 => Position::new(
+            u16::try_from(line).unwrap_or(u16::MAX),
+            u16::try_from(column - 4).unwrap_or(u16::MAX),
+        ),
+        _ => receiver.start(),
+    };
+    span(start, end)
+}
+
+/// The declaration rustc's E0061 note marks for a method
+/// (`Parser::declaration_of`).
+pub(super) struct Declaration {
+    /// It is in the file being lowered, where the note can show it.
+    pub(super) here: bool,
+    pub(super) name: Span,
+    /// What the note marks of its receiver, where it has one.
+    pub(super) receiver: Option<Span>,
+    /// Its parameters, each spanning what the note marks.
+    pub(super) parameters: Vec<item::Parameter>,
 }
 
 /// A call of a program function, at one of its parameters, as rustc's

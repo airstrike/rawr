@@ -5747,3 +5747,144 @@ fn a_locals_trait_object_of_a_second_trait_is_e0225() {
         assert!(shown.contains(part), "{shown}");
     }
 }
+
+/// A method called with the wrong number of arguments is rustc's E0061
+/// noted at the trait's declaration where an impl of the program's trait
+/// gives it, its required parameters marked by name, under method syntax
+/// on a generic value too. Called by its path, the receiver is the first
+/// argument of a function, as rustc counts it, and a receiver rustc can't
+/// write is `/* value */` (#552). What `rustc --edition 2021` reports.
+#[test]
+fn a_method_with_the_wrong_number_of_arguments_is_noted_where_rustc_notes_it() {
+    let path_trait = "trait Tr {\n    fn m(&self, a: i32);\n}\nimpl Tr for i32 {\n    fn m(&self, \
+                      _a: i32) {}\n}\nstruct S;\nimpl S {\n    fn n(&self, _a: i32) {}\n}\nfn main() \
+                      {\n";
+    let path_inherent = "struct S;\nimpl S {\n    fn n(&self, _a: i32) {}\n    fn o(&mut self) \
+                         {}\n    fn p(self) {}\n}\ntrait Tr {\n    fn q(&mut self);\n    fn r(self);\n    \
+                         fn t(&self) {}\n}\nimpl Tr for S {\n    fn q(&mut self) {}\n    fn r(self) \
+                         {}\n}\nfn main() {\n";
+    for (source, expected) in [
+        (
+            "trait Tr {\n    fn m(&self, a: i32);\n}\nimpl Tr for i32 {\n    fn m(&self, _a: i32) {}\n}\nfn main() {\n    1i32.m();\n}\n".to_owned(),
+            &[
+                "error[E0061]: this method takes 1 argument but 0 arguments were supplied",
+                " --> main.rs:8:10",
+                "  |",
+                "8 |     1i32.m();",
+                "  |          ^-- argument #1 of type `i32` is missing",
+                "  |",
+                "note: method defined here",
+                " --> main.rs:2:8",
+                "  |",
+                "2 |     fn m(&self, a: i32);",
+                "  |        ^        -",
+                "help: provide the argument",
+                "  |",
+                "8 |     1i32.m(/* i32 */);",
+                "  |            +++++++++",
+            ][..],
+        ),
+        (
+            "trait Tr {\n    fn g(a: i32, b: bool);\n}\nstruct S;\nimpl Tr for S {\n    fn g(_a: i32, _b: bool) {}\n}\nfn main() {\n    S::g(1);\n}\n".to_owned(),
+            &[
+                "error[E0061]: this function takes 2 arguments but 1 argument was supplied",
+                " --> main.rs:9:5",
+                "  |",
+                "9 |     S::g(1);",
+                "  |     ^^^^--- argument #2 of type `bool` is missing",
+                "  |",
+                "note: associated function defined here",
+                " --> main.rs:2:8",
+                "  |",
+                "2 |     fn g(a: i32, b: bool);",
+                "  |        ^         -",
+                "help: provide the argument",
+                "  |",
+                "9 |     S::g(1, /* bool */);",
+                "  |           ++++++++++++",
+            ][..],
+        ),
+        (
+            "trait Tr {\n    fn m(&self, a: i32);\n}\nfn go<T: Tr>(t: T) {\n    t.m();\n}\nfn main() {}\n".to_owned(),
+            &[
+                "error[E0061]: this method takes 1 argument but 0 arguments were supplied",
+                " --> main.rs:5:7",
+                "  |",
+                "5 |     t.m();",
+                "  |       ^-- argument #1 of type `i32` is missing",
+                "  |",
+                "note: method defined here",
+                " --> main.rs:2:8",
+                "  |",
+                "2 |     fn m(&self, a: i32);",
+                "  |        ^        -",
+                "help: provide the argument",
+                "  |",
+                "5 |     t.m(/* i32 */);",
+                "  |         +++++++++",
+            ][..],
+        ),
+        (
+            format!("{path_trait}    Tr::m(&1i32);\n}}\n"),
+            &[
+                "error[E0061]: this function takes 2 arguments but 1 argument was supplied",
+                "  --> main.rs:12:5",
+                "   |",
+                "12 |     Tr::m(&1i32);",
+                "   |     ^^^^^------- argument #2 of type `i32` is missing",
+                "   |",
+                "note: method defined here",
+                "  --> main.rs:2:8",
+                "   |",
+                " 2 |     fn m(&self, a: i32);",
+                "   |        ^        -",
+                "help: provide the argument",
+                "   |",
+                "12 |     Tr::m(&1i32, /* i32 */);",
+                "   |                +++++++++++",
+            ][..],
+        ),
+        (
+            format!("{path_trait}    Tr::m();\n}}\n"),
+            &[
+                "error[E0061]: this function takes 2 arguments but 0 arguments were supplied",
+                "  --> main.rs:12:5",
+                "   |",
+                "12 |     Tr::m();",
+                "   |     ^^^^^-- two arguments of type `&_` and `i32` are missing",
+                "   |",
+                "note: method defined here",
+                "  --> main.rs:2:8",
+                "   |",
+                " 2 |     fn m(&self, a: i32);",
+                "   |        ^  ----  -",
+                "help: provide the arguments",
+                "   |",
+                "12 |     Tr::m(/* value */, /* i32 */);",
+                "   |           ++++++++++++++++++++++",
+            ][..],
+        ),
+        (
+            format!("{path_inherent}    S::n();\n}}\n"),
+            &[
+                "error[E0061]: this function takes 2 arguments but 0 arguments were supplied",
+                "  --> main.rs:17:5",
+                "   |",
+                "17 |     S::n();",
+                "   |     ^^^^-- two arguments of type `&S` and `i32` are missing",
+                "   |",
+                "note: method defined here",
+                "  --> main.rs:3:8",
+                "   |",
+                " 3 |     fn n(&self, _a: i32) {}",
+                "   |        ^ -----  -------",
+                "help: provide the arguments",
+                "   |",
+                "17 |     S::n(/* &S */, /* i32 */);",
+                "   |          +++++++++++++++++++",
+            ][..],
+        ),
+    ] {
+        assert_eq!(rendered(&source).trim_end(), expected.join("\n"), "{source}");
+    }
+}

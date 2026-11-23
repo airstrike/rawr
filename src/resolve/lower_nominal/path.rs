@@ -1781,6 +1781,41 @@ impl<'a> Parser<'a> {
                     .collect();
             return self.method_value(member, inputs, owner_span, member_span);
         }
+        // `Type::method(..)` given other than its receiver and its
+        // parameters: rustc's E0061 for the function the path names.
+        if let Some(mode) = definition.receiver()
+            && !definition.constant()
+            && let Some(given) = self.arity_ahead()
+            && given != definition.parameters().len() + 1
+        {
+            let receiver = match mode {
+                receiver::Mode::Owned => owner_ty.clone(),
+                mode => Ty::Reference {
+                    mutable: mode == receiver::Mode::Mutable,
+                    target: Box::new(owner_ty.clone()),
+                },
+            };
+            let inputs: Vec<Ty> = std::iter::once(receiver)
+                .chain(
+                    definition
+                        .parameters()
+                        .iter()
+                        .map(|parameter| Ty::from_resolved(&parameter.ty)),
+                )
+                .collect();
+            let (arguments, end) = self.parse_call_arguments("function arguments")?;
+            let declaration = self.declaration_of(&definition);
+            return Err(self.path_argument_count(
+                crate::resolve::Qualified(definition.owner_name(), definition.name())
+                    .to_string()
+                    .into(),
+                owner_span.start(),
+                &inputs,
+                Some(declaration),
+                &arguments,
+                end,
+            ));
+        }
         // `Type::method(receiver, ..)`: the method called on its first
         // argument, as Rust's path call is.
         if definition.receiver().is_some()
