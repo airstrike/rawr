@@ -531,12 +531,19 @@ impl Parser<'_> {
                 }
                 false
             })
-            // An item is a statement, though no `;` ends it.
+            // An item is a statement, though no `;` ends it, and so is a
+            // braced macro call.
             || expansion.first().is_some_and(|(token, _)| begins_item(token))
+            || begins_braced_call(&expansion)
         };
         let mut spliced = Vec::with_capacity(expansion.len() + 2);
         if matches!(place, Place::Type | Place::Pattern) {
             spliced.extend(expansion);
+        } else if place == Place::Statement && expansion.is_empty() {
+            // No statement, nor is the `;` after it.
+            if matches!(self.peek(), Token::SemiColon) {
+                self.next();
+            }
         } else if place == Place::Statement && statements {
             // The call's own `;` ends the last statement when it has none.
             let ended = matches!(
@@ -682,6 +689,24 @@ impl Parser<'_> {
         };
         self.splice_expanded(expansion, at, end, place, remaining);
         Ok(None)
+    }
+}
+
+/// Whether `expansion` starts with a macro call in braces, `a::b! { .. }`,
+/// which rustc parses as a statement of its own where a statement goes.
+fn begins_braced_call(expansion: &[(Token, Position)]) -> bool {
+    let mut tokens = expansion.iter().map(|(token, _)| token);
+    loop {
+        if !matches!(tokens.next(), Some(Token::Identifier(_))) {
+            return false;
+        }
+        match tokens.next() {
+            Some(Token::DoubleColon) => {}
+            Some(Token::Bang) => {
+                return matches!(tokens.next(), Some(Token::LeftBrace | Token::MapStart));
+            }
+            _ => return false,
+        }
     }
 }
 

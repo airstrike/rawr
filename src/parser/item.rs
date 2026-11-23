@@ -6465,9 +6465,11 @@ fn parse_body_syntax(
             continue;
         }
         // `{ 2 fn f() {} }`: an expression that is not block-like needs a
-        // `;` before an item, as in Rust.
+        // `;` before an item, as in Rust. A macro call's tokens are its
+        // rules' to read (`m! { @x fn f() {} }`).
         if !boundary
             && ends_expression
+            && macros.is_empty()
             && let Some((token, position)) = input.peek()
             && begins_statement_item(token)
         {
