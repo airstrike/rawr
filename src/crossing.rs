@@ -748,6 +748,7 @@ pub fn universe() {
 }
 
 pub use crate::resolve::lower_nominal::counted::Link;
+pub use crate::std_facade::panic::adapting;
 
 /// A rawr `Rc` or `Arc` of `value`, the handle of a crate value a crate's
 /// own pointer holds, which `link` reads (#775).

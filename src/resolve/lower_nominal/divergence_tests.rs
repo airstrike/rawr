@@ -931,7 +931,9 @@ main();
 }
 
 /// The first lines of the panic `cargo run` of `source` prints, from
-/// `thread 'main' panicked at main.rs:<line>:<column>:` to its message.
+/// `thread 'main' panicked at main.rs:<line>:<column>:` to its message,
+/// without the blank line before them and the thread's id, which differs
+/// from run to run.
 fn panicked(source: &str) -> String {
     let engine = Engine::new();
     let evidence = crate::diagnostic::Source::new("main.rs", source).unwrap();
@@ -949,6 +951,11 @@ fn panicked(source: &str) -> String {
     )
     .unwrap();
     let panic = crate::diagnostic::panic(&report);
+    let id = format!(" ({}) panicked", crate::diagnostic::thread_id::current());
+    let panic = panic
+        .strip_prefix('\n')
+        .expect("Rust's hook starts a panic with a blank line")
+        .replacen(&id, " panicked", 1);
     panic.lines().take(2).collect::<Vec<_>>().join("\n")
 }
 

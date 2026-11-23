@@ -2950,16 +2950,17 @@ fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it(
         .unwrap();
     assert_eq!(native.status.code(), Some(101));
     let stderr = String::from_utf8_lossy(&native.stderr);
-    // Current nightly's thread id is #36's.
+    // Without the thread's id, which differs from run to run.
+    let idless = |line: &str| match line.split_once("thread 'main' (") {
+        Some(("", rest)) => rest.split_once(") ").map_or_else(
+            || line.to_owned(),
+            |(_, rest)| format!("thread 'main' {rest}"),
+        ),
+        _ => line.to_owned(),
+    };
     let panicked = stderr
         .lines()
-        .map(|line| match line.split_once("thread 'main' (") {
-            Some(("", rest)) => rest.split_once(") ").map_or_else(
-                || line.to_owned(),
-                |(_, rest)| format!("thread 'main' {rest}"),
-            ),
-            _ => line.to_owned(),
-        })
+        .map(idless)
         .skip_while(|line| !line.starts_with("thread 'main' panicked at "))
         .collect::<Vec<_>>();
     assert!(
@@ -2984,6 +2985,7 @@ fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it(
         .seen
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: "))
+        .map(idless)
         .skip_while(|line| !line.starts_with("thread 'main' panicked at "))
         .take(panicked.len())
         .collect::<Vec<_>>();

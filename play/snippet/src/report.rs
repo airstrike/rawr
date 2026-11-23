@@ -76,22 +76,30 @@ pub fn located(line: &str) -> Option<(&str, &str)> {
 
 /// A panic's text, as `rawr::diagnostic::panic` writes it for the wrapped
 /// program, as the user's own source shows it: the location on its
-/// `thread 'main' panicked at play.rs:<line>:<column>:` line counts in the
-/// snippet as written, as in [`report`].
+/// `thread 'main' (<id>) panicked at play.rs:<line>:<column>:` line, after
+/// the blank line Rust's hook starts a panic with, counts in the snippet
+/// as written, as in [`report`].
 pub fn panic(text: &str, program: &str, source: &str) -> String {
-    let prefix = format!("thread 'main' panicked at {SOURCE_NAME}:");
-    let Some((first, rest)) = text.split_once('\n') else {
+    let (blank, header) = match text.strip_prefix('\n') {
+        Some(header) => ("\n", header),
+        None => ("", text),
+    };
+    let Some((first, rest)) = header.split_once('\n') else {
         return text.to_owned();
     };
-    let Some(location) = first
-        .strip_prefix(&prefix)
-        .and_then(|location| location.strip_suffix(':'))
+    let marker = format!(" panicked at {SOURCE_NAME}:");
+    let Some((thread, location)) = first
+        .split_once(&marker)
+        .filter(|(thread, _)| thread.starts_with("thread 'main'"))
     else {
+        return text.to_owned();
+    };
+    let Some(location) = location.strip_suffix(':') else {
         return text.to_owned();
     };
     let Wrapping { added, last, end } = wrapping(program, &without_tests(source));
     let location = shift_location(location, &added, last, end);
-    format!("{prefix}{location}:\n{rest}")
+    format!("{blank}{thread}{marker}{location}:\n{rest}")
 }
 
 /// What the wrapping added to a source: the span it added to each line, the

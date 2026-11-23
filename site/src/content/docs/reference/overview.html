@@ -30,10 +30,11 @@ fn main() -&gt; Result&lt;(), String&gt; {
 </div>
 <p>The second <code>parse</code> fails on purpose, so <code>main</code> returns its error after printing <code>n = 42</code>.</p>
 <p>A program prints what the Rust binary prints and exits with the same status. An error from <code>main</code> exits with status 1. A panic exits with status 101. It prints what a program built by Cargo prints on stderr:</p>
-<pre><code>thread 'main' panicked at src/main.rs:5:5:
+<pre><code>
+thread 'main' (4242) panicked at src/main.rs:5:5:
 boom 3
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</code></pre>
-<p>The path is the file&rsquo;s path from the workspace root, as Cargo gives it. In <code>?play</code> and in the browser the file is <code>play.rs</code>.</p>
+<p>A blank line comes first. The number after the thread&rsquo;s name is the thread&rsquo;s id, which the system gives it and which differs from run to run. The path is the file&rsquo;s path from the workspace root, as Cargo gives it. In <code>?play</code> and in the browser the file is <code>play.rs</code>. A panic raised in a crate&rsquo;s <code>#[track_caller]</code> function names the program&rsquo;s call, as it does under Cargo.</p>
 
 <h2 id="supported">Supported Rust</h2>
 <p>Each page lists one area of the language, with an example for each construct.</p>

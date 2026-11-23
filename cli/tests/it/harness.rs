@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use super::{assert_success, stderr, stdout, Sandbox};
+use super::{assert_success, idless, stderr, stdout, Sandbox};
 
 const TESTED: &str = r#"fn main() {
     println!("{}", add(1, 2));
@@ -122,7 +122,12 @@ fn rawr_test_runs_each_test_and_reports_as_cargo_test() {
     let tested = sandbox.rawr(&["test", "tested.rs"]);
     let run = sandbox.rawr(&["run", "tested.rs"]);
 
-    assert_eq!(timeless(&stdout(&tested)), REPORT, "{}", stderr(&tested));
+    assert_eq!(
+        idless(&timeless(&stdout(&tested))),
+        REPORT,
+        "{}",
+        stderr(&tested)
+    );
     assert_eq!(tested.status.code(), Some(101));
     // `cargo run` builds without `cfg(test)`: the tests are not there.
     assert_success(&run);

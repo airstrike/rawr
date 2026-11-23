@@ -2287,6 +2287,96 @@ fn rawr_test_catches_a_panic_in_a_dependencys_code_per_test() {
     assert_eq!(rawr.status.code(), cargo.status.code());
 }
 
+/// A dependency's `#[track_caller]` function or method that panics, as an
+/// unwrap-like helper does, names the program's call, as `cargo run`
+/// prints it (#1952): a function call at its start, and a method call at
+/// the method's name.
+#[test]
+fn a_dependencys_track_caller_panic_names_the_programs_call() {
+    let root = crate::support::fresh("plain-track-caller-panic");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("checked/src")).unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"track-caller-panic\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+         publish = false\n\n[dependencies]\nchecked = { path = \"checked\" }\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("checked/Cargo.toml"),
+        "[package]\nname = \"checked\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("checked/src/lib.rs"),
+        "#[track_caller]\npub fn below_ten(n: u32) -> u32 {\n    assert!(n < 10, \"too big: {n}\");\n    \
+         n\n}\n\npub struct Gauge(u32);\n\nimpl Gauge {\n    pub fn new(n: u32) -> Self {\n        \
+         Gauge(n)\n    }\n\n    #[track_caller]\n    pub fn read(&self) -> u32 {\n        \
+         if self.0 >= 10 {\n            panic!(\"over: {}\", self.0);\n        }\n        \
+         self.0\n    }\n}\n",
+    )
+    .unwrap();
+    // The panic Rust's hook prints, without the thread's id, which
+    // differs from run to run.
+    let panic = |output: &Output| -> Vec<String> {
+        text(&output.stderr)
+            .lines()
+            .skip_while(|line| !line.starts_with("thread 'main' ("))
+            .map(|line| match line.split_once(") panicked at ") {
+                Some((_, place)) => format!("thread 'main' panicked at {place}"),
+                None => line.to_owned(),
+            })
+            .collect()
+    };
+    for (main, place) in [
+        (
+            "// rawr\nfn main() {\n    println!(\"{}\", checked::below_ten(3));\n    \
+             checked::below_ten(12);\n}\n",
+            "src/main.rs:4:5:",
+        ),
+        (
+            "// rawr\nfn main() {\n    let gauge = checked::Gauge::new(12);\n    \
+             println!(\"read\");\n    gauge.read();\n}\n",
+            "src/main.rs:5:11:",
+        ),
+    ] {
+        fs::write(root.join("src/main.rs"), main).unwrap();
+        let rawr = rawr_import(&root, &["run"]);
+        let cargo = Command::new("cargo")
+            .args(["run", "-q"])
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .env_remove("RUST_BACKTRACE")
+            .output()
+            .unwrap();
+        assert_eq!(
+            panic(&cargo).first().map(String::as_str),
+            Some(format!("thread 'main' panicked at {place}").as_str()),
+            "{}",
+            text(&cargo.stderr)
+        );
+        assert_eq!(panic(&rawr), panic(&cargo), "{}", text(&rawr.stderr));
+        let stderr = text(&rawr.stderr);
+        let lines: Vec<&str> = stderr.lines().collect();
+        let header = lines
+            .iter()
+            .position(|line| line.starts_with("thread 'main' ("));
+        assert!(
+            header.is_some_and(|at| at > 0 && lines[at - 1].is_empty()),
+            "a blank line comes before the panic: {stderr}"
+        );
+        assert_eq!(text(&rawr.stdout), text(&cargo.stdout));
+        assert_eq!(rawr.status.code(), Some(101));
+    }
+}
+
 /// `rawr test` links the package's `[dev-dependencies]` into its tests
 /// alone, as `cargo test` links them into the test harness (#1703): a
 /// test that uses one runs, and `rawr run` of the same program builds

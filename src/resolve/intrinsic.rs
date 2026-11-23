@@ -32,10 +32,11 @@ pub(super) struct Proof {
     /// How many `&mut` arrays and strings a host call copies in and
     /// gives back after its value, as `[value, copies..]` (D558 slice 2).
     copies: u8,
-    /// Where the program makes a call that gives a `std::panic::Location`,
-    /// which the location a crate's `#[track_caller]` function sees there
-    /// stands for (`std_facade::panic::calling`). Few calls give one, so
-    /// it is boxed, and every other call's proof holds a pointer's width.
+    /// Where the program makes the call, which the location a crate's
+    /// `#[track_caller]` function sees from the adapter's call stands for,
+    /// in a location it gives and in a panic it raises
+    /// (`std_facade::panic::calling`). It is boxed, so the proof holds a
+    /// pointer's width.
     caller: Option<Box<crate::std_facade::panic::Site>>,
 }
 
@@ -79,8 +80,11 @@ impl Proof {
     }
 
     /// This call, made at the program's `caller`.
-    pub(super) fn with_caller(mut self, caller: Option<crate::std_facade::panic::Site>) -> Self {
-        self.caller = caller.map(Box::new);
+    pub(super) fn with_caller(
+        mut self,
+        caller: Option<Box<crate::std_facade::panic::Site>>,
+    ) -> Self {
+        self.caller = caller;
         self
     }
 

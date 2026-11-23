@@ -3328,7 +3328,8 @@ mod main_tests {
         assert_eq!(
             super::main_panic(&error),
             format!(
-                "thread 'main' panicked:\ncalled `Option::unwrap()` on a `None` value\n{}\n",
+                "\nthread 'main' ({}) panicked:\ncalled `Option::unwrap()` on a `None` value\n{}\n",
+                crate::diagnostic::thread_id::current(),
                 crate::diagnostic::BACKTRACE_NOTE
             )
         );

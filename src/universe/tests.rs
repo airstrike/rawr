@@ -296,7 +296,9 @@ fn main() {
     assert_eq!(program.run(), 101);
     let printed = printed.lock().unwrap();
     assert!(
-        printed.starts_with("thread 'main' panicked") && printed.contains(":\nno thread here\n"),
+        printed.starts_with("\nthread 'main' (")
+            && printed.contains(") panicked at ")
+            && printed.contains(":\nno thread here\n"),
         "{printed}"
     );
 }
