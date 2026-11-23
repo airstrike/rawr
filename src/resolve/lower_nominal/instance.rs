@@ -144,12 +144,16 @@ pub(super) fn definition(
 /// none is a const, callable or crate parameter, which an instance's
 /// signature can't name (`method::Definition::instance`). A trait impl's
 /// method is reached through a trait object by its instance too, which the
-/// object's key selects (D1115.3).
+/// object's key selects (D1115.3). A blanket impl's function without
+/// `self` is one too: no value's runtime type can say which type it is
+/// for, so only the call's types do.
 pub(super) fn method_template_parameters(
     definition: &crate::method::Definition,
 ) -> Option<Box<[ImmutableString]>> {
     let generics = definition.generics();
-    if definition.builtin_owner().is_some()
+    let blanket_function = definition.receiver().is_none()
+        && definition.owner().builtin_code() == Some(crate::resolve::BLANKET_OWNER);
+    if definition.builtin_owner().is_some() && !blanket_function
         || !generics.iter().any(directs)
         || generics.iter().any(|generic| {
             generic.constant.is_some()

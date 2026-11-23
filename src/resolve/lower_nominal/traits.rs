@@ -1145,6 +1145,33 @@ impl<'a> Parser<'a> {
         fitting.is_empty().then_some(definition)
     }
 
+    /// The function `member` of the blanket impl of `trait_name` whose
+    /// where-clauses hold for `ty`, a type no impl of its own gives the
+    /// trait: `make` of `impl<T: Default> Make for T` for `Vec<u8>`.
+    pub(super) fn blanket_function(
+        &mut self,
+        ty: &Ty,
+        trait_name: &str,
+        member: &str,
+    ) -> Option<method::Definition> {
+        // A parameter bounded by the trait has its impl through its
+        // witness; one bounded by what the blanket impl needs has the
+        // blanket's.
+        if matches!(ty, Ty::Param(..) | Ty::Projection(..)) && self.type_implements(ty, trait_name)
+            || owner_id(ty).is_some_and(|id| self.models.implements(trait_name, id))
+        {
+            return None;
+        }
+        let mut fitting = self.blanket_methods(ty, member);
+        fitting.retain(|definition| {
+            definition
+                .trait_name()
+                .is_some_and(|name| name == trait_name)
+        });
+        let definition = fitting.pop()?;
+        fitting.is_empty().then_some(definition)
+    }
+
     /// Each function `member` of a blanket impl whose where-clauses hold
     /// for `ty`.
     pub(super) fn blanket_methods(&mut self, ty: &Ty, member: &str) -> Vec<method::Definition> {

@@ -93,6 +93,29 @@ impl<'a> Parser<'a> {
             );
             return Ok(self.operator_expr(source, output, call));
         }
+        // `<Vec<u8> as Make>::make()` of `impl<T: Default> Make for T`: the
+        // blanket impl's function at the Self type, as coherence leaves it
+        // the one impl for a type without its own.
+        if let Some(definition) = self.blanket_function(&resolved, trait_name, &function.name.text)
+        {
+            let impl_substitution = definition
+                .generics()
+                .iter()
+                .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+                .collect::<BTreeMap<_, _>>();
+            let fits = self.unify_type(&impl_self_ty(&definition, &impl_substitution), &resolved);
+            debug_assert!(fits, "`blanket_function` found the impl for the Self type");
+            let name = self.method_call_name(&definition, &impl_substitution, call);
+            let witnesses = self.witness_arguments(definition.generics(), &impl_substitution, call);
+            let source = origin::Fragment::call(
+                &name,
+                arguments
+                    .iter()
+                    .map(ParsedExpr::rendered_source)
+                    .chain(witnesses),
+            );
+            return Ok(self.operator_expr(source, output, call));
+        }
         let dispatcher = if trait_arguments.is_empty() {
             static_dispatcher_name(trait_name, &function.name.text)
         } else {
@@ -1116,7 +1139,10 @@ impl<'a> Parser<'a> {
                 });
             };
             let self_ty = self.inference.resolve(&self_ty);
-            if !generic_trait && !self.type_implements(&self_ty, &trait_name) {
+            let blanket = self
+                .blanket_function(&self_ty, &trait_name, &member)
+                .is_some();
+            if !generic_trait && !blanket && !self.type_implements(&self_ty, &trait_name) {
                 return Err(missing(self, &self_ty));
             }
             let witness = match &self_ty {
@@ -1124,6 +1150,9 @@ impl<'a> Parser<'a> {
                     self.capture_witnesses();
                     origin::Fragment::plain(witness_variable(name))
                 }
+                // The blanket impl's function is called by name, with no
+                // witness.
+                _ if blanket => origin::Fragment::plain("()"),
                 ty => match owner_id(ty) {
                     Some(id) => origin::Fragment::plain(owner_key(id)),
                     None => return Err(missing(self, ty)),

@@ -9945,6 +9945,86 @@ fn language_blanket_impls_are_probed_by_the_bounds_that_hold() {
 }
 
 #[test]
+fn a_blanket_impls_function_without_self_and_its_iterator_methods_run() {
+    // A blanket impl's function without `self` runs at the type the path
+    // or a generic caller names, and `self.next()` of a `&mut self` method
+    // over an iterator steps the caller's iterator (#1555).
+    let output = printed(
+        r#"
+use std::fmt::Display;
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+trait Named {
+    fn named(prefix: &str) -> String;
+}
+impl<T: Display + Default> Named for T {
+    fn named(prefix: &str) -> String {
+        format!("{prefix}{}", T::default())
+    }
+}
+fn build<T: Default>() -> T {
+    <T as Make>::make()
+}
+trait Tally {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>);
+    fn tally(self) -> usize;
+}
+impl<T: Iterator<Item = i64>> Tally for T {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>) {
+        let a = self.next();
+        let b = self.next();
+        (a, b)
+    }
+    fn tally(self) -> usize {
+        self.count()
+    }
+}
+fn main() {
+    let v = <Vec<u8> as Make>::make();
+    let s: String = Make::make();
+    let built: Vec<i64> = build();
+    println!("{:?} {:?} {} {:?} {}", v, s, i32::make(), built, build::<u8>());
+    println!("{} {}", <i32 as Named>::named("n="), String::named("s="));
+    let mut it = vec![1i64, 2, 3, 4].into_iter();
+    println!("{:?} {:?} {}", it.first_two(), it.next(), it.tally());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[] \"\" 0 [] 0\nn=0 s=\n(Some(1), Some(2)) Some(3) 1\n"
+    );
+    let report = refused(
+        r#"
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+struct Opaque;
+fn main() {
+    let _o = <Opaque as Make>::make();
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `Opaque: Make` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
 fn a_prelude_type_imported_under_another_name_works_in_bodies() {
     // `use std::string::String as Text;` names `String` in a body's paths,
     // types and patterns, as in a signature (#810).
