@@ -13533,3 +13533,49 @@ main();
          \"u8 1\"]\n[\"[110]\", \"u8 255\", \"[2, 0]\"]\n[\"u8 5\"]\n2\n"
     );
 }
+
+#[test]
+fn default_hasher_is_sip_with_zero_keys() {
+    // `DefaultHasher::new()` is SipHash-1-3 with zero keys, so `finish`
+    // prints what rustc's build does, by either of its paths, through a
+    // generic `H: Hasher` and after a derive's writes (#2687).
+    let output = printed(
+        r#"
+use std::collections::hash_map::DefaultHasher as Old;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+#[derive(Hash)]
+struct P {
+    x: u8,
+    name: String,
+}
+
+fn digest<T: Hash + ?Sized>(x: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    x.hash(&mut s);
+    s.finish()
+}
+
+fn main() {
+    let mut s = DefaultHasher::new();
+    7u8.hash(&mut s);
+    let mut t = DefaultHasher::default();
+    t.write_u8(7);
+    println!("{} {}", s.finish(), t.finish());
+    println!("{}", digest(&P { x: 1, name: String::from("a") }));
+    println!("{}", digest("hello"));
+    let mut o = Old::new();
+    o.write(&[1, 2, 3]);
+    o.write_u64(9);
+    let c = o.clone();
+    println!("{} {}", o.finish(), c.finish());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "18443343337670940607 18443343337670940607\n6126082892521519421\n16156531084128653017\n\
+         3557016591249593222 3557016591249593222\n"
+    );
+}

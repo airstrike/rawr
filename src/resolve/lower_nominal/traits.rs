@@ -1328,6 +1328,24 @@ impl<'a> Parser<'a> {
             {
                 true
             }
+            // std's impl of its trait for a type its facade holds without
+            // parameters, from the std table: `DefaultHasher: Hasher`.
+            Ty::Host {
+                proof, arguments, ..
+            } if arguments.is_empty()
+                && self.std_trait(trait_name)
+                && let Some(held) = proof
+                    .definition
+                    .path()
+                    .strip_prefix(crate::std_facade::ROOT)
+                    .and_then(|path| path.strip_prefix("::"))
+                && let Some(item) = crate::std_table::any(&format!("std::{held}"))
+                && let Some(definition) = crate::resolve::std_trait::anywhere(trait_name) =>
+            {
+                crate::std_table::impls(definition, item.definition)
+                    .next()
+                    .is_some()
+            }
             // A bound or one of its supertraits: `E: Error` is `Display`.
             Ty::Param(..) | Ty::Projection(..) => self.bound_traits(ty).iter().any(|bound| {
                 bound == trait_name
