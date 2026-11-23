@@ -58,6 +58,19 @@ std::thread_local! {
     /// The features Cargo enables for the package of the file being parsed,
     /// and the options rustc sets for its target: what its `cfg(..)`s read.
     static FEATURES: core::cell::RefCell<Enabled> = core::cell::RefCell::default();
+    /// How many macro expansions the body being scanned is inside. An
+    /// expansion's statics stay its body's to declare, by the keys of
+    /// their sites there (D862).
+    static EXPANDING: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+/// What `scan` gives, read as a macro's expansion: its statics stay the
+/// lowering's to declare.
+fn expanding<T>(scan: impl FnOnce() -> T) -> T {
+    EXPANDING.set(EXPANDING.get() + 1);
+    let scanned = scan();
+    EXPANDING.set(EXPANDING.get() - 1);
+    scanned
 }
 
 /// The items of `source`, parsed for `engine` with `features` enabled,
@@ -254,10 +267,10 @@ fn lay_out_items(
         SKIPPED.with_borrow_mut(|skipped| skipped.extend(masked));
         return Ok(Some((items.into_vec(), None)));
     };
-    let parsed = match input.next() {
+    let parsed = expanding(|| match input.next() {
         Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
         _ => None,
-    };
+    });
     // An expansion that holds an item, a crate macro's call or a path
     // stays laid out, as a program macro's does (`body_macro`): the
     // lowering reads the call from its tokens.
@@ -4861,6 +4874,18 @@ fn parse_const_rest(
     start: Position,
     name: crate::item::Name,
 ) -> ParseResult<crate::item::Function> {
+    parse_value_rest(input, header, start, name, None)
+}
+
+/// `parse_const_rest`, keeping the initializer's tokens in `value` when
+/// given.
+fn parse_value_rest(
+    input: &mut TokenStream,
+    header: crate::item::Header,
+    start: Position,
+    name: crate::item::Name,
+    mut value: Option<&mut Vec<(Token, Position)>>,
+) -> ParseResult<crate::item::Function> {
     expect(input, Token::Colon, "after a constant name")?;
     let output = parse_type(input)?;
     let equals = expect(input, Token::Equals, "after a constant type")?;
@@ -4878,7 +4903,12 @@ fn parse_const_rest(
                 .into_err(position));
             }
             (Token::LexError(error), position) => return Err(error.into_err(position)),
-            (token, position) => tokens.push(body_token(token, position)),
+            (token, position) => {
+                if let Some(value) = value.as_deref_mut() {
+                    value.push((token.clone(), position));
+                }
+                tokens.push(body_token(token, position));
+            }
         }
     };
     let span = Span::new(start, after(semicolon, 1));
@@ -4903,6 +4933,74 @@ fn parse_const_rest(
         sized_self: None,
         span,
     })
+}
+
+/// The macro calls in a block static's initializer `value`, each read as
+/// a body's call is (`body_macro`): a crate's is left for the graph to
+/// expand, and the syntax of a program macro's expansion is given back.
+fn initializer_calls(value: &[(Token, Position)]) -> Vec<crate::item::BodyToken> {
+    let mut syntax = Vec::new();
+    let mut index = 0;
+    while index < value.len() {
+        let Some(bang) = call_bang(value, index) else {
+            index += 1;
+            continue;
+        };
+        let Some(close) = group_end(value, bang + 1) else {
+            break;
+        };
+        if let Some(expanded) = body_macro(&value[index..=close], false) {
+            syntax.extend(expanded.tokens().iter().cloned());
+        }
+        index = close + 1;
+    }
+    syntax
+}
+
+/// Where the `!` is of the macro call whose path starts at `start`: a
+/// name, perhaps after `::`-joined names, then `!` and a delimiter. A name
+/// after `.` or `::` starts no call.
+fn call_bang(tokens: &[(Token, Position)], start: usize) -> Option<usize> {
+    if start > 0 && matches!(tokens[start - 1].0, Token::DoubleColon | Token::Period) {
+        return None;
+    }
+    let mut at = start;
+    loop {
+        let Token::Identifier(_) = tokens.get(at)?.0 else {
+            return None;
+        };
+        match tokens.get(at + 1)?.0 {
+            Token::DoubleColon => at += 2,
+            Token::Bang => {
+                let opens = matches!(
+                    tokens.get(at + 2)?.0,
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace
+                );
+                return opens.then_some(at + 1);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Where the delimited group opening at `open` closes.
+fn group_end(tokens: &[(Token, Position)], open: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (offset, (token, _)) in tokens[open..].iter().enumerate() {
+        match token {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// rustc's report for `const NAME = value;`.
@@ -6382,6 +6480,7 @@ fn parse_body_syntax(
         // its value where it is written (D862).
         if let Some(start) = static_start.take()
             && macros.is_empty()
+            && EXPANDING.get() == 0
             && let Some((Token::Identifier(word), _)) = input.peek()
             && word.as_str() != "move"
         {
@@ -6393,9 +6492,13 @@ fn parse_body_syntax(
                 span: Span::NONE,
                 scope: None,
             };
-            let mut declared = parse_const_rest(input, header, start, name)?;
+            let mut value = Vec::new();
+            let mut declared = parse_value_rest(input, header, start, name, Some(&mut value))?;
             declared.static_item = true;
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(declared)));
+            // The body reads the initializer where it is written, so the
+            // macro calls in it are the body's to expand.
+            expanded.extend(initializer_calls(&value));
             boundary = true;
             ends_expression = false;
             after_name = false;
@@ -6854,9 +6957,11 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) -> Option<crate::it
     let input = &mut stream.peekable();
     let first = NESTED.with_borrow(Vec::len);
     let first_call = CALLS.with_borrow(Vec::len);
-    let parsed = super::item_macro::nested(|| match input.next() {
-        Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
-        _ => None,
+    let parsed = super::item_macro::nested(|| {
+        expanding(|| match input.next() {
+            Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
+            _ => None,
+        })
     });
     // A crate macro's call among the tokens is laid out there, so they
     // stay for the graph to expand it, and a path among them stays for
