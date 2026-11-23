@@ -2242,6 +2242,13 @@ impl Recorder {
         }
     }
 
+    /// A jump at `end` leaves the scopes of the locals declared at
+    /// `declared`: they end there, after the drops of those declared at
+    /// `drops`, as at their scopes' ends.
+    pub(crate) fn scope_exit(&mut self, declared: &[Span], drops: &[Span], end: Span) {
+        self.locals_end(declared, drops, end);
+    }
+
     fn locals_end(&mut self, declared: &[Span], drops: &[Span], end: Span) {
         let mut ending: Vec<Span> = declared.iter().chain(drops).copied().collect();
         ending.sort_by_key(|declaration| std::cmp::Reverse(declaration.start()));
@@ -2272,8 +2279,38 @@ impl Recorder {
     /// `Drop` may use the borrows it holds.
     pub(crate) fn drop_use(&mut self, declaration: Span) {
         if let Some(&local) = self.locals.get(&declaration) {
-            self.push(Fact::DropUse(local));
+            let dropped = self
+                .body
+                .drop_parts
+                .iter()
+                .find(|(_, whole)| *whole == local)
+                .map_or(local, |(part, _)| *part);
+            self.push(Fact::DropUse(dropped));
         }
+    }
+
+    /// The local declared at `declaration` is one whose drop uses only the
+    /// borrows it holds at the region positions `used`: its drops use a
+    /// part of it that holds those ([`Body::drop_parts`]).
+    pub(crate) fn drops_in_part(&mut self, declaration: Span, used: &[Path]) {
+        let Some(&whole) = self.locals.get(&declaration) else {
+            return;
+        };
+        if self.body.drop_parts.iter().any(|(_, of)| *of == whole) {
+            return;
+        }
+        let name = self.body.locals[whole.0 as usize].name.clone();
+        let part = self.hidden(&name, declaration);
+        let at = self.point();
+        for &path in used {
+            self.body.flows.push(Flow {
+                from: Origin::Local(whole, path),
+                into: part,
+                path: Path::ROOT,
+                at,
+            });
+        }
+        self.body.drop_parts.push((part, whole));
     }
 }
 

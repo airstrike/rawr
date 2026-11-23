@@ -112,6 +112,10 @@ fn liveness(
     let mut live = Points::new(count);
     let mut stack = Vec::new();
     let mut initialized = None;
+    // A part of a local's drop holds what its local holds there, and is
+    // given its value with it.
+    let whole = body.part_of(local);
+    let valued = whole.unwrap_or(local);
     for &point in points {
         // A read, a borrow or a move of a place is a use of its local, as
         // rustc's liveness has it. So is a drop that uses what the local
@@ -121,7 +125,9 @@ fn liveness(
             Some(Fact::DropUse(dropped)) => {
                 *dropped == local
                     && initialized
-                        .get_or_insert_with(|| maybe_initialized(body, local, points, index, count))
+                        .get_or_insert_with(|| {
+                            maybe_initialized(body, valued, points, index, count)
+                        })
                         .contains(index(point))
             }
             Some(Fact::Access { place, access, .. }) => {
@@ -147,7 +153,7 @@ fn liveness(
             continue;
         }
         for &predecessor in &predecessors[at] {
-            if defines(body, predecessor, local) {
+            if defines(body, predecessor, valued) {
                 continue;
             }
             stack.push(predecessor);
@@ -156,7 +162,7 @@ fn liveness(
     // A hidden local made in one branch and used after the branches meet
     // (`if c { f(&a) } else { f(&b) }`'s borrows) holds nothing on the
     // other branch: it is live only where a value it was given may reach.
-    if body.locals[local.0 as usize].name.starts_with('<') {
+    if whole.is_none() && body.locals[local.0 as usize].name.starts_with('<') {
         live.intersect(&given(body, local, points, index, count));
     }
     live

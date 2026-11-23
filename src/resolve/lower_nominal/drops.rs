@@ -14,6 +14,7 @@
 //! checked at runtime. A crate without `impl Drop` lowers as before.
 
 use super::*;
+use crate::resolve::borrowck::{Path, Step};
 
 /// The generated function that drops a value: its own `drop`, then its
 /// parts.
@@ -767,11 +768,153 @@ impl Parser<'_> {
         match self.drop_use(&local.ty) {
             DropUse::None => {}
             DropUse::All => self.flow().drop_use(local.declaration),
-            DropUse::Some => self.flow().unmodeled(
-                "a value whose drop uses some of the borrows it holds and not others",
-                local.declaration,
-            ),
+            DropUse::Some => {
+                if self.drops_in_part(&local.ty, local.declaration) {
+                    self.flow().drop_use(local.declaration);
+                }
+            }
         }
+    }
+
+    /// Whether the drop of the local of type `ty` declared at
+    /// `declaration`, which uses only some of the borrows it holds, uses a
+    /// part of it these facts follow (`Recorder::drops_in_part`). One whose
+    /// part they can't tell is noted.
+    pub(super) fn drops_in_part(&self, ty: &Ty, declaration: Span) -> bool {
+        match self.drop_positions(ty, &mut Vec::new()) {
+            Some(used) => {
+                self.flow().drops_in_part(declaration, &used);
+                true
+            }
+            None => {
+                self.flow().unmodeled(
+                    "a value whose drop uses some of the borrows it holds and not others",
+                    declaration,
+                );
+                false
+            }
+        }
+    }
+
+    /// The region positions of a value of `ty` whose borrows its drop
+    /// uses, as rustc's drop check has it, or `None` where these facts
+    /// can't tell: all of a type with a `Drop` of its own, none of a
+    /// reference, and of any other type what its parts' drops use, as
+    /// `drop_uses_in` reads them.
+    fn drop_positions(
+        &self,
+        ty: &Ty,
+        visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>,
+    ) -> Option<Vec<Path>> {
+        if !self.may_hold_borrow(ty) {
+            return Some(Vec::new());
+        }
+        let mut below = |members: &mut dyn Iterator<Item = &Ty>| {
+            let mut used = Vec::new();
+            for (index, member) in members.enumerate() {
+                let at = Path::of(&[Step::Arg(index as u8)]);
+                used.extend(
+                    self.drop_positions(member, visiting)?
+                        .into_iter()
+                        .map(|path| at.join(path)),
+                );
+            }
+            Some(used)
+        };
+        match &self.inference.resolve(ty) {
+            Ty::Reference { .. } => Some(Vec::new()),
+            #[cfg(feature = "rust-import")]
+            Ty::Host { proof, .. }
+                if rawr_import::surface::opaque::declared(&proof.definition.path()) =>
+            {
+                Some(vec![Path::ROOT])
+            }
+            Ty::Script(id, arguments) => {
+                if self.models.has_drop(*id) {
+                    return Some(vec![Path::ROOT]);
+                }
+                let key = (*id, arguments.clone());
+                if visiting.contains(&key) {
+                    return None;
+                }
+                visiting.push(key);
+                let used = self.field_drop_positions(*id, arguments, visiting);
+                visiting.pop();
+                used
+            }
+            Ty::Array { element, .. }
+            | Ty::Option(element)
+            | Ty::Boxed(element)
+            | Ty::Counted(_, element)
+            | Ty::Weak(_, element)
+            | Ty::Cell(_, element)
+            | Ty::Reverse(element) => below(&mut std::iter::once(&**element)),
+            Ty::Result(ok, err) => below(&mut [&**ok, &**err].into_iter()),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => below(&mut members.iter()),
+            Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown
+                if self.drops() =>
+            {
+                Some(vec![Path::ROOT])
+            }
+            _ => Some(Vec::new()),
+        }
+    }
+
+    /// The region positions of a value of the crate type `id`, with no
+    /// `Drop` of its own, whose borrows the drops of its fields or payloads
+    /// use: each field's, at the type's positions its own sit at.
+    fn field_drop_positions(
+        &self,
+        id: type_def::Id,
+        arguments: &[Ty],
+        visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>,
+    ) -> Option<Vec<Path>> {
+        let substitution = self.nominal_substitution(id, arguments);
+        let fields: Vec<(Option<&str>, usize, &type_ref::Type)> = match self.models.definition(id) {
+            Nominal::Struct { item, .. } => item
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(slot, field)| (None, slot, &field.ty))
+                .collect(),
+            Nominal::Enum { item, .. } => item
+                .variants
+                .iter()
+                .flat_map(|variant| {
+                    variant
+                        .payload
+                        .iter()
+                        .enumerate()
+                        .map(|(slot, ty)| (Some(variant.name.text.as_str()), slot, ty))
+                })
+                .collect(),
+        };
+        let mut used = Vec::new();
+        for (variant, slot, declared) in fields {
+            let field = instantiate(&Ty::from_resolved(declared), &substitution);
+            let dropped = self.drop_positions(&field, visiting)?;
+            if dropped.is_empty() {
+                continue;
+            }
+            for (at, position) in self.field_positions(id, variant, slot)? {
+                // A `'static` position holds nothing the drop could outlive.
+                let Some(position) = position else {
+                    continue;
+                };
+                if dropped.iter().any(|whole| at.starts_with(*whole)) {
+                    used.push(position);
+                    continue;
+                }
+                // A type parameter's position: what its argument's drop uses.
+                used.extend(
+                    dropped
+                        .iter()
+                        .filter(|part| part.starts_with(at))
+                        .map(|part| position.join(part.strip(at))),
+                );
+            }
+        }
+        Some(used)
     }
 
     /// The locals of the innermost scope whose drops use the borrows they
@@ -790,7 +933,11 @@ impl Parser<'_> {
             match self.drop_use(&local.ty) {
                 DropUse::None => {}
                 DropUse::All => uses.push(local.declaration),
-                DropUse::Some => self.note_drop_use(local),
+                DropUse::Some => {
+                    if self.drops_in_part(&local.ty, local.declaration) {
+                        uses.push(local.declaration);
+                    }
+                }
             }
         }
         if let Some(scope) = self.drop_scopes.last_mut() {
@@ -799,17 +946,34 @@ impl Parser<'_> {
         uses
     }
 
-    /// A jump out of the scopes above `depth`: the uses the drops of their
-    /// locals make, innermost first.
-    pub(super) fn exit_drop_uses(&self, depth: usize) {
+    /// A jump at `at` out of the scopes above `depth`: their locals end
+    /// there, the last declared first, each after the uses its drop makes,
+    /// as at the scopes' ends. A cell's guard among them releases its
+    /// borrow there.
+    pub(super) fn exit_drop_uses(&self, depth: usize, at: Span) {
         if !self.drop_scoped() {
             return;
         }
-        for scope in self.drop_scopes.iter().skip(depth).rev() {
-            for local in scope.locals.iter().rev() {
-                self.note_drop_use(local);
+        let leaving = self
+            .drop_scopes
+            .iter()
+            .skip(depth)
+            .flat_map(|scope| &scope.locals);
+        let declared: Vec<Span> = leaving.clone().map(|local| local.declaration).collect();
+        let mut uses = Vec::new();
+        for local in leaving {
+            match self.drop_use(&local.ty) {
+                DropUse::None => {}
+                DropUse::All => uses.push(local.declaration),
+                DropUse::Some => {
+                    if self.drops_in_part(&local.ty, local.declaration) {
+                        uses.push(local.declaration);
+                    }
+                }
             }
         }
+        uses.extend(self.cell_guard_drops(&declared));
+        self.flow().scope_exit(&declared, &uses, at);
     }
 
     fn needs_drop_in(

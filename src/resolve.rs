@@ -4090,9 +4090,13 @@ fn resolve_methods(
     key_by_self_type(&mut methods, &self_types);
     key_by_self_type(&mut builtin_methods, &builtin_self_types);
     // A default body no impl receives is not lowered: what it borrows and
-    // moves is left to `cargo check`.
+    // moves is left to `cargo check`. A std trait's are std's, which the
+    // program's check never reads.
     #[cfg(test)]
     for (name, (_, declared)) in &traits {
+        if declared.std.is_some() {
+            continue;
+        }
         for (function, provided) in declared.functions.iter().zip(declared.provided.iter()) {
             if *provided && !received.contains(&(name.clone(), function.name.text.clone())) {
                 crate::resolve::borrowck::note_unlowered(

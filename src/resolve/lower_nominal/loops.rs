@@ -442,7 +442,7 @@ impl<'a> Parser<'a> {
             }
         }
         let flow_depth = self.loops[target].flow_depth;
-        self.exit_drop_uses(self.loops[target].drop_depth);
+        self.exit_drop_uses(self.loops[target].drop_depth, start);
         self.flow().jump(flow_depth, breaking);
         let keyword = if breaking { "break" } else { "continue" };
         let drops = self.exit_drops(self.loops[target].drop_depth)?;
@@ -481,6 +481,16 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())))
     }
 
+    /// `?`'s early return at `at`: a path of its own out of the innermost
+    /// function, method or closure, which ends its locals as `return` does.
+    pub(super) fn try_return(&mut self, at: Span) {
+        let split = self.flow().split();
+        self.flow().arm(split);
+        self.exit_drop_uses(self.drop_base, at);
+        self.flow().ret();
+        self.flow().arm(split);
+    }
+
     /// `return value` or a bare `return`, leaving the innermost function,
     /// method or closure with a value of its declared output, as in Rust.
     pub(super) fn parse_return(&mut self, start: Span) -> Result<ParsedExpr, Error> {
@@ -513,7 +523,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let copied = self.copied_return("()".into());
                 source = self.jump_with_drops(&drops, "return", copied);
-                self.exit_drop_uses(self.drop_base);
+                self.exit_drop_uses(self.drop_base, start);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -537,7 +547,7 @@ impl<'a> Parser<'a> {
             if !drops.is_empty() {
                 let returned = self.copied_return(returned.clone()).unwrap_or(returned);
                 source = self.jump_with_drops(&drops, "return", Some(returned));
-                self.exit_drop_uses(self.drop_base);
+                self.exit_drop_uses(self.drop_base, start);
                 self.flow().ret();
                 return Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())));
             }
@@ -545,7 +555,7 @@ impl<'a> Parser<'a> {
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
         }
         source.push_text("; }");
-        self.exit_drop_uses(self.drop_base);
+        self.exit_drop_uses(self.drop_base, start);
         self.flow().ret();
         Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())))
     }

@@ -10176,6 +10176,95 @@ main();
 }
 
 #[test]
+fn a_jump_out_of_a_scope_ends_its_locals_after_their_drops() {
+    // `?`, `return`, `break` and `continue` end the locals of each scope
+    // they leave, the last declared first, each after its drop, as the
+    // scopes' ends do (#185).
+    let short = "error[E0597]: `x` does not live long enough";
+    let drop = "struct D<'a>(&'a i32);\nimpl Drop for D<'_> { fn drop(&mut self) {} }\n";
+    let cases = [
+        "fn f(o: Option<i32>) -> Option<i32> { let d; let x = 1; d = D(&x); let n = o?; drop(d); \
+         Some(n) }\nfn main() { println!(\"{:?}\", f(Some(1))); }",
+        "fn f(o: Result<i32, String>) -> Result<i32, String> { let d; let x = 1; d = D(&x); \
+         let n = o?; drop(d); Ok(n) }\nfn main() { println!(\"{:?}\", f(Ok(1))); }",
+        "fn f(c: bool) -> i32 { let d; let x = 1; d = D(&x); if c { return 1; } drop(d); 2 }\n\
+         fn main() { println!(\"{}\", f(true)); }",
+        "fn main() { let mut n = 0; loop { let d; let x = 1; d = D(&x); n += 1; if n > 1 { break; } \
+         drop(d); } println!(\"{}\", n); }",
+    ]
+    .map(|case| format!("{drop}{case}"));
+    refused_as(&cases.each_ref().map(|case| (case.as_str(), short)));
+    let output = printed(
+        r#"
+struct D<'a>(&'a i32);
+impl Drop for D<'_> { fn drop(&mut self) {} }
+fn f(o: Option<i32>) -> Option<i32> { let x = 1; let d = D(&x); let n = o?; drop(d); Some(n) }
+fn g(c: bool) -> i32 { let x = 1; let d = D(&x); if c { return 1; } drop(d); 2 }
+fn main() {
+    let mut n = 0;
+    while n < 3 { let x = 1; let d = D(&x); n += 1; if n == 1 { continue; } drop(d); }
+    println!("{:?} {:?} {} {} {}", f(Some(1)), f(None), g(true), g(false), n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Some(1) None 1 2 3\n");
+}
+
+#[test]
+fn a_drop_that_uses_some_of_a_values_borrows_keeps_only_those() {
+    // A value with no `Drop` of its own drops its parts: their `Drop`s use
+    // the borrows they hold, and a reference beside them uses none (#185).
+    let assigned = "error[E0506]: cannot assign to `x` because it is borrowed";
+    let drop = "struct D<'a>(&'a i32);\nimpl Drop for D<'_> { fn drop(&mut self) {} }\n\
+                struct S<'a, 'b> { d: D<'a>, r: &'b i32 }\nstruct P<T, U> { t: T, u: U }\n\
+                enum E<'a, 'b> { A(D<'a>), B(&'b i32) }\n";
+    let cases = [
+        "let s = S { d: D(&x), r: &y }; println!(\"{}\", s.r);",
+        "let s = (D(&x), &y); println!(\"{}\", s.1);",
+        "let s = P { t: D(&x), u: &y }; println!(\"{}\", s.u);",
+        "let s = (vec![D(&x)], vec![&y]); println!(\"{}\", s.1[0]);",
+        "let s = E::A(D(&x)); let _f = E::B(&y); if let E::A(_) = &s {}",
+    ]
+    .map(|case| {
+        format!(
+            "{drop}fn main() {{ let mut x = 1; let y = 2; {case} x = 3; println!(\"{{}}\", x); }}"
+        )
+    });
+    refused_as(&cases.each_ref().map(|case| (case.as_str(), assigned)));
+    let output = printed(
+        r#"
+struct D<'a>(&'a i32);
+impl Drop for D<'_> { fn drop(&mut self) {} }
+struct S<'a, 'b> { d: D<'a>, r: &'b i32 }
+struct Out<'a, 'b> { s: S<'a, 'b>, n: i32 }
+struct P<T, U> { t: T, u: U }
+fn take<T>(_t: T) {}
+fn main() {
+    let mut x = 1;
+    let mut y = 2;
+    let z = 5;
+    {
+        let s = Out { s: S { d: D(&x), r: &y }, n: 0 };
+        let t = (D(&x), &y);
+        let p = P { t: D(&x), u: &y };
+        let v = (vec![D(&x)], Some(&y));
+        println!("{} {} {} {} {:?}", s.s.r, s.n, t.1, p.u, v.1);
+        y = 3;
+    }
+    let mut w = (D(&x), &y);
+    w = (D(&z), &y);
+    take((D(&x), &y));
+    x = 4;
+    println!("{} {} {}", x, y, w.1);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 0 2 2 Some(2)\n4 3 3\n");
+}
+
+#[test]
 fn a_trait_method_and_a_mut_parameter_keep_what_their_signatures_say() {
     // A call through a generic bound or a trait object keeps what the
     // trait's signature says, and a `&mut` parameter takes another

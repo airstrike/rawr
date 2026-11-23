@@ -1422,7 +1422,7 @@ impl Parser<'_> {
     /// Where each region position of the field `slot` (of `variant`, for an
     /// enum) of the crate type `definition` sits in the type, or `None` for
     /// one these facts can't place.
-    fn field_positions(
+    pub(super) fn field_positions(
         &self,
         definition: type_def::Id,
         variant: Option<&str>,
@@ -2290,10 +2290,11 @@ impl Parser<'_> {
             match self.drop_use(&local.ty) {
                 drops::DropUse::None => {}
                 drops::DropUse::All => self.flow().drop_use(local.declaration),
-                drops::DropUse::Some => self.flow().unmodeled(
-                    "a value whose drop uses some of the borrows it holds and not others",
-                    local.declaration,
-                ),
+                drops::DropUse::Some => {
+                    if self.drops_in_part(&local.ty, local.declaration) {
+                        self.flow().drop_use(local.declaration);
+                    }
+                }
             }
             let whole = assignee::assignment_span(target, replacement);
             let into = self.flow().rebound(target.start(), whole);
