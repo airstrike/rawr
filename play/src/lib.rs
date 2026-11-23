@@ -181,6 +181,20 @@ mod tests {
         output
     }
 
+    /// `text` without the id Rust's hook prints after the panicking
+    /// thread's name, which differs from run to run.
+    fn idless(text: &str) -> String {
+        match text.split_once("thread 'main' (") {
+            Some((before, rest)) => match rest.split_once(") panicked") {
+                Some((id, after)) if id.bytes().all(|b| b.is_ascii_digit()) => {
+                    format!("{before}thread 'main' panicked{after}")
+                }
+                _ => text.to_owned(),
+            },
+            None => text.to_owned(),
+        }
+    }
+
     #[test]
     fn maps_and_arrays_share_one_size_limit() {
         let limits = Limits::default();
@@ -243,11 +257,11 @@ mod tests {
     fn run_plain_runtime_errors_point_at_the_users_text() {
         // A Vec's index panics at its `[`, as rustc places it.
         let output = text("let a = vec![1,2,3]; let i = 5; println!(\"{}\", a[i]);");
-        let shown = output.text();
+        let shown = idless(&output.text());
         assert_eq!(
             shown,
             format!(
-                "thread 'main' panicked at play.rs:1:49:\n\
+                "\nthread 'main' panicked at play.rs:1:49:\n\
                  index out of bounds: the len is 3 but the index is 5\n{}\n",
                 rawr::diagnostic::BACKTRACE_NOTE
             )
@@ -289,8 +303,8 @@ mod tests {
         let shown = cases
             .iter()
             .map(|(line, _)| {
-                let text = text(&format!("{i}{line}")).text().to_owned();
-                text.lines().next().unwrap_or_default().to_owned()
+                let text = idless(&text(&format!("{i}{line}")).text());
+                text.lines().nth(1).unwrap_or_default().to_owned()
             })
             .collect::<Vec<_>>();
         let expected = cases
@@ -317,11 +331,11 @@ mod tests {
         let output = text("println!(\"before\");\nassert_eq!(1 + 1, 3);");
         assert_eq!(output.status, 101);
         assert!(!output.limit);
-        let text = output.text();
+        let text = idless(&output.text());
         assert_eq!(
             text,
             format!(
-                "before\nthread 'main' panicked at play.rs:2:1:\n\
+                "before\n\nthread 'main' panicked at play.rs:2:1:\n\
                  assertion `left == right` failed\n  left: 2\n right: 3\n{}\n",
                 rawr::diagnostic::BACKTRACE_NOTE
             )

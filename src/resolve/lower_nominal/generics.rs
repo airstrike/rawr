@@ -65,6 +65,30 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), elaborated(generic)))
             .collect();
         self.generic_traits = generic_traits(generics);
+        // `T: Hash` is a capability bound, and `Hash` std's declared trait
+        // where the program names it: `T::hash_slice` and `x.hash(state)`
+        // are its functions, which its impls give each type.
+        if self
+            .models
+            .traits
+            .get("Hash")
+            .is_some_and(|(_, declared)| declared.std == Some("core::hash::Hash"))
+        {
+            for generic in generics {
+                if !generic.bounds.contains(capability::Kind::Hash) {
+                    continue;
+                }
+                let traits = self
+                    .generic_traits
+                    .entry(generic.name.text.clone())
+                    .or_default();
+                if !traits.iter().any(|name| name == "Hash") {
+                    let mut named = traits.to_vec();
+                    named.push("Hash".into());
+                    *traits = named.into_boxed_slice();
+                }
+            }
+        }
         self.generic_trait_arguments = generic_trait_arguments(generics);
         self.inference.equalities = generic_equalities(generics);
         self.inference.trait_arguments = self

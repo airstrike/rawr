@@ -2037,6 +2037,7 @@ pub(super) fn builtin_code(ty: &Ty) -> Option<crate::INT> {
         } => crate::resolve::ARRAY_OWNER,
         Ty::Unit => -9,
         Ty::Result(..) => -10,
+        Ty::Tuple(_) => crate::resolve::TUPLE_OWNER,
         Ty::Boxed(inner) => return builtin_code(inner),
         _ => return None,
     })

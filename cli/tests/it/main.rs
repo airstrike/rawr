@@ -104,6 +104,25 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// `text` without the id Rust's hook prints after a panicking thread's
+/// name, `thread 'main' (<id>) panicked at`, which differs from run to run.
+fn idless(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.split_once("' (") {
+            Some((thread, rest)) if line.starts_with("thread '") => {
+                match rest.split_once(") panicked") {
+                    Some((id, place)) if id.bytes().all(|b| b.is_ascii_digit()) => {
+                        format!("{thread}' panicked{place}")
+                    }
+                    _ => line.to_owned(),
+                }
+            }
+            _ => line.to_owned(),
+        })
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -235,14 +254,15 @@ fn a_panic_exits_101_like_rust() {
     assert_eq!(output.status.code(), Some(101));
     assert_eq!(stdout(&output), "before\n");
     assert_eq!(
-        stderr(&output),
-        "thread 'main' panicked at panic.rs:3:5:\nboom 1\n\
+        idless(&stderr(&output)),
+        "\nthread 'main' panicked at panic.rs:3:5:\nboom 1\n\
          note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
     );
 }
 
 /// A spawned thread's panic names where it panicked, as the main thread's
-/// does (#948).
+/// does (#948), and is followed by the note on backtraces, as the
+/// process's first panic.
 #[test]
 fn a_thread_s_panic_names_its_place() {
     let sandbox = Sandbox::new("thread-panic");
@@ -256,8 +276,9 @@ fn a_thread_s_panic_names_its_place() {
 
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
-        stderr(&output),
-        "thread '<unnamed>' panicked at thread.rs:3:9:\nboom 3\n"
+        idless(&stderr(&output)),
+        "\nthread '<unnamed>' panicked at thread.rs:3:9:\nboom 3\n\
+         note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
     );
 }
 

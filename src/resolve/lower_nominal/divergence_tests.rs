@@ -931,7 +931,9 @@ main();
 }
 
 /// The first lines of the panic `cargo run` of `source` prints, from
-/// `thread 'main' panicked at main.rs:<line>:<column>:` to its message.
+/// `thread 'main' panicked at main.rs:<line>:<column>:` to its message,
+/// without the blank line before them and the thread's id, which differs
+/// from run to run.
 fn panicked(source: &str) -> String {
     let engine = Engine::new();
     let evidence = crate::diagnostic::Source::new("main.rs", source).unwrap();
@@ -949,6 +951,11 @@ fn panicked(source: &str) -> String {
     )
     .unwrap();
     let panic = crate::diagnostic::panic(&report);
+    let id = format!(" ({}) panicked", crate::diagnostic::thread_id::current());
+    let panic = panic
+        .strip_prefix('\n')
+        .expect("Rust's hook starts a panic with a blank line")
+        .replacen(&id, " panicked", 1);
     panic.lines().take(2).collect::<Vec<_>>().join("\n")
 }
 
@@ -9945,86 +9952,6 @@ fn language_blanket_impls_are_probed_by_the_bounds_that_hold() {
 }
 
 #[test]
-fn a_blanket_impls_function_without_self_and_its_iterator_methods_run() {
-    // A blanket impl's function without `self` runs at the type the path
-    // or a generic caller names, and `self.next()` of a `&mut self` method
-    // over an iterator steps the caller's iterator (#1555).
-    let output = printed(
-        r#"
-use std::fmt::Display;
-trait Make {
-    fn make() -> Self;
-}
-impl<T: Default> Make for T {
-    fn make() -> Self {
-        T::default()
-    }
-}
-trait Named {
-    fn named(prefix: &str) -> String;
-}
-impl<T: Display + Default> Named for T {
-    fn named(prefix: &str) -> String {
-        format!("{prefix}{}", T::default())
-    }
-}
-fn build<T: Default>() -> T {
-    <T as Make>::make()
-}
-trait Tally {
-    fn first_two(&mut self) -> (Option<i64>, Option<i64>);
-    fn tally(self) -> usize;
-}
-impl<T: Iterator<Item = i64>> Tally for T {
-    fn first_two(&mut self) -> (Option<i64>, Option<i64>) {
-        let a = self.next();
-        let b = self.next();
-        (a, b)
-    }
-    fn tally(self) -> usize {
-        self.count()
-    }
-}
-fn main() {
-    let v = <Vec<u8> as Make>::make();
-    let s: String = Make::make();
-    let built: Vec<i64> = build();
-    println!("{:?} {:?} {} {:?} {}", v, s, i32::make(), built, build::<u8>());
-    println!("{} {}", <i32 as Named>::named("n="), String::named("s="));
-    let mut it = vec![1i64, 2, 3, 4].into_iter();
-    println!("{:?} {:?} {}", it.first_two(), it.next(), it.tally());
-}
-main();
-"#,
-    );
-    assert_eq!(
-        output,
-        "[] \"\" 0 [] 0\nn=0 s=\n(Some(1), Some(2)) Some(3) 1\n"
-    );
-    let report = refused(
-        r#"
-trait Make {
-    fn make() -> Self;
-}
-impl<T: Default> Make for T {
-    fn make() -> Self {
-        T::default()
-    }
-}
-struct Opaque;
-fn main() {
-    let _o = <Opaque as Make>::make();
-}
-main();
-"#,
-    );
-    assert!(
-        report.starts_with("error[E0277]: the trait bound `Opaque: Make` is not satisfied"),
-        "{report}"
-    );
-}
-
-#[test]
 fn a_prelude_type_imported_under_another_name_works_in_bodies() {
     // `use std::string::String as Text;` names `String` in a body's paths,
     // types and patterns, as in a signature (#810).
@@ -13410,6 +13337,332 @@ fn a_local_key_method_of_another_impl_is_rustcs_e0599_with_its_notes() {
 }
 
 #[test]
+fn cfg_leaves_out_tuple_struct_fields_and_a_block_s_members() {
+    // A tuple struct's field and, in a body, a variant and a tuple field
+    // that a `#[cfg(..)]` leaves out are gone from the constructor, the
+    // patterns and `Debug`, as rustc builds them (#605).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct T(#[cfg(any())] u8, i32, #[cfg(all())] i64);
+fn main() {
+    #[derive(Debug)]
+    enum L { X, #[cfg(any())] Y, Z(#[cfg(any())] String, u8) }
+    #[derive(Debug)]
+    struct U(#[cfg(any())] String, u8);
+    let t = T(1, 2);
+    let n = match L::Z(9) { L::X => 0, L::Z(n) => n };
+    println!("{:?} {} {} {:?} {:?} {}", t, t.0, t.1, L::X, U(7), n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "T(1, 2) 1 2 X U(7) 9\n");
+}
+
+#[test]
+fn a_renamed_std_type_names_its_functions() {
+    // `use std::time::Duration as Span;` binds std's `Duration`, so
+    // `Span::from_millis` is its function, called or as a value, as a type
+    // it names already was (#344).
+    let output = printed(
+        r#"
+use std::time::Duration as Span;
+use std::time::Instant as Moment;
+fn wait(s: Span) -> Span {
+    s + Span::from_millis(1)
+}
+fn main() {
+    let c: Span = Span::from_secs(1);
+    let f = Span::from_secs;
+    println!("{:?} {:?} {:?} {:?}", c, wait(Span::ZERO), Span::from_secs_f64(0.25), f(3));
+    println!("{}", Moment::now().elapsed() < Span::from_secs(60));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1s 1ms 250ms 3s\ntrue\n");
+}
+
+#[test]
+fn an_outside_crate_s_head_leaves_its_arguments_to_their_scope() {
+    // `::core::cmp::max`'s head is the crate `core`, which no `use`
+    // shadows, but its arguments, and a type's generic arguments, read
+    // `core` as the `use` binds it, as rustc resolves them (#1962).
+    let output = printed(
+        r#"
+mod m {
+    #[derive(Debug)]
+    pub struct X;
+    pub fn min(a: i32, b: i32) -> i32 {
+        a * 100 + b
+    }
+}
+use m as core;
+fn main() {
+    println!("{}", ::core::cmp::max(core::min(1, 2), 3));
+    println!("{}", ::core::cmp::max(3, { core::min(4, 5) }));
+    let x: ::core::option::Option<core::X> = Some(core::X);
+    println!("{:?}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "102\n405\nSome(X)\n");
+}
+
+#[test]
+fn a_generic_impl_for_a_std_type_runs_per_instance() {
+    // `impl<T: Tag> Tag for Vec<T>` reached through a generic runs at its
+    // element type, so `T::tag_all` is `u8`'s own, `u32`'s default or
+    // `Option<u8>`'s instance, and a builtin's trait method takes a `&mut`
+    // argument, as rustc's monomorphised calls do.
+    let output = printed(
+        r#"
+trait Tag {
+    fn tag(&self, out: &mut Vec<String>);
+    fn tag_all(data: &[Self], out: &mut Vec<String>)
+    where
+        Self: Sized,
+    {
+        for piece in data {
+            piece.tag(out)
+        }
+    }
+}
+impl Tag for u8 {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("u8 {}", self)) }
+    fn tag_all(data: &[u8], out: &mut Vec<String>) { out.push(format!("u8s {:?}", data)) }
+}
+impl Tag for u32 {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("u32 {}", self)) }
+}
+struct P(u8);
+impl Tag for P {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("P {}", self.0)) }
+}
+impl<T: Tag> Tag for Option<T> {
+    fn tag(&self, out: &mut Vec<String>) {
+        match self {
+            None => out.push("none".to_string()),
+            Some(v) => v.tag(out),
+        }
+    }
+}
+impl<T: Tag> Tag for Vec<T> {
+    fn tag(&self, out: &mut Vec<String>) {
+        out.push(format!("len {}", self.len()));
+        T::tag_all(self, out)
+    }
+}
+fn show<T: Tag>(x: &T) -> Vec<String> {
+    let mut out = Vec::new();
+    x.tag(&mut out);
+    out
+}
+fn main() {
+    let mut out = Vec::new();
+    7u8.tag(&mut out);
+    println!("{:?}", out);
+    println!("{:?}", show(&Some(3u32)));
+    println!("{:?}", show(&vec![1u8, 2]));
+    println!("{:?}", show(&vec![1u32, 2]));
+    println!("{:?}", show(&vec![P(1), P(2)]));
+    println!("{:?}", show(&vec![Some(1u8), None]));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"u8 7\"]\n[\"u32 3\"]\n[\"len 2\", \"u8s [1, 2]\"]\n[\"len 2\", \"u32 1\", \"u32 \
+         2\"]\n[\"len 2\", \"P 1\", \"P 2\"]\n[\"len 2\", \"u8 1\", \"none\"]\n"
+    );
+}
+
+#[test]
+fn a_program_trait_implemented_for_tuples_runs_for_each_arity() {
+    // Each tuple arity is its own Self type, whose impl runs at its
+    // members' types: called directly, through a generic and through a
+    // trait object (#2685).
+    let output = printed(
+        r#"
+trait Tag {
+    fn tag(&self) -> String;
+}
+impl Tag for u8 {
+    fn tag(&self) -> String { format!("u8:{}", self) }
+}
+impl Tag for u32 {
+    fn tag(&self) -> String { format!("u32:{}", self) }
+}
+impl<A: Tag, B: Tag> Tag for (A, B) {
+    fn tag(&self) -> String { self.0.tag() + "," + &self.1.tag() }
+}
+impl<A: Tag, B: Tag, C: Tag> Tag for (A, B, C) {
+    fn tag(&self) -> String { format!("[{} {} {}]", self.0.tag(), self.1.tag(), self.2.tag()) }
+}
+impl Tag for () {
+    fn tag(&self) -> String { "unit".to_string() }
+}
+fn show<T: Tag>(x: &T) -> String {
+    x.tag()
+}
+fn main() {
+    println!("{}", (1u8, 2u32).tag());
+    println!("{}", show(&((1u8, 2u8), 3u32)));
+    println!("{}", show(&(1u8, (), 3u32)));
+    let d: &dyn Tag = &(5u32, 6u8);
+    println!("{}", d.tag());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "u8:1,u32:2\nu8:1,u8:2,u32:3\n[u8:1 unit u32:3]\nu32:5,u8:6\n"
+    );
+}
+
+#[test]
+fn hash_writes_into_a_program_hasher_with_rustcs_calls() {
+    // std's impls, a derive and a program's own `hash` write a value into
+    // a `Hasher` with the calls rustc's do: an integer with its kind's
+    // `write_*`, a slice of integers its bytes in one `write`, a `str` its
+    // bytes and `0xff`, a sequence its length first, and an enum its
+    // discriminant as its `repr` integer (#2499).
+    let output = printed(
+        r#"
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+
+struct Log(Vec<String>);
+impl Hasher for Log {
+    fn finish(&self) -> u64 { self.0.len() as u64 }
+    fn write(&mut self, bytes: &[u8]) { self.0.push(format!("{:?}", bytes)); }
+    fn write_u8(&mut self, i: u8) { self.0.push(format!("u8 {}", i)); }
+    fn write_usize(&mut self, i: usize) { self.0.push(format!("usize {}", i)); }
+}
+
+#[derive(PartialEq, Eq)]
+struct Name(String);
+impl Hash for Name {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_lowercase().hash(state);
+    }
+}
+
+mod shapes {
+    #[derive(Hash)]
+    pub enum E {
+        A,
+        B(u8),
+        C { x: u32, y: bool },
+    }
+}
+
+#[derive(Hash)]
+struct W<'a, H> {
+    name: &'a str,
+    h: H,
+}
+
+#[derive(Hash)]
+#[repr(u8)]
+enum Small {
+    X = 4,
+    Y,
+}
+
+fn show<T: Hash + ?Sized>(x: &T) -> Vec<String> {
+    let mut h = Log(Vec::new());
+    x.hash(&mut h);
+    h.0
+}
+
+fn main() {
+    let mut h = Log(Vec::new());
+    7u8.hash(&mut h);
+    'c'.hash(&mut h);
+    "hi".hash(&mut h);
+    u16::hash_slice(&[1, 2], &mut h);
+    println!("{:?}", h.0);
+    println!("{:?}", show(&Some(5u8)));
+    println!("{:?}", show(&vec![1u8, 2]));
+    println!("{:?}", show(&(1u8, String::from("a"))));
+    println!("{:?}", show(&Ok::<u8, String>(1)));
+    println!("{:?}", show(&vec![Some(1u8), None]));
+    println!("{:?}", show("str"));
+    println!("{:?}", show(&Name(String::from("AB"))));
+    println!("{:?}", show(&shapes::E::A));
+    println!("{:?}", show(&shapes::E::C { x: 1, y: true }));
+    println!("{:?}", show(&W { name: "n", h: 2u16 }));
+    println!("{:?}", show(&Small::Y));
+    let mut set = HashSet::new();
+    set.insert(Name(String::from("a")));
+    set.insert(Name(String::from("b")));
+    println!("{}", set.len());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"u8 7\", \"[99, 0, 0, 0]\", \"[104, 105]\", \"u8 255\", \"[1, 0, 2, 0]\"]\n[\"usize \
+         1\", \"u8 5\"]\n[\"usize 2\", \"[1, 2]\"]\n[\"u8 1\", \"[97]\", \"u8 255\"]\n[\"usize \
+         0\", \"u8 1\"]\n[\"usize 2\", \"usize 1\", \"u8 1\", \"usize 0\"]\n[\"[115, 116, 114]\", \
+         \"u8 255\"]\n[\"[97, 98]\", \"u8 255\"]\n[\"usize 0\"]\n[\"usize 2\", \"[1, 0, 0, 0]\", \
+         \"u8 1\"]\n[\"[110]\", \"u8 255\", \"[2, 0]\"]\n[\"u8 5\"]\n2\n"
+    );
+}
+
+#[test]
+fn default_hasher_is_sip_with_zero_keys() {
+    // `DefaultHasher::new()` is SipHash-1-3 with zero keys, so `finish`
+    // prints what rustc's build does, by either of its paths, through a
+    // generic `H: Hasher` and after a derive's writes (#2687).
+    let output = printed(
+        r#"
+use std::collections::hash_map::DefaultHasher as Old;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+#[derive(Hash)]
+struct P {
+    x: u8,
+    name: String,
+}
+
+fn digest<T: Hash + ?Sized>(x: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    x.hash(&mut s);
+    s.finish()
+}
+
+fn main() {
+    let mut s = DefaultHasher::new();
+    7u8.hash(&mut s);
+    let mut t = DefaultHasher::default();
+    t.write_u8(7);
+    println!("{} {}", s.finish(), t.finish());
+    println!("{}", digest(&P { x: 1, name: String::from("a") }));
+    println!("{}", digest("hello"));
+    let mut o = Old::new();
+    o.write(&[1, 2, 3]);
+    o.write_u64(9);
+    let c = o.clone();
+    println!("{} {}", o.finish(), c.finish());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "18443343337670940607 18443343337670940607\n6126082892521519421\n16156531084128653017\n\
+         3557016591249593222 3557016591249593222\n"
+    );
+}
+
+#[test]
 fn try_into_an_integer_beside_a_program_try_from_of_the_same_source() {
     // A program's `TryFrom<i64>` doesn't take every `try_into()` of an
     // `i64`: one into an integer is std's, chosen once the target is
@@ -13524,6 +13777,86 @@ main();
     assert!(
         report.starts_with(&expected)
             && report.contains("  = note: required for `i32` to implement `Into<f32>`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_blanket_impls_function_without_self_and_its_iterator_methods_run() {
+    // A blanket impl's function without `self` runs at the type the path
+    // or a generic caller names, and `self.next()` of a `&mut self` method
+    // over an iterator steps the caller's iterator (#1555).
+    let output = printed(
+        r#"
+use std::fmt::Display;
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+trait Named {
+    fn named(prefix: &str) -> String;
+}
+impl<T: Display + Default> Named for T {
+    fn named(prefix: &str) -> String {
+        format!("{prefix}{}", T::default())
+    }
+}
+fn build<T: Default>() -> T {
+    <T as Make>::make()
+}
+trait Tally {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>);
+    fn tally(self) -> usize;
+}
+impl<T: Iterator<Item = i64>> Tally for T {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>) {
+        let a = self.next();
+        let b = self.next();
+        (a, b)
+    }
+    fn tally(self) -> usize {
+        self.count()
+    }
+}
+fn main() {
+    let v = <Vec<u8> as Make>::make();
+    let s: String = Make::make();
+    let built: Vec<i64> = build();
+    println!("{:?} {:?} {} {:?} {}", v, s, i32::make(), built, build::<u8>());
+    println!("{} {}", <i32 as Named>::named("n="), String::named("s="));
+    let mut it = vec![1i64, 2, 3, 4].into_iter();
+    println!("{:?} {:?} {}", it.first_two(), it.next(), it.tally());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[] \"\" 0 [] 0\nn=0 s=\n(Some(1), Some(2)) Some(3) 1\n"
+    );
+    let report = refused(
+        r#"
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+struct Opaque;
+fn main() {
+    let _o = <Opaque as Make>::make();
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `Opaque: Make` is not satisfied"),
         "{report}"
     );
 }

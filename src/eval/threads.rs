@@ -180,7 +180,7 @@ impl Threads {
                 && let Some(report) = crate::diagnostic::located(error)
             {
                 let name = name.as_deref().unwrap_or("<unnamed>");
-                eprint!("{}", crate::diagnostic::panicked(&report, name));
+                eprint!("{}", crate::diagnostic::hooked(&report, name));
             }
             outcome
         });

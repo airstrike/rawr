@@ -1023,6 +1023,7 @@ fn a_marked_module_names_the_items_of_a_native_module() {
 /// crate's name to: `icon::copy()` beside `use std::cmp as pages;` in the
 /// crate `pages` calls the native module's function, as iced's markdown
 /// example calls `icon::copy()` beside `use iced::widget::markdown;`.
+/// The call's arguments read `pages` as the `use` binds it (#1962).
 /// `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_native_modules_path_ignores_a_use_of_the_crates_name() {
@@ -1030,7 +1031,7 @@ fn a_native_modules_path_ignores_a_use_of_the_crates_name() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-crate-shadow"
     );
-    const PRINTED: &str = "61637 61637";
+    const PRINTED: &str = "61637 61637\n14";
     let root = crate::support::fresh("islands-crate-shadow");
     copy(Path::new(SHADOW), &root);
     let native = std::process::Command::new("cargo")
@@ -1050,8 +1051,14 @@ fn a_native_modules_path_ignores_a_use_of_the_crates_name() {
         format!("{PRINTED}\n")
     );
     let mut run = start(&root, &[]);
-    let seen = run.until(|_| true);
-    assert_eq!(seen, PRINTED, "{}", run.seen.join("\n"));
+    let first = run.until(|_| true);
+    let second = run.until(|_| true);
+    assert_eq!(
+        format!("{first}\n{second}"),
+        PRINTED,
+        "{}",
+        run.seen.join("\n")
+    );
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
@@ -2950,16 +2957,17 @@ fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it(
         .unwrap();
     assert_eq!(native.status.code(), Some(101));
     let stderr = String::from_utf8_lossy(&native.stderr);
-    // Current nightly's thread id is #36's.
+    // Without the thread's id, which differs from run to run.
+    let idless = |line: &str| match line.split_once("thread 'main' (") {
+        Some(("", rest)) => rest.split_once(") ").map_or_else(
+            || line.to_owned(),
+            |(_, rest)| format!("thread 'main' {rest}"),
+        ),
+        _ => line.to_owned(),
+    };
     let panicked = stderr
         .lines()
-        .map(|line| match line.split_once("thread 'main' (") {
-            Some(("", rest)) => rest.split_once(") ").map_or_else(
-                || line.to_owned(),
-                |(_, rest)| format!("thread 'main' {rest}"),
-            ),
-            _ => line.to_owned(),
-        })
+        .map(idless)
         .skip_while(|line| !line.starts_with("thread 'main' panicked at "))
         .collect::<Vec<_>>();
     assert!(
@@ -2984,6 +2992,7 @@ fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it(
         .seen
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: "))
+        .map(idless)
         .skip_while(|line| !line.starts_with("thread 'main' panicked at "))
         .take(panicked.len())
         .collect::<Vec<_>>();

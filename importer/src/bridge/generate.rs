@@ -76,7 +76,7 @@ pub use std::cell::RefCell;
 pub use __rawr_internal::{Dynamic, ImmutableString};
 
 #[derive(Clone, Copy)]
-pub struct Adapter { pub identity: [u8; 32], pub signature: [u8; 32], pub selector: [u8; 32], pub instance: [u8; 32], pub item: &'static str, pub bound: bool, pub application: bool, pub root: &'static str, pub witness: u8, pub arguments: u32, pub invoke: Invoke }
+pub struct Adapter { pub identity: [u8; 32], pub signature: [u8; 32], pub selector: [u8; 32], pub instance: [u8; 32], pub item: &'static str, pub bound: bool, pub application: bool, pub root: &'static str, pub witness: u8, pub arguments: u32, pub invoke: Invoke, pub file: &'static str }
 pub type Invoke = fn(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
 pub type Project = fn(
     Box<dyn Any>,
@@ -5169,7 +5169,9 @@ pub fn invoke_in_arena(
             .first()
             .is_some_and(|value| value.is::<__rawr_internal::scope::Lent>());
         let mut arguments = Arguments { values, arena };
-        let output = (adapter.invoke)(&mut arguments)?;
+        // A crate's `#[track_caller]` function this calls panics at the
+        // program's call, which the adapter's stands for.
+        let output = __rawr_internal::crossing::adapting(adapter.file, || (adapter.invoke)(&mut arguments))?;
         // The witness of the call's declared output: a function's, a
         // method's that takes its receiver by value, from its receiver's,
         // or a method's that borrows its receiver, as an async method's
@@ -9843,7 +9845,7 @@ fn render_rows(
     .map_err(request::unwritable)?;
     writeln!(
         file,
-        ", arguments: {}, invoke: {} }},",
+        ", arguments: {}, invoke: {}, file: file!() }},",
         arguments(plan)?,
         adapter_name(plan)
     )
@@ -9861,7 +9863,7 @@ fn render_rows(
         // witness: a field's reader gives the field's value alone.
         writeln!(
             file,
-            ", item: \"\", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {}, file: file!() }},",
             plan.export().root_alias(),
             matcher.name(plan)
         )
@@ -9878,7 +9880,7 @@ fn render_rows(
         byte_array(file, &[0; 32])?;
         writeln!(
             file,
-            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {}, file: file!() }},",
             plan.export().root_alias(),
             store_name(plan)
         )
@@ -9895,7 +9897,7 @@ fn render_rows(
         byte_array(file, &[0; 32])?;
         writeln!(
             file,
-            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {}, file: file!() }},",
             plan.export().root_alias(),
             lender_name(plan)
         )
@@ -9912,7 +9914,7 @@ fn render_rows(
         byte_array(file, &[0; 32])?;
         writeln!(
             file,
-            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {}_lend_mut }},",
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {}_lend_mut, file: file!() }},",
             plan.export().root_alias(),
             adapter_name(plan)
         )
@@ -10304,7 +10306,14 @@ fn render_application_helpers<'p>(
             crate::classify::representability::ownership::Receiver::Mutable => "&mut ",
             crate::classify::representability::ownership::Receiver::Owned => "",
         };
-        write!(output, "    pub(crate) fn call(receiver: {lent}").map_err(encoding)?;
+        // `#[track_caller]`: a crate's `#[track_caller]` method sees the
+        // adapter's call, in the adapter's file, which stands for the
+        // program's (`crossing::adapting`).
+        write!(
+            output,
+            "    #[track_caller]\n    pub(crate) fn call(receiver: {lent}"
+        )
+        .map_err(encoding)?;
         render_native(&invocation.native_receiver, output)?;
         for (index, input) in invocation.native_inputs.iter().enumerate() {
             write!(output, ", argument_{index}: ").map_err(encoding)?;

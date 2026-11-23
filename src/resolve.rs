@@ -22,6 +22,7 @@ pub(crate) mod package;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod record;
 pub(crate) mod similar;
+mod std_hash;
 pub(crate) mod std_path;
 pub(crate) mod std_trait;
 pub mod tail;
@@ -4133,6 +4134,10 @@ pub(crate) const BLANKET_OWNER: i64 = -13;
 /// The impl owner of the array types `[T; N]` (`builtin_owner`).
 pub(crate) const ARRAY_OWNER: i64 = -14;
 
+/// The impl owner of the tuple types `(A, B)` (`builtin_owner`), each
+/// arity its own Self type.
+pub(crate) const TUPLE_OWNER: i64 = -15;
+
 /// The owner of a blanket impl bounded by `IntoIterator<Item = X>` or
 /// `Iterator<Item = X>` (a crate's `impl<'a, T, Message> IntoView<'a,
 /// Message> for T where T: IntoIterator<Item = Element<'a, Message>>`) is
@@ -4202,6 +4207,7 @@ fn erase_iterator_owner(item: &mut item::Impl) {
 pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString)> {
     let code = match ty {
         type_ref::Type::Unit(_) => return Some((-9, "()".into())),
+        type_ref::Type::Tuple { .. } => return Some((TUPLE_OWNER, full_type_name(ty).into())),
         type_ref::Type::Path(path)
             if path.target == type_ref::Target::Parameter
                 || path.target == type_ref::Target::Builtin
@@ -5457,9 +5463,7 @@ fn trait_impl_functions(
         {
             continue;
         }
-        // std's `Hash::hash`: rawr hashes a value by its contents, so the
-        // parser keeps an impl's `hash` as the mark (`hashes_as_rust`).
-        if !provided && declared.std != Some("core::hash::Hash") {
+        if !provided {
             missing.push(format!("`{}`", required.name.text));
             continue;
         }
@@ -6467,6 +6471,10 @@ fn check_generic_arity(
 
 /// The type arguments of an impl's owner: `T` of `impl<T> Pair<T>`.
 fn owner_arguments(ty: &type_ref::Type) -> Box<[type_ref::Type]> {
+    // A tuple's members are its arguments: `A` and `B` of `(A, B)`.
+    if let type_ref::Type::Tuple { members, .. } = ty {
+        return members.clone();
+    }
     let type_ref::Type::Path(path) = ty else {
         return Box::default();
     };

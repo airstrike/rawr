@@ -447,6 +447,18 @@ const BODIES: &[(&str, &str, &str)] = &[
     }",
     ),
     (
+        "core::hash::Hash",
+        "hash_slice",
+        "fn hash_slice<H: std::hash::Hasher>(data: &[Self], state: &mut H)
+    where
+        Self: Sized,
+    {
+        for piece in data {
+            piece.hash(state)
+        }
+    }",
+    ),
+    (
         "core::error::Error",
         "source",
         "fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
@@ -513,6 +525,9 @@ const IMPLS: &[(&str, &str)] = &[
     ),
 ];
 
+/// The definition of std's `Hasher`.
+const HASHER: &str = "core::hash::Hasher";
+
 /// std's impls (`IMPLS`) of the std traits the program names, `traits`,
 /// by the names it knows them by, each resolved as a program's impl is,
 /// its bodies read from std's text. A trait of one that only a `use` of
@@ -539,31 +554,56 @@ pub(crate) fn impls(
         if traits.contains_key(&known) || declared.contains(&name) {
             continue;
         }
-        if IMPLS
-            .iter()
-            .any(|(implemented, _)| *implemented == definition)
+        if has_impls(definition)
             && let Some(trait_) = declaration(definition, &[], host)
         {
             traits.insert(known, trait_);
         }
     }
+    // std's `Hash` impls bound their hasher by `Hasher`, which the program
+    // then names too.
+    let hasher = crate::ImmutableString::from(known(HASHER));
+    if traits
+        .values()
+        .any(|declared| declared.std == Some(super::std_hash::HASH))
+        && !traits.contains_key(&hasher)
+        && !declared.contains(&hasher)
+        && let Some(trait_) = declaration(HASHER, &[], host)
+    {
+        traits.insert(hasher, trait_);
+    }
     let mut shells = Vec::new();
     for (name, declared) in traits {
-        for (definition, source) in IMPLS
-            .iter()
-            .filter(|(definition, _)| declared.std == Some(*definition))
-        {
+        let Some(definition) = declared.std.filter(|definition| has_impls(definition)) else {
+            continue;
+        };
+        // std's impls, then the program's derives of the trait, each naming
+        // its type by the type it is.
+        let derived = match definition {
+            super::std_hash::HASH => super::std_hash::derived(items),
+            _ => Vec::new(),
+        };
+        let written = sources(definition)
+            .into_iter()
+            .map(|source| (source, None))
+            .chain(
+                derived
+                    .into_iter()
+                    .map(|derived| (derived.source, Some((derived.name, derived.target)))),
+            );
+        for (source, own) in written {
             let source = source.replace("{trait}", name);
             let Some(parsed) = crate::parser::parse_impl(&source) else {
                 continue;
             };
+            let types = own.iter().cloned().collect::<BTreeMap<_, _>>();
             let Ok(mut shell) = super::resolve_item(
                 crate::item::Id::from_index(next + shells.len()),
                 program::source::Id::ROOT,
                 None,
                 None,
                 crate::item::Parsed::Impl(parsed),
-                &BTreeMap::new(),
+                &types,
                 host,
                 #[cfg(feature = "rust-import")]
                 None,
@@ -575,8 +615,11 @@ pub(crate) fn impls(
             };
             // std's, which rustc's orphan rule (E0117) doesn't refuse, of
             // the trait by the name the program knows it by, which a path
-            // through std's facade would write as its last segment.
-            implemented.std = Some(definition);
+            // through std's facade would write as its last segment. A
+            // derive's is the program's own.
+            if own.is_none() {
+                implemented.std = Some(definition);
+            }
             if let Some(item::TraitImpl::User { name: written, .. }) = &mut implemented.trait_ {
                 written.text = name.clone();
             }
@@ -588,6 +631,28 @@ pub(crate) fn impls(
         }
     }
     shells
+}
+
+/// Whether std has impls of the std trait `definition` that rawr reads
+/// from their text (`sources`).
+pub(crate) fn has_impls(definition: &str) -> bool {
+    definition == super::std_hash::HASH
+        || IMPLS
+            .iter()
+            .any(|(implemented, _)| *implemented == definition)
+}
+
+/// The text of each of std's impls of the std trait `definition`:
+/// `IMPLS`'s, and `Hash`'s (`std_hash`).
+fn sources(definition: &str) -> Vec<String> {
+    if definition == super::std_hash::HASH {
+        return super::std_hash::sources().collect();
+    }
+    IMPLS
+        .iter()
+        .filter(|(implemented, _)| *implemented == definition)
+        .map(|(_, source)| (*source).to_owned())
+        .collect()
 }
 
 /// `Self::Name` in `ty` as `<Self as trait_name>::Name` for each of the

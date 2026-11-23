@@ -2287,6 +2287,96 @@ fn rawr_test_catches_a_panic_in_a_dependencys_code_per_test() {
     assert_eq!(rawr.status.code(), cargo.status.code());
 }
 
+/// A dependency's `#[track_caller]` function or method that panics, as an
+/// unwrap-like helper does, names the program's call, as `cargo run`
+/// prints it (#1952): a function call at its start, and a method call at
+/// the method's name.
+#[test]
+fn a_dependencys_track_caller_panic_names_the_programs_call() {
+    let root = crate::support::fresh("plain-track-caller-panic");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("checked/src")).unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"track-caller-panic\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+         publish = false\n\n[dependencies]\nchecked = { path = \"checked\" }\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("checked/Cargo.toml"),
+        "[package]\nname = \"checked\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("checked/src/lib.rs"),
+        "#[track_caller]\npub fn below_ten(n: u32) -> u32 {\n    assert!(n < 10, \"too big: {n}\");\n    \
+         n\n}\n\npub struct Gauge(u32);\n\nimpl Gauge {\n    pub fn new(n: u32) -> Self {\n        \
+         Gauge(n)\n    }\n\n    #[track_caller]\n    pub fn read(&self) -> u32 {\n        \
+         if self.0 >= 10 {\n            panic!(\"over: {}\", self.0);\n        }\n        \
+         self.0\n    }\n}\n",
+    )
+    .unwrap();
+    // The panic Rust's hook prints, without the thread's id, which
+    // differs from run to run.
+    let panic = |output: &Output| -> Vec<String> {
+        text(&output.stderr)
+            .lines()
+            .skip_while(|line| !line.starts_with("thread 'main' ("))
+            .map(|line| match line.split_once(") panicked at ") {
+                Some((_, place)) => format!("thread 'main' panicked at {place}"),
+                None => line.to_owned(),
+            })
+            .collect()
+    };
+    for (main, place) in [
+        (
+            "// rawr\nfn main() {\n    println!(\"{}\", checked::below_ten(3));\n    \
+             checked::below_ten(12);\n}\n",
+            "src/main.rs:4:5:",
+        ),
+        (
+            "// rawr\nfn main() {\n    let gauge = checked::Gauge::new(12);\n    \
+             println!(\"read\");\n    gauge.read();\n}\n",
+            "src/main.rs:5:11:",
+        ),
+    ] {
+        fs::write(root.join("src/main.rs"), main).unwrap();
+        let rawr = rawr_import(&root, &["run"]);
+        let cargo = Command::new("cargo")
+            .args(["run", "-q"])
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .env_remove("RUST_BACKTRACE")
+            .output()
+            .unwrap();
+        assert_eq!(
+            panic(&cargo).first().map(String::as_str),
+            Some(format!("thread 'main' panicked at {place}").as_str()),
+            "{}",
+            text(&cargo.stderr)
+        );
+        assert_eq!(panic(&rawr), panic(&cargo), "{}", text(&rawr.stderr));
+        let stderr = text(&rawr.stderr);
+        let lines: Vec<&str> = stderr.lines().collect();
+        let header = lines
+            .iter()
+            .position(|line| line.starts_with("thread 'main' ("));
+        assert!(
+            header.is_some_and(|at| at > 0 && lines[at - 1].is_empty()),
+            "a blank line comes before the panic: {stderr}"
+        );
+        assert_eq!(text(&rawr.stdout), text(&cargo.stdout));
+        assert_eq!(rawr.status.code(), Some(101));
+    }
+}
+
 /// `rawr test` links the package's `[dev-dependencies]` into its tests
 /// alone, as `cargo test` links them into the test harness (#1703): a
 /// test that uses one runs, and `rawr run` of the same program builds
@@ -2506,6 +2596,53 @@ fn a_crates_derive_runs_from_its_expansion() {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "Square Square\nTile\nCircle\nRing\n");
+}
+
+/// A crate derive's helper attributes are the attributes its item and the
+/// item's members may carry, as the derive declares them, and any other is
+/// rustc's "cannot find attribute" (#2516): `#[serde(..)]` beside serde's
+/// derives, but neither `#[bogus]` there nor `#[serde(..)]` beside a derive
+/// that declares no helper.
+#[test]
+fn a_crate_derives_helpers_are_the_attributes_its_item_may_carry() {
+    const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
+    let root = crate::support::fresh("plain-derives-helpers");
+    copy(Path::new(DERIVES), &root);
+    let program = |derive: &str, attribute: &str| {
+        format!(
+            "// rawr\n#[allow(unused_imports)]\nuse serde::Serialize;\n\
+             #[allow(unused_imports)]\nuse shapes::Shape;\n\n\
+             #[derive({derive})]\nstruct Task {{\n    {attribute}\n    done: bool,\n}}\n\n\
+             fn main() {{\n    let _ = Task {{ done: true }}.done;\n    println!(\"ran\");\n}}\n"
+        )
+    };
+    fs::write(
+        root.join("src/main.rs"),
+        program("Serialize", "#[serde(rename = \"finished\")]"),
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "ran\n");
+    for (derive, attribute, name) in [
+        ("Serialize", "#[bogus]", "bogus"),
+        ("Shape", "#[serde(rename = \"finished\")]", "serde"),
+    ] {
+        fs::write(root.join("src/main.rs"), program(derive, attribute)).unwrap();
+        let run = rawr_import(&root, &["run"]);
+        let output = format!("{}{}", text(&run.stdout), text(&run.stderr));
+        assert!(!run.status.success(), "{output}");
+        assert!(
+            output.contains(&format!("cannot find attribute `{name}` in this scope")),
+            "{output}"
+        );
+        assert!(!output.contains("ran\n"), "{output}");
+    }
 }
 
 /// A direct dependency that is a proc-macro crate, as `rust_decimal_macros`
@@ -2760,6 +2897,85 @@ fn a_crate_macro_expands_in_type_and_pattern_position() {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "42 value eighty-four\n");
+}
+
+/// A crate macro's call reads `line!()` and `column!()` where rustc reads
+/// them (#2291): one the macro writes at the call, and one the call's
+/// input holds where the input writes it, as `cargo run` prints them. An
+/// edit that moves the call moves what they read, and the call's kept
+/// expansion is the same.
+#[test]
+fn a_crate_macros_location_calls_read_where_rustc_reads_them() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::fresh("plain-proc-macro-locations");
+    copy(Path::new(PROC_MACRO), &root);
+    let scale = |above: &str| {
+        fs::write(
+            root.join("src/scale.rs"),
+            format!(
+                "// rawr\n{above}pub fn label(value: i64) -> String {{\n    \
+                 let (line, column, inner_line, inner_column) = numerals::located!(\n        \
+                 line!(), column!()\n    );\n    \
+                 format!(\"value {{value}} {{line}} {{column}} {{inner_line}} {{inner_column}}\")\n}}\n"
+            ),
+        )
+        .unwrap();
+    };
+    scale("");
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 42 3 52 4 18\n");
+    scale("\n");
+    let run = rawr_import(&root, &["run"]);
+    assert_eq!(
+        text(&run.stdout),
+        "42 value 42 4 52 5 18\n",
+        "{}",
+        text(&run.stderr)
+    );
+}
+
+/// A library's macro that calls its proc macro through `$crate`, with a
+/// `$crate` macro call as its input, from a program that reaches the
+/// library only through another crate's re-export, runs as `cargo run`
+/// runs it (#2290): rustc names the hidden crate from its own root, in the
+/// call's path and its input.
+#[test]
+fn a_crate_macro_called_through_a_hidden_crate_expands_from_that_crate() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::fresh("plain-proc-macro-relay");
+    copy(Path::new(PROC_MACRO), &root);
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        manifest.replace("wrap = { path = \"wrap\" }", "relay = { path = \"relay\" }"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/scale.rs"),
+        "// rawr\npub fn label(value: i64) -> String {\n    \
+         format!(\"value {}\", value + relay::relayed!())\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 49\n");
 }
 
 /// An edit that changes only a derive's expansion's bodies, as a new

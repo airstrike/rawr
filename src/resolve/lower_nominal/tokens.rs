@@ -658,7 +658,36 @@ pub(super) fn split_arguments(tokens: Vec<(Token, Position)>) -> Vec<Vec<(Token,
 /// An expression's tokens as Rust's `stringify!` prints them: binary
 /// operators spaced, nothing around `.`, `::` and brackets.
 pub(crate) fn token_text(tokens: &[(Token, Position)]) -> String {
+    printed(tokens).0
+}
+
+/// Where the program writes each location call a crate macro call's
+/// expansion holds, from the call's input `tokens` as [`token_text`]
+/// prints them and where each call reads
+/// (`rawr_import::expand::call::Location`): the token that starts the
+/// input's own call, or `None` for one the macro wrote, which reads at the
+/// call (#2291).
+#[cfg(feature = "rust-import")]
+pub(crate) fn location_origins(
+    tokens: &[(Token, Position)],
+    locations: &[Option<u32>],
+) -> Vec<Option<Position>> {
+    let starts = printed(tokens).1;
+    locations
+        .iter()
+        .map(|location| {
+            let at = usize::try_from((*location)?).ok()?;
+            let index = starts.binary_search(&at).ok()?;
+            Some(tokens[index].1)
+        })
+        .collect()
+}
+
+/// `tokens` as [`token_text`] prints them, and the byte offset in the
+/// text each token starts at.
+fn printed(tokens: &[(Token, Position)]) -> (String, Vec<usize>) {
     let mut text = String::new();
+    let mut starts = Vec::with_capacity(tokens.len());
     let mut previous: Option<&Token> = None;
     let mut unary = false;
     for (token, _) in tokens {
@@ -701,10 +730,35 @@ pub(crate) fn token_text(tokens: &[(Token, Position)]) -> String {
             token,
             Token::UnaryMinus | Token::Minus | Token::Bang | Token::Ampersand | Token::Multiply
         ) && !operand_before;
+        starts.push(text.len());
         text.push_str(&word);
         previous = Some(token);
     }
-    text
+    (text, starts)
+}
+
+/// Where each call of `line!`, `column!` or `file!` among `tokens` starts:
+/// the index of its name, or of the first segment of its path
+/// (`core::line!()`).
+pub(crate) fn location_calls(tokens: &[(Token, Position)]) -> impl Iterator<Item = usize> + '_ {
+    tokens.iter().enumerate().filter_map(|(index, (token, _))| {
+        let Token::Identifier(name) = token else {
+            return None;
+        };
+        if !matches!(name.as_str(), "line" | "column" | "file")
+            || !matches!(tokens.get(index + 1), Some((Token::Bang, _)))
+        {
+            return None;
+        }
+        let mut start = index;
+        while start >= 2
+            && matches!(tokens[start - 1].0, Token::DoubleColon)
+            && matches!(tokens[start - 2].0, Token::Identifier(_))
+        {
+            start -= 2;
+        }
+        Some(start)
+    })
 }
 
 /// `ty` under all its references.

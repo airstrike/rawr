@@ -531,12 +531,19 @@ impl Parser<'_> {
                 }
                 false
             })
-            // An item is a statement, though no `;` ends it.
+            // An item is a statement, though no `;` ends it, and so is a
+            // braced macro call.
             || expansion.first().is_some_and(|(token, _)| begins_item(token))
+            || begins_braced_call(&expansion)
         };
         let mut spliced = Vec::with_capacity(expansion.len() + 2);
         if matches!(place, Place::Type | Place::Pattern) {
             spliced.extend(expansion);
+        } else if place == Place::Statement && expansion.is_empty() {
+            // No statement, nor is the `;` after it.
+            if matches!(self.peek(), Token::SemiColon) {
+                self.next();
+            }
         } else if place == Place::Statement && statements {
             // The call's own `;` ends the last statement when it has none.
             let ended = matches!(
@@ -626,11 +633,10 @@ impl Parser<'_> {
             Token::Unit => (Vec::new(), position),
             open => self.group_rest(&open, position, path)?,
         };
-        // A `$crate::name!` path through its crate's hidden segment is
-        // the macro rustc names from the dependency's root, as the facade
-        // holds a crate's macros (`Registry::hidden_macro`).
+        // A path through a crate's hidden segment, in the call's path or
+        // its input, is rustc's to name from that crate's root (#2290).
         let call = call::Call {
-            path: crate::host::path::visible(path),
+            path: path.to_owned(),
             delimiter,
             input: token_text(&tokens),
             place: match place {
@@ -667,21 +673,51 @@ impl Parser<'_> {
         // The read names the source in the lowerings the lowering is kept
         // in, as each reuse of the lowering does (`kept::Outside::name`).
         self.read(super::kept::Read::expansion(source.clone(), &text));
+        let origins = super::location_origins(&tokens, &call::locations(&text).unwrap_or_default());
         let text = call::kept(&text).unwrap_or_default();
         let remaining = self.nest_expansion(path, span(name_span.start(), text_end(end, " ")))?;
         let at = name_span.start();
         // A call the graph laid out is read from those tokens, where the
         // items among them are declared.
+        // A location call the input holds is read where the input writes
+        // it, and one the macro wrote at the call (#2291).
         let expansion = match self.models.laid_out(at) {
             Some(laid_out) => laid_out.to_vec(),
-            None => lex_rust(&crate::Engine::new_raw(), text)
-                .into_iter()
-                .filter(|(token, _)| *token != Token::EOF)
-                .map(|(token, _)| (token, at))
-                .collect(),
+            None => {
+                let mut expansion = lex_rust(&crate::Engine::new_raw(), text)
+                    .into_iter()
+                    .filter(|(token, _)| *token != Token::EOF)
+                    .map(|(token, _)| (token, at))
+                    .collect::<Vec<_>>();
+                let calls = super::location_calls(&expansion).collect::<Vec<_>>();
+                for (index, origin) in calls.into_iter().zip(origins) {
+                    if let Some(origin) = origin {
+                        expansion[index].1 = origin;
+                    }
+                }
+                expansion
+            }
         };
         self.splice_expanded(expansion, at, end, place, remaining);
         Ok(None)
+    }
+}
+
+/// Whether `expansion` starts with a macro call in braces, `a::b! { .. }`,
+/// which rustc parses as a statement of its own where a statement goes.
+fn begins_braced_call(expansion: &[(Token, Position)]) -> bool {
+    let mut tokens = expansion.iter().map(|(token, _)| token);
+    loop {
+        if !matches!(tokens.next(), Some(Token::Identifier(_))) {
+            return false;
+        }
+        match tokens.next() {
+            Some(Token::DoubleColon) => {}
+            Some(Token::Bang) => {
+                return matches!(tokens.next(), Some(Token::LeftBrace | Token::MapStart));
+            }
+            _ => return false,
+        }
     }
 }
 

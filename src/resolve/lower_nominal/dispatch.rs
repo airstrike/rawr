@@ -283,10 +283,15 @@ fn write_keyed(
     arms: &[&trait_object::Arm],
     parameters: &str,
 ) {
+    // A slice, an array and a tuple are each an array at run time, and
+    // their objects' keys tell them apart.
+    let runtime = match owner.builtin_code() {
+        Some(-11 | crate::resolve::ARRAY_OWNER | crate::resolve::TUPLE_OWNER) => "-8".to_owned(),
+        _ => owner_key(owner),
+    };
     let _ = writeln!(
         text,
-        "if __rawr_type == {} {{\nlet __rawr_key = {object_key}(self);",
-        owner_key(owner)
+        "if __rawr_type == {runtime} {{\nlet __rawr_key = {object_key}(self);"
     );
     for arm in arms {
         text.push_str(&arm.text(parameters));

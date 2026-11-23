@@ -774,8 +774,9 @@ pub fn run_once(loaded: base::Loaded) -> ExitCode {
         }
         Err(base::Failed::Compile(report)) => failure(&report),
         Err(base::Failed::Panic(report)) => {
-            // What a Cargo-built program prints when it panics.
-            program_stderr(&rawr::diagnostic::panic(&report));
+            // What a Cargo-built program prints when it panics, with the
+            // note on backtraces unless a thread's panic printed it first.
+            program_stderr(&rawr::diagnostic::hooked(&report, "main"));
             // A profile's `panic = "abort"` aborts the process, as the
             // binary Cargo builds with it does.
             if panic == rawr::project::cargo::Panic::Abort {

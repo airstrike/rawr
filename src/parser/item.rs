@@ -135,8 +135,12 @@ pub(crate) enum Expansion<'a> {
         rules: &'a crate::resolve::macro_rules::Rules,
         krate: &'a str,
     },
-    /// rustc's, as text.
-    Text(&'a str),
+    /// rustc's, as text, with where each location call in it reads
+    /// (`rawr_import::expand::call::Location`).
+    Text {
+        text: &'a str,
+        locations: &'a [Option<u32>],
+    },
 }
 
 /// Lay out what `call`, a call of the crate macro `name` among `unit`'s
@@ -228,7 +232,26 @@ fn lay_out_items(
             // lowering's to expand, as a program macro's is.
             super::item_macro::lay_out(rules, &tokens, krate, braced, braced)
         }
-        Expansion::Text(text) => Some(super::item_macro::place(text, call.span, name, braced)),
+        Expansion::Text { text, locations } => {
+            let laid = super::item_macro::place(text, call.span, name, braced);
+            // A location call the input holds reads where the input writes
+            // it (#2291).
+            let group = crate::resolve::lower_nominal::lex_rust(
+                &Engine::new_raw(),
+                &source.only([call.group]),
+            )
+            .into_iter()
+            .filter(|(token, _)| *token != Token::EOF)
+            .collect::<Vec<_>>();
+            let input = group
+                .get(1..group.len().saturating_sub(1))
+                .unwrap_or_default();
+            super::item_macro::locate_at(
+                &laid.0,
+                &crate::resolve::lower_nominal::location_origins(input, locations),
+            );
+            Some(laid)
+        }
     };
     let Some((text, mark)) = laid else {
         return Ok(None);
@@ -3166,18 +3189,7 @@ fn parse_impl(
         },
         generics: generics.into_boxed_slice(),
         lifetimes,
-        // `impl Hash for T { fn hash<H: Hasher>(..) }`: Rawr hashes a value
-        // by its contents, so the impl only marks `T` as `Hash`.
-        functions: if trait_
-            .as_ref()
-            .and_then(|path| path.segments.last())
-            .is_some_and(|last| last.name.text == "Hash")
-            && hashes_as_rust(&functions)
-        {
-            Box::default()
-        } else {
-            functions.into_boxed_slice()
-        },
+        functions: functions.into_boxed_slice(),
         trait_,
         owner,
         associated: associated.into_boxed_slice(),
@@ -5450,29 +5462,6 @@ fn bound_fn_type(path: &mut type_ref::Path, lifetime: type_ref::Lifetime) {
     }
 }
 
-/// Whether an `impl Hash` declares Rust's one method,
-/// `fn hash<H: Hasher>(&self, state: &mut H)`.
-fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
-    let [function] = functions else {
-        return false;
-    };
-    let [generic] = &*function.generics else {
-        return false;
-    };
-    let [parameter] = &*function.parameters else {
-        return false;
-    };
-    function.name.text == "hash"
-        && matches!(function.receiver, Some(crate::item::Receiver::Shared(_)))
-        && function.output.is_none()
-        && matches!(
-            &parameter.ty,
-            type_ref::Type::Reference { mutable: true, target, .. }
-                if matches!(&**target, type_ref::Type::Path(path)
-                    if matches!(&path.segments[..], [segment] if segment.name.text == generic.name.text))
-        )
-}
-
 /// What a type starting with `fn` or `impl` is.
 enum ImplStart {
     /// `fn(..)` or `impl Fn*(..)`, its head consumed, its builtin name
@@ -6499,9 +6488,11 @@ fn parse_body_syntax(
             continue;
         }
         // `{ 2 fn f() {} }`: an expression that is not block-like needs a
-        // `;` before an item, as in Rust.
+        // `;` before an item, as in Rust. A macro call's tokens are its
+        // rules' to read (`m! { @x fn f() {} }`).
         if !boundary
             && ends_expression
+            && macros.is_empty()
             && let Some((token, position)) = input.peek()
             && begins_statement_item(token)
         {

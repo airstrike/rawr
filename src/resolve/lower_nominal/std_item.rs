@@ -884,7 +884,15 @@ impl<'a> Parser<'a> {
             Some(_) => std,
         };
         // A variant of a std enum Rawr represents, as `std::result::Result::
-        // Ok`, goes by the enum's own name: `Result::Ok`.
+        // Ok`, goes by the enum's own name: `Result::Ok`. That name is the
+        // prelude's, which no type of the program's shadows; a member of
+        // another std type, as `std::time::Duration::from_secs` of a
+        // crate's `Span`, goes by its std path (#344).
+        let prelude = |name: &str| {
+            self.models.get(name).is_none()
+                && crate::std_table::prelude(crate::resolve::std_path::EDITION)
+                    .any(|prelude| prelude.path.rsplit("::").next() == Some(name))
+        };
         let spelled = |path: &str| {
             crate::resolve::std_path::check(
                 path,
@@ -898,6 +906,7 @@ impl<'a> Parser<'a> {
         };
         if let Some((owner, variant)) = std.rsplit_once("::")
             && let Some(name) = spelled(owner)
+            && prelude(name)
         {
             return Some(format!("{name}::{variant}").into());
         }

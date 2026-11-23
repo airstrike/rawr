@@ -6,13 +6,16 @@
 //! runner's adapter, so the location it sees is the adapter's call. That
 //! call stands for the program's own: a location crossing out of a call
 //! that names the adapter's file is the program's call site
-//! ([`calling`]), as rustc gives the caller's location. std makes its
-//! locations only where it compiles a call, so rawr makes one for each
-//! site of the program's it stands for (`at`).
+//! ([`calling`]), as rustc gives the caller's location, and so is the
+//! place of a panic the function raises there ([`adapting`],
+//! [`panicked_at`]). std makes its locations only where it compiles a
+//! call, so rawr makes one for each site of the program's it stands for
+//! (`at`).
 
 use std::cell::Cell;
 use std::panic::Location;
 use std::ptr::NonNull;
+use std::sync::OnceLock;
 
 use super::held::{self, Held};
 use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
@@ -45,12 +48,15 @@ pub(super) const HELD: [Held; 1] = [Held::Value(held::Value {
 
 /// A site of the program's own code, where rustc places a call's
 /// location: its file as Cargo names it, its line and its column.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Site {
     file: ImmutableString,
     line: u32,
     column: u32,
+    /// The site's location, made the first time a call there runs.
+    #[cfg_attr(feature = "rust-import", serde(skip))]
+    made: OnceLock<Option<Location<'static>>>,
 }
 
 impl Site {
@@ -59,7 +65,31 @@ impl Site {
             file: file.into(),
             line,
             column,
+            made: OnceLock::new(),
         }
+    }
+
+    /// The site's location, made once.
+    fn location(&self) -> Option<Location<'static>> {
+        *self
+            .made
+            .get_or_init(|| at(&self.file, self.line, self.column))
+    }
+}
+
+/// Two sites are equal at the same place, whether or not either made its
+/// location yet.
+impl PartialEq for Site {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.file, self.line, self.column) == (&other.file, other.line, other.column)
+    }
+}
+
+impl Eq for Site {}
+
+impl std::hash::Hash for Site {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (&self.file, self.line, self.column).hash(state);
     }
 }
 
@@ -67,14 +97,15 @@ thread_local! {
     /// The location of the program's call running on this thread, which a
     /// location given from the adapter's call stands for.
     static CALLER: Cell<Option<Location<'static>>> = const { Cell::new(None) };
+    /// The file of the adapter whose call of a crate's item runs on this
+    /// thread, which a location of the adapter's call names.
+    static ADAPTER: Cell<Option<&'static str>> = const { Cell::new(None) };
 }
 
 /// Run `call`, a call the program makes at `site`, which a location the
-/// call gives from the adapter's own call stands for.
+/// call gives from the adapter's own call stands for. A call at no known
+/// site stands for none, not for a call of the program's that runs it.
 pub(crate) fn calling<R>(site: Option<&Site>, call: impl FnOnce() -> R) -> R {
-    let Some(caller) = site.and_then(|site| at(&site.file, site.line, site.column)) else {
-        return call();
-    };
     /// The caller before, back when the call ends, even by a panic.
     struct Restored(Option<Location<'static>>);
     impl Drop for Restored {
@@ -82,8 +113,37 @@ pub(crate) fn calling<R>(site: Option<&Site>, call: impl FnOnce() -> R) -> R {
             CALLER.set(self.0);
         }
     }
-    let _restored = Restored(CALLER.replace(Some(caller)));
+    let _restored = Restored(CALLER.replace(site.and_then(Site::location)));
     call()
+}
+
+/// Run `call`, an adapter's call of a crate's item, written in the
+/// runner's `file`: a panic the item raises at the adapter's call, as a
+/// `#[track_caller]` function does, is the program's call's, as rustc
+/// places it. The runner's generated runtime calls each adapter so.
+pub fn adapting<R>(file: &'static str, call: impl FnOnce() -> R) -> R {
+    crate::package::test::panic::hook();
+    /// The adapter before, back when the call ends, even by a panic.
+    struct Restored(Option<&'static str>);
+    impl Drop for Restored {
+        fn drop(&mut self) {
+            ADAPTER.set(self.0);
+        }
+    }
+    let _restored = Restored(ADAPTER.replace(Some(file)));
+    call()
+}
+
+/// Where a panic raised at `location` is, as rustc places it: the
+/// program's call when `location` is the call of the adapter running on
+/// this thread, which a crate's `#[track_caller]` function sees, else
+/// `None`, for `location` itself.
+pub(crate) fn panicked_at(location: &Location<'_>) -> Option<Location<'static>> {
+    let adapter = ADAPTER.get()?;
+    if location.file() != adapter || made(location.file()) {
+        return None;
+    }
+    CALLER.get()
 }
 
 /// `location`, given from native code at `here`: the program's caller when
