@@ -322,6 +322,37 @@ fn main() {
     assert_eq!(printed(source), "7 A\n");
 }
 
+/// An expression call's block declares a module whose items a closure in
+/// the expansion names, as tokio's `select!` names its block's
+/// `__tokio_select_util` from its `poll_fn` closure (#2188), and a call
+/// in a closure's body or a call's arguments declares its own. The output
+/// is rustc's.
+#[test]
+fn a_closure_in_an_expansion_names_the_module_its_block_declares() {
+    let source = r#"
+macro_rules! first {
+    ($($value:expr),+) => {{
+        mod util {
+            #[derive(Debug)]
+            pub enum Out<T> { Got(T), Empty }
+        }
+        let pick = |values: &[i32]| match values.first() {
+            Some(value) => util::Out::Got(*value),
+            None => util::Out::Empty,
+        };
+        pick(&[$($value),+])
+    }};
+}
+fn main() {
+    let out = first!(4, 5);
+    let wrapped = Some(first!(6));
+    let mapped: Vec<_> = [7, 8].iter().map(|n| first!(*n + 1)).collect();
+    println!("{out:?} {wrapped:?} {mapped:?}");
+}
+"#;
+    assert_eq!(printed(source), "Got(4) Some(Got(6)) [Got(8), Got(9)]\n");
+}
+
 /// An item in a call's expansion names the items beside it in its block
 /// (#2193), as rustc resolves them there: an expression's own block, and
 /// the block a statement's call is in. The output is rustc's.
