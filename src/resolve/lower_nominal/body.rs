@@ -588,19 +588,50 @@ impl<'a> Parser<'a> {
 
     pub(super) fn function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         self.check_function_signature(definition)?;
+        // A block's written static is read by the key of its site, from
+        // its block's body and from each item nested there (#1708).
+        let written = definition.body.static_item
+            && self
+                .models
+                .block_static_site(definition.name.span.start())
+                .is_some();
+        // One of a crate's type is the native place its block makes
+        // (D862), whose body checks and makes its initializer.
+        let native_key = (written
+            && matches!(
+                definition.output.as_ref().map(Ty::from_resolved),
+                Some(Ty::Host { .. })
+            ))
+        .then(|| self.written_static_key(definition, true))
+        .flatten();
         // Every thread shares a static, so its type is `Sync`.
         if definition.body.static_item
+            && native_key.is_none()
             && let Some(output) = &definition.output
             && let Some(error) = self.unshared_static(&Ty::from_resolved(output), output.span())
         {
             return Err(error);
         }
-        let kept = self.kept_static_key(definition);
+        let kept = if native_key.is_some() {
+            None
+        } else if written {
+            self.written_static_key(definition, false)
+        } else {
+            self.kept_static_key(definition)
+        };
         let local = definition.body.thread_local.then(|| {
             let tokens: Vec<Token> = self.input.clone().map(|(token, _)| token).collect();
             self.item_key(definition, &tokens)
         });
-        if definition.body.constant {
+        if let Some(key) = &native_key {
+            while !matches!(self.peek(), Token::EOF) {
+                self.next();
+            }
+            let key = origin::Fragment::plain(format!("{key:?}"));
+            let read = self.prelude_op(PreludeOp::StaticValue, [key]);
+            self.output.push(read);
+            self.output.push_text("\n");
+        } else if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose
             // temporaries are promoted to `'static`.
             self.flow().constant();
@@ -612,13 +643,15 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("tokens after a function body"));
         }
 
-        #[cfg(feature = "rust-import")]
-        self.settle_collected_tail(definition.output.as_ref());
-        let expected = self.tail_expected(definition.output.as_ref());
-        self.coerce_tail(&expected, definition.body.span)?;
-        #[cfg(feature = "rust-import")]
-        if let Some(output) = &definition.output {
-            self.settle_opaque(output);
+        if native_key.is_none() {
+            #[cfg(feature = "rust-import")]
+            self.settle_collected_tail(definition.output.as_ref());
+            let expected = self.tail_expected(definition.output.as_ref());
+            self.coerce_tail(&expected, definition.body.span)?;
+            #[cfg(feature = "rust-import")]
+            if let Some(output) = &definition.output {
+                self.settle_opaque(output);
+            }
         }
         // A static the interpreter holds is one value, which its first read
         // makes and every read shares (#2519).

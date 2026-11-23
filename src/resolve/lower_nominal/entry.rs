@@ -890,6 +890,54 @@ fn demands(
     }
 }
 
+/// Check the default body `definition` no impl receives, as the method of
+/// its trait's check-only `impl<Self: Trait> Trait for Self` (#191): what
+/// rustc's borrow checker reports in it, read with `Self` a parameter the
+/// trait bounds. Its lowering never runs. Any other report is left to
+/// `cargo check`, as before: a generic read rawr can't make there yet is
+/// no verdict of rustc's.
+fn check_default(
+    engine: &Engine,
+    program: &Program,
+    models: &Models,
+    definition: &method::Definition,
+) -> Result<(), LoweringFailure> {
+    let text = Body::Method(definition).text(program);
+    let source = definition.source();
+    let read = Parser::for_method(
+        engine,
+        &text,
+        models.for_source(source),
+        definition,
+        0,
+        0,
+        #[cfg(feature = "rust-import")]
+        None,
+    )
+    .and_then(|mut parser| parser.parse_method_body(definition));
+    match read {
+        Err(error)
+            if matches!(
+                error.category(),
+                crate::resolve::Category::BorrowConflict
+                    | crate::resolve::Category::MovedValue
+                    | crate::resolve::Category::ImmutableBinding
+            ) =>
+        {
+            Err(LoweringFailure::original(source, error.into()))
+        }
+        Ok(_) => Ok(()),
+        Err(_) => {
+            #[cfg(test)]
+            crate::resolve::borrowck::note_unlowered(
+                "a default body no impl receives that rawr's generic read stops in",
+                definition.body(),
+            );
+            Ok(())
+        }
+    }
+}
+
 /// What the erased body of a template, `body`, reports, read as a body
 /// that runs: what its generic read could lower only per instance.
 fn erased_failure(unit: &Unit<'_>, body: Body<'_>) -> LoweringFailure {
@@ -1059,6 +1107,11 @@ pub(super) fn lower_with_context(
     // parts whose text changed (#1877).
     #[cfg(feature = "rust-import")]
     let mut pieces = splice::Pieces::default();
+    // The default bodies no impl receives, checked at their traits (#191):
+    // each a source's bodies written after it don't precede.
+    let mut checks = program.checked_defaults.iter().collect::<Vec<_>>();
+    checks.sort_by_key(|definition| Body::Method(definition).written_at());
+    let mut checks = checks.into_iter().peekable();
     // A source's bodies are lowered together, their ops and patterns
     // numbered after the source.
     for group in bodies.chunk_by(|body, next| body.source() == next.source()) {
@@ -1071,6 +1124,12 @@ pub(super) fn lower_with_context(
             continue;
         };
         let source = first.source();
+        let start = first.written_at();
+        while let Some(definition) =
+            checks.next_if(|definition| Body::Method(definition).written_at() < start)
+        {
+            check_default(engine, program, &models, definition)?;
+        }
         lower_part(
             &Unit {
                 engine,
@@ -1091,6 +1150,10 @@ pub(super) fn lower_with_context(
         )?;
         #[cfg(feature = "rust-import")]
         pieces.written(assembly.generated.len(), Some((source, kept::Part::Bodies)));
+    }
+
+    for definition in checks {
+        check_default(engine, program, &models, definition)?;
     }
 
     if let Some(first) = bodies.first() {

@@ -1300,7 +1300,7 @@ impl<'a> Resolver<'a> {
                 ..failure
             }
         };
-        let (methods, builtin_methods, std_traits) =
+        let (methods, builtin_methods, checked_defaults, std_traits) =
             super::resolve_methods(&mut shells, &definitions, self.host).map_err(unimported)?;
         super::elided_lifetimes(&shells).map_err(unimported)?;
         super::resolve_functions(&mut shells).map_err(unimported)?;
@@ -1341,6 +1341,7 @@ impl<'a> Resolver<'a> {
             types: definitions.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             builtin_methods: builtin_methods.into_boxed_slice(),
+            checked_defaults: checked_defaults.into_boxed_slice(),
             std_traits,
             qualified_functions: qualified_calls.functions,
             qualified_owners: qualified_calls.owners,

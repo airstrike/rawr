@@ -3,6 +3,7 @@
 pub(crate) mod attribute;
 pub(crate) mod block;
 pub(crate) mod borrowck;
+mod default_check;
 mod error;
 pub(crate) mod extern_prelude;
 pub(crate) mod forced_trim;
@@ -105,6 +106,10 @@ pub struct Program {
     /// The functions of trait impls for builtin types (`impl Shape for
     /// i64`): lowered with the methods, but not program members.
     builtin_methods: Box<[method::Definition]>,
+    /// The default bodies no impl receives, each the method of a check-only
+    /// `impl<Self: Trait> Trait for Self`: checked as rustc checks them at
+    /// the trait, never run, and no member of any type (#191).
+    checked_defaults: Box<[method::Definition]>,
     /// The std traits the crate names, by name, from std's declarations
     /// (D711 step 2).
     std_traits: BTreeMap<ImmutableString, item::Trait>,
@@ -796,7 +801,7 @@ fn resolve_with_evidence_and_namespace(
     let definitions = symbols
         .finish(&items, host)
         .map_err(LocatedError::into_error)?;
-    let (methods, builtin_methods, std_traits) =
+    let (methods, builtin_methods, checked_defaults, std_traits) =
         resolve_methods(&mut items, &definitions, host).map_err(LocatedError::into_error)?;
     elided_lifetimes(&items).map_err(LocatedError::into_error)?;
     resolve_functions(&mut items).map_err(LocatedError::into_error)?;
@@ -810,6 +815,7 @@ fn resolve_with_evidence_and_namespace(
         types: definitions.into_boxed_slice(),
         methods: methods.into_boxed_slice(),
         builtin_methods: builtin_methods.into_boxed_slice(),
+        checked_defaults: checked_defaults.into_boxed_slice(),
         std_traits,
         qualified_functions: BTreeMap::new(),
         qualified_owners: BTreeMap::new(),
@@ -3654,9 +3660,11 @@ fn erase_trait_generics(
     }
 }
 
-/// A crate's methods, its impls' functions for builtin types, and the std
-/// traits it names by name (`std_trait::declarations`).
+/// A crate's methods, its impls' functions for builtin types, the default
+/// bodies no impl receives, checked at their traits, and the std traits it
+/// names by name (`std_trait::declarations`).
 type ResolvedMethods = (
+    Vec<method::Definition>,
     Vec<method::Definition>,
     Vec<method::Definition>,
     BTreeMap<ImmutableString, item::Trait>,
@@ -3717,10 +3725,20 @@ fn resolve_methods(
             ))
         })
         .collect::<BTreeMap<_, _>>();
-    // The default bodies an impl receives, which are lowered with it.
+    // A default body no impl receives is checked as the method of a
+    // check-only `impl<Self: Trait> Trait for Self` (#191).
+    let mut checks = default_check::shells(items, &traits);
     #[cfg(test)]
-    let mut received = std::collections::BTreeSet::<(ImmutableString, ImmutableString)>::new();
-    for shell in items {
+    for span in default_check::unchecked(items, &traits) {
+        crate::resolve::borrowck::note_unlowered(
+            "a trait's default body that no impl receives",
+            span,
+        );
+    }
+    let mut checked_defaults = Vec::new();
+    let shells = items.len();
+    for (index, shell) in items.iter_mut().chain(&mut checks).enumerate() {
+        let check = index >= shells;
         let item::Kind::Impl(item) = &mut shell.kind else {
             continue;
         };
@@ -3858,17 +3876,25 @@ fn resolve_methods(
                     supers.extend(parent_trait.supertraits.1.iter().cloned());
                 }
             }
-            let implemented = trait_impl_functions(
-                declared,
-                &owner_name,
-                &item.owner,
-                &item.functions,
-                &associated,
-                &seen,
-                &parameters,
-                name.span,
-            )
-            .map_err(|error| LocatedError::primary(shell.source, error))?;
+            // A check's functions are the trait's own default bodies.
+            let implemented = if check {
+                item.functions
+                    .iter()
+                    .map(|function| (function.clone(), true))
+                    .collect()
+            } else {
+                trait_impl_functions(
+                    declared,
+                    &owner_name,
+                    &item.owner,
+                    &item.functions,
+                    &associated,
+                    &seen,
+                    &parameters,
+                    name.span,
+                )
+                .map_err(|error| LocatedError::primary(shell.source, error))?
+            };
             // Each instance of a generic trait is its own trait:
             // `Convert<i64>::convert` beside `Convert<String>::convert`.
             let instance: ImmutableString = if arguments.is_empty() {
@@ -3890,29 +3916,27 @@ fn resolve_methods(
             let formatter = declared.name.span == Span::NONE
                 && matches!(name.text.as_str(), "Debug" | "Display");
             for function in &mut item.functions {
-                if !formatter {
+                if !formatter && !check {
                     validate_method_signature(Some(owner.name()), function, true)
                         .map_err(|error| LocatedError::primary(shell.source, error))?;
                 }
             }
             for (function, from_trait) in implemented {
-                #[cfg(test)]
-                if from_trait {
-                    received.insert((name.text.clone(), function.name.text.clone()));
-                }
                 let source = if from_trait {
                     *trait_source
                 } else {
                     shell.source
                 };
                 let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
-                if let Err((previous_source, previous_declaration)) = declarations.declare(
-                    owner_id,
-                    member.clone(),
-                    &item.owner,
-                    shell.source,
-                    name.span,
-                ) {
+                if !check
+                    && let Err((previous_source, previous_declaration)) = declarations.declare(
+                        owner_id,
+                        member.clone(),
+                        &item.owner,
+                        shell.source,
+                        name.span,
+                    )
+                {
                     return Err(LocatedError::related(
                         shell.source,
                         previous_source,
@@ -3925,8 +3949,11 @@ fn resolve_methods(
                     ));
                 }
                 // Impls for builtin types number apart, so the program's
-                // own methods keep their dense ids.
-                let id = if builtin.is_some() {
+                // own methods keep their dense ids, and checks apart from
+                // both.
+                let id = if check {
+                    method::Id::from_index(CHECKED_METHOD_IDS + checked_defaults.len())
+                } else if builtin.is_some() {
                     method::Id::from_index(BUILTIN_METHOD_IDS + builtin_methods.len())
                 } else {
                     method::Id::from_index(methods.len())
@@ -3971,7 +3998,9 @@ fn resolve_methods(
                 {
                     own.body.lowering = item::Lowering::NominalMethod(id);
                 }
-                if builtin.is_some() {
+                if check {
+                    checked_defaults.push(definition);
+                } else if builtin.is_some() {
                     builtin_methods.push(definition);
                     builtin_self_types.push(item.owner.clone());
                 } else {
@@ -4108,30 +4137,20 @@ fn resolve_methods(
     }
     key_by_self_type(&mut methods, &self_types);
     key_by_self_type(&mut builtin_methods, &builtin_self_types);
-    // A default body no impl receives is not lowered: what it borrows and
-    // moves is left to `cargo check`.
-    #[cfg(test)]
-    for (name, (_, declared)) in &traits {
-        for (function, provided) in declared.functions.iter().zip(declared.provided.iter()) {
-            if *provided && !received.contains(&(name.clone(), function.name.text.clone())) {
-                crate::resolve::borrowck::note_unlowered(
-                    "a trait's default body that no impl receives",
-                    function.name.span,
-                );
-            }
-        }
-    }
 
     let std_traits = traits
         .into_iter()
         .filter(|(_, (_, declared))| declared.std.is_some())
         .map(|(name, (_, declared))| (name, declared))
         .collect();
-    Ok((methods, builtin_methods, std_traits))
+    Ok((methods, builtin_methods, checked_defaults, std_traits))
 }
 
 /// The first id of the methods of impls for builtin types.
 const BUILTIN_METHOD_IDS: usize = 1 << 30;
+
+/// The first id of the default bodies checked at their traits.
+const CHECKED_METHOD_IDS: usize = 1 << 29;
 
 /// A facade type as a trait impl owner: its path.
 fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {

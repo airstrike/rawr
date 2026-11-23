@@ -362,3 +362,39 @@ fn a_thread_local_key_keeps_its_value_across_a_reload_until_its_initializer_chan
     assert!(script.reload().unwrap());
     assert_eq!(count.call().unwrap(), 11);
 }
+
+const BLOCK_COUNTER: &str = "use std::sync::Mutex;
+
+fn count() -> i64 {
+    static CALLS: Mutex<i64> = Mutex::new(0);
+    fn bump() -> i64 {
+        let mut calls = CALLS.lock().unwrap();
+        *calls += 1;
+        *calls
+    }
+    bump();
+    *CALLS.lock().unwrap()
+}
+
+fn label() -> String {
+    \"calls\".into()
+}
+";
+
+#[test]
+fn a_block_static_a_nested_fn_reads_keeps_its_value_across_a_reload() {
+    // The body that declares a static and the `fn` nested in its block read
+    // one value, by the key of its site (#1708, D862): an edit elsewhere
+    // keeps it, and an edit of its declaration starts a new one.
+    let path = rules("block-static", BLOCK_COUNTER);
+    let script = engine().load(&path).unwrap();
+    let count = script.func::<(), i64>("count").unwrap();
+    assert_eq!(count.call().unwrap(), 1);
+    assert_eq!(count.call().unwrap(), 2);
+    std::fs::write(&path, BLOCK_COUNTER.replace("\"calls\"", "\"hits\"")).unwrap();
+    assert!(script.reload().unwrap());
+    assert_eq!(count.call().unwrap(), 3);
+    std::fs::write(&path, BLOCK_COUNTER.replace("Mutex::new(0)", "Mutex::new(10)")).unwrap();
+    assert!(script.reload().unwrap());
+    assert_eq!(count.call().unwrap(), 11);
+}

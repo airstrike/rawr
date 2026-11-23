@@ -144,11 +144,7 @@ impl Parser<'_> {
                 return Err(error);
             }
             let value = self.static_value()?;
-            let file = self.source_identity();
-            let line = keyword.line().unwrap_or_default();
-            let column = keyword.position().unwrap_or_default();
-            let key: ImmutableString =
-                format!("{file}:{line}:{column}#{ordinal}@{group:016x}").into();
+            let key = self.static_key(name_span, keyword, ordinal, group);
             let kind = if matches!(ty, Ty::Host { .. }) {
                 initializers.push(Initializer {
                     name: name.clone(),
@@ -530,17 +526,122 @@ impl Parser<'_> {
             }
         }
         for declaration in declarations {
-            let tokens = declaration.attributes.iter().chain(&declaration.tokens);
-            for (token, position) in tokens {
-                let text = token.to_string();
-                text.hash(&mut hasher);
-                if matches!(text.as_str(), "line" | "column") {
-                    position.line().hash(&mut hasher);
-                    position.position().hash(&mut hasher);
-                }
-            }
+            hash_tokens(
+                declaration.attributes.iter().chain(&declaration.tokens),
+                &mut hasher,
+            );
         }
         hasher.finish()
+    }
+
+    /// The key of the static `name` declared at `keyword`, the
+    /// `ordinal`th of its block's declarations, `group` their
+    /// fingerprint: a written one's site the models computed, which every
+    /// body that names it reads it by, else one of an expansion's.
+    fn static_key(
+        &self,
+        name_span: Span,
+        keyword: Position,
+        ordinal: usize,
+        group: u64,
+    ) -> ImmutableString {
+        let file = self.source_identity();
+        if let Some(site) = self.models.block_static_site(name_span.start()) {
+            return format!("{file}:{site}").into();
+        }
+        let line = keyword.line().unwrap_or_default();
+        let column = keyword.position().unwrap_or_default();
+        format!("{file}:{line}:{column}#{ordinal}@{group:016x}").into()
+    }
+
+    /// The key the written block static `definition` is read by, from an
+    /// item nested in its block or from its own: its site the models
+    /// computed, and the interpreter's mark when it keeps the value, or
+    /// `None` when its initializer is literals alone.
+    pub(super) fn written_static_key(
+        &self,
+        definition: &item::Function,
+        native: bool,
+    ) -> Option<ImmutableString> {
+        let site = self
+            .models
+            .block_static_site(definition.name.span.start())?;
+        let key = format!("{}:{site}", self.source_identity());
+        if native {
+            return Some(key.into());
+        }
+        let tokens: Vec<Token> = self.input.clone().map(|(token, _)| token).collect();
+        if constant::plain_initializer(tokens.iter()) {
+            return None;
+        }
+        Some(format!("{}{key}", crate::place::statics::KEPT).into())
+    }
+}
+
+/// Each written block static's site (D862), by where its name is: its line
+/// and column, its place among its block's written statics and a
+/// fingerprint of all of them. An edit of one of a block's statics gives
+/// each a new key, so a cycle of them is made again whole; any other edit
+/// keeps them all.
+pub(super) fn sites(
+    program: &crate::resolve::Program,
+    engine: &Engine,
+) -> BTreeMap<(crate::program::source::Id, Position), ImmutableString> {
+    let mut blocks = BTreeMap::<_, Vec<&item::Function>>::new();
+    for shell in program.items.iter() {
+        if let item::Kind::Function(function) = &shell.kind
+            && function.body.static_item
+            && let Some(block) = shell.scope()
+        {
+            blocks
+                .entry((shell.source, block))
+                .or_default()
+                .push(function);
+        }
+    }
+    let mut sites = BTreeMap::new();
+    for ((source, _), mut statics) in blocks {
+        statics.sort_by_key(|function| function.header.span.start());
+        let mut hasher = std::hash::DefaultHasher::new();
+        for function in &statics {
+            let text = function
+                .body
+                .text
+                .as_deref()
+                .unwrap_or_else(|| program.source.text_at(source));
+            let declaration = Span::new(function.header.span.start(), function.body.span.end());
+            let tokens = lex_rust(engine, &source_span(text, declaration));
+            hash_tokens(
+                tokens.iter().filter(|(token, _)| *token != Token::EOF),
+                &mut hasher,
+            );
+        }
+        let group = hasher.finish();
+        for (ordinal, function) in statics.iter().enumerate() {
+            let keyword = function.header.span.start();
+            let line = keyword.line().unwrap_or_default();
+            let column = keyword.position().unwrap_or_default();
+            sites.insert(
+                (source, function.name.span.start()),
+                format!("{line}:{column}#{ordinal}@{group:016x}").into(),
+            );
+        }
+    }
+    sites
+}
+
+/// Hash each of `tokens`, with where each `line!` and `column!` is.
+fn hash_tokens<'t>(
+    tokens: impl Iterator<Item = &'t (Token, Position)>,
+    hasher: &mut std::hash::DefaultHasher,
+) {
+    for (token, position) in tokens {
+        let text = token.to_string();
+        text.hash(hasher);
+        if matches!(text.as_str(), "line" | "column") {
+            position.line().hash(hasher);
+            position.position().hash(hasher);
+        }
     }
 }
 
