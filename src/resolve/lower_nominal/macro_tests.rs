@@ -448,6 +448,54 @@ fn a_body_calls_an_exported_macro_by_its_crate_path_and_under_cfg() {
     assert_eq!(printed(source), "3\n");
 }
 
+/// A body's call whose expansion starts with a braced call of a macro,
+/// itself among them, is statements, as rustc parses a statement's
+/// expansion: the items each call expands to are the block's, and a call
+/// that expands to nothing is no statement (#2591). So `cfg_if!`'s rules
+/// expand in a body. The output is rustc's.
+#[test]
+fn a_body_call_that_expands_to_calls_of_itself_declares_their_items() {
+    let source = "macro_rules! wrap { (@x $($t:tt)*) => { $($t)* }; ($($t:tt)*) => { wrap! { @x $($t)* } wrap! { @x } }; }\n\
+                  fn main() { wrap! { fn f() -> i32 { 3 } } println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "3\n");
+    let source = r#"
+macro_rules! pick {
+    (if #[cfg( $($i_meta:tt)+ )] { $( $i_tokens:tt )* } $( else { $( $e_tokens:tt )* } )?) => {
+        pick! {
+            @__items () ;
+            (( $($i_meta)+ ) ( $( $i_tokens )* )),
+            $( (() ( $( $e_tokens )* )), )?
+        }
+    };
+    (@__items ( $( ($($_:tt)*) , )* ) ; ) => {};
+    (
+        @__items ( $( ($($no:tt)+) , )* ) ;
+        (( $( $($yes:tt)+ )? ) ( $( $tokens:tt )* )),
+        $( $rest:tt , )*
+    ) => {
+        #[cfg(all( $( $($yes)+ , )? not(any( $( $($no)+ ),* )) ))]
+        pick! { @__temp_group $( $tokens )* }
+        pick! {
+            @__items ( $( ($($no)+) , )* $( ($($yes)+) , )? ) ;
+            $( $rest , )*
+        }
+    };
+    (@__temp_group $( $tokens:tt )* ) => { $( $tokens )* };
+}
+fn main() {
+    pick! {
+        if #[cfg(unix)] {
+            fn kind() -> &'static str { "unix" }
+        } else {
+            fn kind() -> &'static str { "other" }
+        }
+    }
+    println!("{}", kind());
+}
+"#;
+    assert_eq!(printed(source), "unix\n");
+}
+
 #[test]
 fn a_call_no_rule_matches_is_rustcs_error() {
     let one = "macro_rules! one { ($x:ident) => { $x }; }\n";
