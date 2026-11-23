@@ -188,8 +188,9 @@ pub struct Graph {
     entry_package: Id,
     entry_source: source::Id,
     /// Each crate derive whose expansion was loaded beside its item, by the
-    /// derive's source and span: the macro the expansion came from (#593).
-    expanded: BTreeMap<(source::Id, Span), ImmutableString>,
+    /// derive's source and span: the macro the expansion came from (#593)
+    /// and the helper attributes it declares (#2516).
+    expanded: BTreeMap<(source::Id, Span), crate::capability::Loaded>,
     /// Each item whose kept expansion is of its text before an edit
     /// (#1040), with the derives that are due again.
     #[cfg(feature = "rust-import")]
@@ -839,14 +840,15 @@ impl Graph {
     }
 
     /// Each crate derive whose expansion was loaded beside its item, by the
-    /// derive's source and span as written: the macro it came from.
+    /// derive's source and span as written: the macro it came from and the
+    /// helper attributes it declares.
     pub(crate) fn expanded(&self) -> crate::capability::Expanded {
         self.expanded
             .iter()
-            .map(|(&(source, span), resolved)| {
+            .map(|(&(source, span), loaded)| {
                 (
                     (crate::program::source::Id::from_index(source.index()), span),
-                    resolved.clone(),
+                    loaded.clone(),
                 )
             })
             .collect()
@@ -943,7 +945,7 @@ struct Builder<'a> {
     /// Those macros' definitions as written, which a native module's
     /// copy is built with.
     inherited_text: Vec<ImmutableString>,
-    expanded: BTreeMap<(source::Id, Span), ImmutableString>,
+    expanded: BTreeMap<(source::Id, Span), crate::capability::Loaded>,
     #[cfg(feature = "rust-import")]
     stale: Vec<rawr_import::expand::Item>,
     /// The kept expansion sources the load read (`load_expansion`).
@@ -1827,6 +1829,9 @@ impl<'a> Builder<'a> {
             }
             None => return Ok(()),
         };
+        let helpers = rawr_import::expand::helpers(&text)
+            .map(Into::into)
+            .collect();
         let name: ImmutableString = derived
             .written
             .rsplit("::")
@@ -1858,8 +1863,10 @@ impl<'a> Builder<'a> {
         let parsed = parse(source.text())?.with_items(parent.items());
         self.sources.push(source);
         self.units.push(Unit { source: id, parsed });
-        self.expanded
-            .insert((item_source, derived.attribute), resolved);
+        self.expanded.insert(
+            (item_source, derived.attribute),
+            crate::capability::Loaded { resolved, helpers },
+        );
         Ok(())
     }
 

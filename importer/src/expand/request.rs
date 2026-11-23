@@ -43,6 +43,9 @@ pub struct Expansion {
     pub at: u32,
     /// Each produced item, as rustc prints it.
     pub items: Vec<String>,
+    /// The helper attributes the derive declares (`serde`), which the
+    /// item and its members may carry.
+    pub helpers: Vec<String>,
 }
 
 /// What one function-like macro call expanded to, at the module the

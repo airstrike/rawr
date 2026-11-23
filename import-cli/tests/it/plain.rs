@@ -2508,6 +2508,53 @@ fn a_crates_derive_runs_from_its_expansion() {
     assert_eq!(text(&run.stdout), "Square Square\nTile\nCircle\nRing\n");
 }
 
+/// A crate derive's helper attributes are the attributes its item and the
+/// item's members may carry, as the derive declares them, and any other is
+/// rustc's "cannot find attribute" (#2516): `#[serde(..)]` beside serde's
+/// derives, but neither `#[bogus]` there nor `#[serde(..)]` beside a derive
+/// that declares no helper.
+#[test]
+fn a_crate_derives_helpers_are_the_attributes_its_item_may_carry() {
+    const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
+    let root = crate::support::fresh("plain-derives-helpers");
+    copy(Path::new(DERIVES), &root);
+    let program = |derive: &str, attribute: &str| {
+        format!(
+            "// rawr\n#[allow(unused_imports)]\nuse serde::Serialize;\n\
+             #[allow(unused_imports)]\nuse shapes::Shape;\n\n\
+             #[derive({derive})]\nstruct Task {{\n    {attribute}\n    done: bool,\n}}\n\n\
+             fn main() {{\n    let _ = Task {{ done: true }}.done;\n    println!(\"ran\");\n}}\n"
+        )
+    };
+    fs::write(
+        root.join("src/main.rs"),
+        program("Serialize", "#[serde(rename = \"finished\")]"),
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "ran\n");
+    for (derive, attribute, name) in [
+        ("Serialize", "#[bogus]", "bogus"),
+        ("Shape", "#[serde(rename = \"finished\")]", "serde"),
+    ] {
+        fs::write(root.join("src/main.rs"), program(derive, attribute)).unwrap();
+        let run = rawr_import(&root, &["run"]);
+        let output = format!("{}{}", text(&run.stdout), text(&run.stderr));
+        assert!(!run.status.success(), "{output}");
+        assert!(
+            output.contains(&format!("cannot find attribute `{name}` in this scope")),
+            "{output}"
+        );
+        assert!(!output.contains("ran\n"), "{output}");
+    }
+}
+
 /// A direct dependency that is a proc-macro crate, as `rust_decimal_macros`
 /// is, is a host unit Cargo builds as a dylib, with no API to extract: a
 /// native module expands its macro through Cargo's build, a marked module

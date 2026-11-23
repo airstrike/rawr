@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use rustc_ast::{ItemKind, LocalKind, ModKind, StmtKind};
 use rustc_ast_pretty::pprust;
 use rustc_driver::{Callbacks, Compilation};
+use rustc_metadata::creader::{CStore, LoadedMacro};
 use rustc_middle::ty::TyCtxt;
+use rustc_span::def_id::DefId;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
 
 use crate::expand_request::{Called, Expanded, Expansion};
@@ -89,6 +91,10 @@ fn write(tcx: TyCtxt<'_>, out: &Path, protocol: u32) -> Result<(), String> {
                 derive,
                 at,
                 items: vec![text],
+                helpers: data
+                    .macro_def_id
+                    .map(|macro_| helpers(tcx, macro_))
+                    .unwrap_or_default(),
             }),
         }
     }
@@ -106,6 +112,24 @@ fn write(tcx: TyCtxt<'_>, out: &Path, protocol: u32) -> Result<(), String> {
     })
     .map_err(|error| error.to_string())?;
     std::fs::write(out, bytes).map_err(|error| format!("writing {}: {error}", out.display()))
+}
+
+/// The helper attributes the crate derive `macro_` declares, as its
+/// `#[proc_macro_derive(Name, attributes(..))]` names them: the attributes
+/// an item that derives it, and its members, may carry. A derive of no
+/// proc-macro crate, as std's are, declares none here.
+fn helpers(tcx: TyCtxt<'_>, macro_: DefId) -> Vec<String> {
+    if macro_.is_local() {
+        return Vec::new();
+    }
+    match CStore::from_tcx(tcx).load_macro_untracked(tcx, macro_) {
+        LoadedMacro::ProcMacro(extension) => extension
+            .helper_attrs
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        LoadedMacro::MacroDef { .. } => Vec::new(),
+    }
 }
 
 /// What the call `function` holds expanded to: the initializer, type or
