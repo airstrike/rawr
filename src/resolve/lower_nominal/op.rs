@@ -1872,6 +1872,18 @@ pub(super) fn impl_self_ty(
     )
 }
 
+/// Whether `definition` is of an impl at a trait argument other than its
+/// Self type: `eq` of `impl PartialEq<Feet> for Meters`, which compares
+/// with a `Feet`, not with another `Meters`.
+pub(super) fn crosses_self(definition: &method::Definition) -> bool {
+    let [argument] = definition.trait_arguments() else {
+        return !definition.trait_arguments().is_empty();
+    };
+    let rhs = Ty::from_resolved(argument);
+    !matches!(&rhs, Ty::Param(name, _) if name.as_str() == "Self")
+        && rhs != impl_self_ty(definition, &BTreeMap::new())
+}
+
 /// The float methods without arguments, each with the runtime's function
 /// that computes it as Rust does.
 pub(super) const FLOAT_UNARY_METHODS: &[(&str, &str)] = &[

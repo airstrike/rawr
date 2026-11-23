@@ -2519,10 +2519,17 @@ impl<'a> Parser<'a> {
                 chain: crate::resolve::Chain::default(),
             });
         }
-        // A crate trait's function without `self` for this type.
-        let found = owner
+        // A crate trait's function without `self` for this type: its own
+        // impl's, else a blanket impl's whose where-clauses hold for it.
+        let implemented = owner
             .and_then(|id| self.models.trait_methods.get(&(id, member.clone())))
             .and_then(|definitions| definitions.first())
+            .cloned();
+        let definition = match implemented {
+            Some(definition) => Some(definition),
+            None => self.blanket_method(&builtin, &member),
+        };
+        let found = definition
             .and_then(|definition| definition.trait_name().cloned())
             .and_then(|trait_name| {
                 let (_, declared) = self.models.traits.get(&trait_name)?;

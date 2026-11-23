@@ -1145,6 +1145,33 @@ impl<'a> Parser<'a> {
         fitting.is_empty().then_some(definition)
     }
 
+    /// The function `member` of the blanket impl of `trait_name` whose
+    /// where-clauses hold for `ty`, a type no impl of its own gives the
+    /// trait: `make` of `impl<T: Default> Make for T` for `Vec<u8>`.
+    pub(super) fn blanket_function(
+        &mut self,
+        ty: &Ty,
+        trait_name: &str,
+        member: &str,
+    ) -> Option<method::Definition> {
+        // A parameter bounded by the trait has its impl through its
+        // witness; one bounded by what the blanket impl needs has the
+        // blanket's.
+        if matches!(ty, Ty::Param(..) | Ty::Projection(..)) && self.type_implements(ty, trait_name)
+            || owner_id(ty).is_some_and(|id| self.models.implements(trait_name, id))
+        {
+            return None;
+        }
+        let mut fitting = self.blanket_methods(ty, member);
+        fitting.retain(|definition| {
+            definition
+                .trait_name()
+                .is_some_and(|name| name == trait_name)
+        });
+        let definition = fitting.pop()?;
+        fitting.is_empty().then_some(definition)
+    }
+
     /// Each function `member` of a blanket impl whose where-clauses hold
     /// for `ty`.
     pub(super) fn blanket_methods(&mut self, ty: &Ty, member: &str) -> Vec<method::Definition> {
@@ -1447,11 +1474,13 @@ impl<'a> Parser<'a> {
             return self.std_implements(&resolved, trait_name, arguments);
         }
         // `PartialEq<Self>` and `PartialOrd<Self>`, their `Rhs = Self`
-        // filled in: a derive or a builtin's comparison is with its own type.
+        // filled in: a derive or a builtin's comparison is with its own
+        // type, and so is a bound's supertrait written without its `Rhs`
+        // (`PartialOrd` of `T: Ord`).
         if let [argument] = arguments
             && let Some(kind) = capability::Kind::from_derive(trait_name)
             && self.unifies(argument, ty)
-            && self.type_provides(ty, kind)
+            && (self.type_provides(ty, kind) || self.type_implements(ty, trait_name))
         {
             return true;
         }
@@ -1776,8 +1805,15 @@ impl<'a> Parser<'a> {
                 .find(|kind| !self.type_provides(&owner, *kind))
                 .map(|kind| ImmutableString::from(kind.name()))
                 .or_else(|| {
+                    // A supertrait with arguments is proved at them, below.
                     traits
                         .iter()
+                        .filter(|bound| {
+                            !declared
+                                .supertrait_arguments
+                                .iter()
+                                .any(|(parent, _)| *parent == bound.text)
+                        })
                         .find(|bound| !self.type_implements(&owner, &bound.text))
                         .map(|bound| bound.text.clone())
                 });
@@ -1803,6 +1839,14 @@ impl<'a> Parser<'a> {
                 .zip(impl_arguments.iter().map(Ty::from_resolved))
                 .collect();
             substitution.insert("Self".into(), owner.clone());
+            // A parameter the header leaves out is its default: `Rhs` of
+            // `impl PartialOrd for C` is `C`.
+            for generic in declared.generics.iter().skip(impl_arguments.len()) {
+                if let Some(default) = &generic.default {
+                    let default = instantiate(&Ty::from_resolved(default), &substitution);
+                    substitution.insert(generic.name.text.clone(), default);
+                }
+            }
             for (parent, arguments) in declared.supertrait_arguments.iter() {
                 let arguments = arguments
                     .iter()

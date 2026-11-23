@@ -378,12 +378,7 @@ impl Parser<'_> {
             }
             // `self` in a method, owned (`mut self`) or `&mut self`, is the
             // receiver `this`.
-            None if value.source.as_str() == "self"
-                && self.closures.is_empty()
-                && self.bindings.get("self").is_some_and(|binding| {
-                    matches!(binding.kind, BindingKind::Receiver { .. })
-                }) =>
-            {
+            None if self.is_receiver(value) => {
                 self.require_mutable_binding(&"self".into(), value.span)?;
                 Ok(origin::Fragment::plain("self"))
             }
@@ -400,6 +395,17 @@ impl Parser<'_> {
             None => Err(self
                 .unsupported("changing a collection that is not a local, an element or a field")),
         }
+    }
+
+    /// Whether `value` is a method's receiver `self`, outside a closure: the
+    /// place `this`, which a change through it changes.
+    pub(super) fn is_receiver(&self, value: &ParsedExpr) -> bool {
+        value.source.as_str() == "self"
+            && self.closures.is_empty()
+            && self
+                .bindings
+                .get("self")
+                .is_some_and(|binding| matches!(binding.kind, BindingKind::Receiver { .. }))
     }
 
     /// `op` called on the collection `value` by reference, changing it.

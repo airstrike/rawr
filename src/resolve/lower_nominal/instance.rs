@@ -146,7 +146,9 @@ pub(super) fn definition(
 /// method is reached through a trait object by its instance too, which the
 /// object's key selects (D1115.3). An impl for a std type is one as a
 /// program type's is (`impl<T: Hash> Hash for Option<T>`); one for a
-/// crate's type is compiled per instantiation instead (D629).
+/// crate's type is compiled per instantiation instead (D629). A blanket
+/// impl's are too: of a function without `self`, only the call's types
+/// say which type it is for.
 pub(super) fn method_template_parameters(
     definition: &crate::method::Definition,
 ) -> Option<Box<[ImmutableString]>> {

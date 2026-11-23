@@ -2248,7 +2248,13 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.unscoped_method(owner, member, &value.ty, member_span) {
             return Err(error);
         }
+        // An iterator is its own receiver, which a `&mut self` method
+        // steps in place.
         if matches!(impl_self_ty(definition, &BTreeMap::new()), Ty::Iter(..))
+            && !matches!(
+                without_references(&self.inference.resolve(&value.ty)),
+                Ty::Iter(..)
+            )
             && let Some(iterator) = self.iterator_of(&value)
         {
             value = iterator;

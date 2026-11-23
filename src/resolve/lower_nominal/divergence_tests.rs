@@ -13661,3 +13661,275 @@ main();
          3557016591249593222 3557016591249593222\n"
     );
 }
+
+#[test]
+fn try_into_an_integer_beside_a_program_try_from_of_the_same_source() {
+    // A program's `TryFrom<i64>` doesn't take every `try_into()` of an
+    // `i64`: one into an integer is std's, chosen once the target is
+    // known, and the program impl's `Error` is proved `Debug` once it is
+    // selected (#773).
+    let output = printed(
+        r#"
+use std::convert::TryFrom;
+use std::convert::TryInto;
+#[derive(Debug)]
+struct Even(i64);
+impl TryFrom<i64> for Even {
+    type Error = String;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        if v % 2 == 0 { Ok(Even(v)) } else { Err(format!("{v} is odd")) }
+    }
+}
+fn small(v: i64) -> Result<u8, std::num::TryFromIntError> {
+    let b: u8 = v.try_into()?;
+    Ok(b + 1)
+}
+fn main() {
+    let a: Result<Even, _> = 4i64.try_into();
+    let b: Result<Even, String> = 3i64.try_into();
+    let c: Result<u8, _> = 300i64.try_into();
+    let e: i32 = 7i64.try_into().unwrap();
+    println!("{:?} {:?} {:?} {}", a, b, c, e);
+    println!("{:?} {:?}", small(9), small(-1));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Ok(Even(4)) Err(\"3 is odd\") Err(TryFromIntError(PosOverflow)) 7\n\
+         Ok(10) Err(TryFromIntError(NegOverflow))\n"
+    );
+    let report = refused(
+        r#"
+use std::convert::TryFrom;
+use std::convert::TryInto;
+struct Quiet;
+struct Even(i64);
+impl TryFrom<i64> for Even {
+    type Error = Quiet;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        if v % 2 == 0 { Ok(Even(v)) } else { Err(Quiet) }
+    }
+}
+fn main() {
+    let e: Even = 4i64.try_into().unwrap();
+    println!("{}", e.0);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Quiet` doesn't implement `Debug`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_literal_argument_takes_its_kind_from_an_into_bound_at_the_call() {
+    // A literal for `T: Into<f32>` is the `f32` of the one std `From` it
+    // fits, and one several impls take falls back, as rustc settles it
+    // before the call's instance is chosen; a program's `From<Turn> for
+    // f32` is the bound's too (#1719).
+    let output = printed(
+        r#"
+fn byte<T: Into<u8>>(v: T) -> u8 {
+    v.into()
+}
+fn degrees(turn: impl Into<f32>) -> f32 {
+    turn.into() * 360.0
+}
+fn halved<T: Into<f64>>(v: T) -> f64 {
+    v.into() / 2.0
+}
+struct Turn(f32);
+impl From<Turn> for f32 {
+    fn from(t: Turn) -> f32 {
+        t.0
+    }
+}
+fn main() {
+    let x = 255;
+    let y = x - 1;
+    println!("{} {} {} {}", byte(7), byte(y), degrees(0.5), degrees(Turn(0.25)));
+    println!("{} {} {}", halved(3), halved(2.5), halved(0.1f32));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 254 180 90\n1.5 1.25 0.05000000074505806\n");
+    // A literal no single impl takes is an `i32`, whose `From` the bound
+    // then needs, at the argument.
+    let report = rendered(
+        "fn degrees(turn: impl Into<f32>) -> f32 {\n    turn.into() * 360.0\n}\n\
+         fn main() {\n    println!(\"{}\", degrees(3));\n}\n",
+    );
+    let expected = [
+        "error[E0277]: the trait bound `f32: From<i32>` is not satisfied",
+        " --> main.rs:5:28",
+        "  |",
+        "5 |     println!(\"{}\", degrees(3));",
+        "  |                    ------- ^ the trait `From<i32>` is not implemented for `f32`",
+        "  |                    |",
+        "  |                    required by a bound introduced by this call",
+    ]
+    .join("\n");
+    assert!(
+        report.starts_with(&expected)
+            && report.contains("  = note: required for `i32` to implement `Into<f32>`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_blanket_impls_function_without_self_and_its_iterator_methods_run() {
+    // A blanket impl's function without `self` runs at the type the path
+    // or a generic caller names, and `self.next()` of a `&mut self` method
+    // over an iterator steps the caller's iterator (#1555).
+    let output = printed(
+        r#"
+use std::fmt::Display;
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+trait Named {
+    fn named(prefix: &str) -> String;
+}
+impl<T: Display + Default> Named for T {
+    fn named(prefix: &str) -> String {
+        format!("{prefix}{}", T::default())
+    }
+}
+fn build<T: Default>() -> T {
+    <T as Make>::make()
+}
+trait Tally {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>);
+    fn tally(self) -> usize;
+}
+impl<T: Iterator<Item = i64>> Tally for T {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>) {
+        let a = self.next();
+        let b = self.next();
+        (a, b)
+    }
+    fn tally(self) -> usize {
+        self.count()
+    }
+}
+fn main() {
+    let v = <Vec<u8> as Make>::make();
+    let s: String = Make::make();
+    let built: Vec<i64> = build();
+    println!("{:?} {:?} {} {:?} {}", v, s, i32::make(), built, build::<u8>());
+    println!("{} {}", <i32 as Named>::named("n="), String::named("s="));
+    let mut it = vec![1i64, 2, 3, 4].into_iter();
+    println!("{:?} {:?} {}", it.first_two(), it.next(), it.tally());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[] \"\" 0 [] 0\nn=0 s=\n(Some(1), Some(2)) Some(3) 1\n"
+    );
+    let report = refused(
+        r#"
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+struct Opaque;
+fn main() {
+    let _o = <Opaque as Make>::make();
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `Opaque: Make` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_comparison_impl_at_another_type_is_selected_by_both_operands() {
+    // `impl PartialEq<Feet> for Meters` beside the derive: `==`, `!=` and
+    // `<` select by both operands' types, through references too, and a
+    // generic's `T: PartialEq<U>` compares its instances' (#700).
+    let output = printed(
+        r#"
+use std::cmp::Ordering;
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Meters(f64);
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Feet(f64);
+impl PartialEq<Feet> for Meters {
+    fn eq(&self, other: &Feet) -> bool {
+        (self.0 - other.0 * 0.3048).abs() < 1e-9
+    }
+}
+impl PartialEq<Meters> for Feet {
+    fn eq(&self, other: &Meters) -> bool {
+        other == self
+    }
+}
+impl PartialOrd<Feet> for Meters {
+    fn partial_cmp(&self, other: &Feet) -> Option<Ordering> {
+        self.0.partial_cmp(&(other.0 * 0.3048))
+    }
+}
+struct Score(i64);
+impl PartialEq for Score {
+    fn eq(&self, other: &Score) -> bool {
+        self.0 == other.0
+    }
+}
+impl PartialEq<i64> for Score {
+    fn eq(&self, other: &i64) -> bool {
+        self.0 == *other
+    }
+}
+fn same<T: PartialEq<U>, U>(a: &T, b: &U) -> bool {
+    a == b
+}
+fn main() {
+    let m = Meters(0.3048);
+    let f = Feet(1.0);
+    println!("{} {} {} {}", m == f, f == m, m != Feet(2.0), m == Meters(1.0));
+    println!("{} {} {} {}", m < Feet(2.0), m > Feet(2.0), same(&m, &f), same(&m, &m));
+    let s = Score(5);
+    println!("{} {} {} {}", s == Score(5), s == 5, s != 6, s == Score(4));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "true true true false\ntrue false true true\ntrue true true false\n"
+    );
+    // An impl at another type alone: the right operand must be of it.
+    let report = rendered(
+        "struct Meters(f64);\nstruct Feet(f64);\nimpl PartialEq<Feet> for Meters {\n    \
+         fn eq(&self, other: &Feet) -> bool { self.0 == other.0 }\n}\n\
+         fn main() {\n    let m = Meters(1.0);\n    println!(\"{}\", m == Meters(1.0));\n}\n",
+    );
+    let expected = [
+        "error[E0308]: mismatched types",
+        " --> main.rs:8:25",
+        "  |",
+        "8 |     println!(\"{}\", m == Meters(1.0));",
+        "  |                         ^^^^^^^^^^ expected `Feet`, found `Meters`",
+    ]
+    .join("\n");
+    assert!(report.starts_with(&expected), "{report}");
+}

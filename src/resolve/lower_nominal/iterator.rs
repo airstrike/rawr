@@ -1221,13 +1221,14 @@ impl Parser<'_> {
             return self.user_pipeline(value, None).ok();
         }
         // std's `impl Iterator for &mut I`: each `next` steps the place
-        // the reference is to.
+        // the reference is to, `self` of a blanket impl's `&mut self`
+        // method too.
         if let Ty::Reference {
             mutable: true,
             target,
         } = &ty
             && self.runtime_iterator(target)
-            && value.lvalue.is_some()
+            && (value.lvalue.is_some() || self.is_receiver(value))
             && value.prelude.is_empty()
         {
             let item = self.runtime_item(target);

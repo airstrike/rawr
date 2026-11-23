@@ -27,6 +27,16 @@ pub(super) enum Shape {
     Result(Box<Shape>, Box<Shape>),
 }
 
+/// How a comparison of two types reaches its impl
+/// (`Parser::cross_comparison`).
+pub(super) enum Cross {
+    /// The program's impl at the right operand's type.
+    Impl(Box<method::Definition>),
+    /// A type parameter's bound at the right operand's type, which only
+    /// its template's instances lower.
+    Bound,
+}
+
 impl Shape {
     pub(super) fn is_plain(&self) -> bool {
         matches!(self, Self::Plain)
@@ -584,7 +594,12 @@ impl<'a> Parser<'a> {
         while let Ty::Reference { target, .. } | Ty::Boxed(target) = peeled {
             peeled = self.inference.resolve(&target);
         }
+        let cross = self.cross_comparison("PartialOrd", "partial_cmp", lhs, rhs)?;
         let partial_cmp = match &peeled {
+            _ if let Some(Cross::Impl(definition)) = &cross => {
+                Some((Some((**definition).clone()), true))
+            }
+            _ if let Some(Cross::Bound) = &cross => Some((None, true)),
             Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Str | Ty::Char | Ty::Ordering => {
                 return Ok(None)
             }
@@ -627,7 +642,9 @@ impl<'a> Parser<'a> {
             }
             return Ok(None);
         };
-        self.coerce_expr(&lhs.ty, rhs)?;
+        if cross.is_none() {
+            self.coerce_expr(&lhs.ty, rhs)?;
+        }
         let (value, other) = (lhs.rendered_source(), rhs.rendered_source());
         let compare = match (definition, &peeled) {
             (Some(definition), _) => Self::std_call(&definition, value, &[other]),
@@ -748,6 +765,116 @@ impl<'a> Parser<'a> {
         Ok(Some(value))
     }
 
+    /// The program's impl of the comparison trait `trait_name` whose
+    /// function `member` compares the left operand's type with the right
+    /// operand's, where the left's type has impls at other types than its
+    /// own (`impl PartialEq<Feet> for Meters`): rustc selects among them,
+    /// and its own type's, by both operands' types. `&a == &b` compares
+    /// the referents, as std's impl for references does. `None` where the
+    /// type has no such impl, or the right operand is of its own type.
+    fn cross_comparison(
+        &mut self,
+        trait_name: &str,
+        member: &str,
+        lhs: &ParsedExpr,
+        rhs: &mut ParsedExpr,
+    ) -> Result<Option<Cross>, Error> {
+        let (mut left, mut right) = (
+            self.inference.resolve(&lhs.ty),
+            self.inference.resolve(&rhs.ty),
+        );
+        while let (Ty::Reference { target: inner, .. }, Ty::Reference { target: other, .. }) =
+            (&left, &right)
+        {
+            let (inner, other) = (self.inference.resolve(inner), self.inference.resolve(other));
+            (left, right) = (inner, other);
+        }
+        // `a == b` of `T: PartialEq<U>`: the bound at the right operand's
+        // type, which each instance's types select.
+        if matches!(left, Ty::Param(..) | Ty::Projection(..)) {
+            let bounded = self
+                .bound_trait_arguments(&left, trait_name)
+                .iter()
+                .any(|arguments| match &arguments[..] {
+                    [argument] => {
+                        let argument = self.inference.resolve(argument);
+                        argument != left && self.unifies(&argument, &right)
+                    }
+                    _ => false,
+                });
+            if !bounded {
+                return Ok(None);
+            }
+            let unlowered = self.unsupported(
+                "comparing a value of a type parameter with another type through its bound \
+                 outside an instance",
+            );
+            self.gap(unlowered)?;
+            return Ok(Some(Cross::Bound));
+        }
+        let Ty::Script(owner, _) = &left else {
+            return Ok(None);
+        };
+        let crosses = self
+            .models
+            .cross_impls(*owner, trait_name, member)
+            .cloned()
+            .collect::<Vec<_>>();
+        if crosses.is_empty() {
+            return Ok(None);
+        }
+        let own = capability::Kind::from_derive(trait_name)
+            .is_some_and(|kind| self.type_provides(&left, kind));
+        let mut fitting = Vec::new();
+        for definition in &crosses {
+            let substitution = definition
+                .generics()
+                .iter()
+                .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+                .collect::<BTreeMap<_, _>>();
+            let [argument] = definition.trait_arguments() else {
+                continue;
+            };
+            let taken = instantiate(&Ty::from_resolved(argument), &substitution);
+            let owner = impl_self_ty(definition, &substitution);
+            let checkpoint = self.inference.checkpoint();
+            let fits = self.unify_type(&owner, &left) && self.unify_type(&taken, &right);
+            self.inference.rollback(checkpoint);
+            if fits {
+                fitting.push((definition, owner, taken));
+            }
+        }
+        // A right operand still to be inferred takes the one impl's type,
+        // when the type has no comparison with itself.
+        let open = matches!(right, Ty::Infer(_));
+        if let [(definition, owner, taken)] = &fitting[..]
+            && (!open || !own && crosses.len() == 1)
+        {
+            self.unify_type(owner, &left);
+            self.unify_type(taken, &right);
+            return Ok(Some(Cross::Impl(Box::new((*definition).clone()))));
+        }
+        if open || own && self.unifies(&left, &right) {
+            return Ok(None);
+        }
+        // One impl: its `Rhs` is what the right operand must be (E0308).
+        if let ([definition], false) = (&crosses[..], own)
+            && let [argument] = definition.trait_arguments()
+        {
+            return Err(Error::TypeMismatch {
+                expected: Ty::from_resolved(argument).name(&self.models),
+                actual: right.name(&self.models),
+                expression: rhs.span,
+            });
+        }
+        Err(Error::CannotCompare {
+            lhs: left.name(&self.models),
+            rhs: right.name(&self.models),
+            required: None,
+            at: span(lhs.span.start(), rhs.span.end()),
+        })
+    }
+
     /// A compared type as rustc names it.
     pub(super) fn compared_name(&self, side: &Ty) -> ImmutableString {
         self.inference.resolve(side).name(&self.models)
@@ -838,6 +965,25 @@ impl<'a> Parser<'a> {
                 value.prelude = origin::Fragment::default();
             }
             return Ok(value);
+        }
+        // `meters == feet` through the program's `impl PartialEq<Feet> for
+        // Meters`.
+        if let Some(cross) = self.cross_comparison("PartialEq", "eq", &lhs, &mut rhs)? {
+            let (value, other) = (lhs.rendered_source(), rhs.rendered_source());
+            let call = match cross {
+                Cross::Impl(definition) => Self::std_call(&definition, value, &[other]),
+                Cross::Bound => Self::std_dispatch("PartialEq", "eq", value, &[other]),
+            };
+            let source = if negate {
+                call.surrounded("!(", ")")
+            } else {
+                call
+            };
+            return Ok(self.operator_expr(
+                source,
+                Ty::Bool,
+                span(lhs.span.start(), rhs.span.end()),
+            ));
         }
         // The `PartialEq<Rhs>` impl of the left operand's type that takes
         // the right operand's: one between two types (`&String == &str`)
