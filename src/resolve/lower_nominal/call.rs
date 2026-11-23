@@ -827,6 +827,10 @@ impl<'a> Parser<'a> {
                 .map(|closure| closure.keeps.clone()),
             _ => None,
         };
+        let closure_key = match &ty {
+            Ty::FnItem { key, .. } => Some((**key).clone()),
+            _ => None,
+        };
         let function = match &ty {
             Ty::FnItem { key, .. } => self
                 .models
@@ -918,6 +922,10 @@ impl<'a> Parser<'a> {
         ));
         source.push_text(")");
         let source = self.copied_call(source, &places)?;
+        if let Some(key) = &closure_key {
+            let spans: Vec<Span> = arguments.iter().map(|argument| argument.span).collect();
+            self.flow().give(key, &spans);
+        }
         let kept = self.inference.resolve(&output);
         match (&function, closure) {
             (Some(function), _) => {

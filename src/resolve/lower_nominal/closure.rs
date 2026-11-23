@@ -551,6 +551,9 @@ impl<'a> Parser<'a> {
         let std_return = self.closure_return.take();
         let outer_changed = self.self_changed.replace(false);
         let mut parameters = Vec::<(ImmutableString, Ty, Span)>::new();
+        // The parameters named alone whose types the body infers, by
+        // declaration: their regions are free, as rustc's are.
+        let mut free = Vec::<Span>::new();
         // Each pattern parameter's index, pattern and written type's span.
         let mut patterns = Vec::<(usize, pattern::Syntax, Option<Span>)>::new();
         // `|a, b|` as rustc's note on a call of it shows it.
@@ -592,6 +595,9 @@ impl<'a> Parser<'a> {
                     // The host callable's parameter type, as Rust infers it.
                     ty.clone()
                 } else {
+                    if pattern.is_none() {
+                        free.push(declaration);
+                    }
                     self.inference.fresh()
                 };
                 if let Some(pattern) = pattern {
@@ -891,6 +897,7 @@ impl<'a> Parser<'a> {
                 closure_blocks,
                 &captured,
                 &declared,
+                &free,
                 tail,
                 moved,
                 point_span(start.start()),

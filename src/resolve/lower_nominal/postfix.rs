@@ -4485,6 +4485,7 @@ impl<'a> Parser<'a> {
         let Some(output) = self.return_ty.clone() else {
             return Err(self.unsupported("`?` outside a function or closure"));
         };
+        self.try_return(expression);
         // `s.parse()?` whose target only the expected type of the whole
         // expression gives, as `let n: i32 = s.parse()?;`: rustc infers the
         // target from it, which settles the error the `?` converts by the

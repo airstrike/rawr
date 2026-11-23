@@ -273,6 +273,11 @@ pub(crate) struct Body {
     /// its reservation made, not of its place, so the move check reads no
     /// use there, as rustc's reads none of the borrowed temporary.
     pub(crate) activations: std::collections::BTreeSet<Point>,
+    /// For each local whose drop uses only some of the borrows it holds, a
+    /// hidden local holding those, which its drops use instead: each part
+    /// and the local it is a part of. A part is given a value where its
+    /// local is.
+    pub(crate) drop_parts: Vec<(Local, Local)>,
 }
 
 /// A value the body stores below a reference (`v.push(x)`, `*r = x`):
@@ -338,6 +343,14 @@ pub(crate) struct Naming {
 }
 
 impl Body {
+    /// The local `local` is a [`Body::drop_parts`] part of.
+    pub(crate) fn part_of(&self, local: Local) -> Option<Local> {
+        self.drop_parts
+            .iter()
+            .find(|(part, _)| *part == local)
+            .map(|(_, whole)| *whole)
+    }
+
     /// The points after `point`.
     pub(crate) fn successors(&self, point: Point) -> impl Iterator<Item = Point> + '_ {
         let block = &self.blocks[point.block.0 as usize];

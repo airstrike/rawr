@@ -1164,11 +1164,22 @@ impl Parser<'_> {
         }
         // `view<'a>(items: &'a [Item]) -> impl Show + 'a`'s value keeps
         // the borrows of the inputs at the lifetime its type names.
-        let kept: Vec<Tap> = (0..arguments)
-            .filter(|index| item.lends(*index))
-            .map(|index| all(Input::Argument(index)))
+        // An async method's future keeps them, and its receiver where the
+        // output keeps that too.
+        let lent_receiver = matches!(
+            mode,
+            Some(signature::Receiver::Shared | signature::Receiver::Mutable)
+        ) && item.lends_receiver();
+        let kept: Vec<Tap> = lent_receiver
+            .then(|| all(Input::Receiver))
+            .into_iter()
+            .chain(
+                (0..arguments)
+                    .filter(|index| item.lends(*index))
+                    .map(|index| all(Input::Argument(index))),
+            )
             .collect();
-        if !kept.is_empty() {
+        if kept.len() > usize::from(lent_receiver) {
             return Summary::taps(mode, kept, Vec::new());
         }
         // `again(&self) -> Self` of an imported `impl Trait` value keeps
@@ -1422,7 +1433,7 @@ impl Parser<'_> {
     /// Where each region position of the field `slot` (of `variant`, for an
     /// enum) of the crate type `definition` sits in the type, or `None` for
     /// one these facts can't place.
-    fn field_positions(
+    pub(super) fn field_positions(
         &self,
         definition: type_def::Id,
         variant: Option<&str>,
@@ -2290,10 +2301,11 @@ impl Parser<'_> {
             match self.drop_use(&local.ty) {
                 drops::DropUse::None => {}
                 drops::DropUse::All => self.flow().drop_use(local.declaration),
-                drops::DropUse::Some => self.flow().unmodeled(
-                    "a value whose drop uses some of the borrows it holds and not others",
-                    local.declaration,
-                ),
+                drops::DropUse::Some => {
+                    if self.drops_in_part(&local.ty, local.declaration) {
+                        self.flow().drop_use(local.declaration);
+                    }
+                }
             }
             let whole = assignee::assignment_span(target, replacement);
             let into = self.flow().rebound(target.start(), whole);

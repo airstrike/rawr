@@ -218,7 +218,7 @@ fn testing() -> (host::facade::Definition, host::runtime::Facade) {
     function(
         &mut builder,
         "pending",
-        type_ref::Type::external(future, [type_ref::Type::unit()]).unwrap(),
+        type_ref::Type::external(future.clone(), [type_ref::Type::unit()]).unwrap(),
     );
     function(
         &mut builder,
@@ -543,4 +543,83 @@ fn a_use_of_a_place_a_live_future_borrows_is_rustcs_error() {
         compiled("let mut v = vec![1]; let f = push(&mut v); f.await; v.push(2);"),
         None
     );
+}
+
+/// A write or a move of a place while a future that borrows it lives is
+/// rustc's E0506 or E0505, at its span: a program's `async fn`'s future,
+/// and an imported one's, which keeps each input it lends (D683.2). Once
+/// the future has ended, both are accepted.
+#[cfg(feature = "rust-import")]
+#[test]
+fn a_write_or_a_move_of_a_place_a_live_future_leases_is_rustcs_error() {
+    use host::{facade, item, signature, type_ref};
+    let core = super::facade::definition().unwrap();
+    let future = core.export_type("future::Future").unwrap();
+    let mut builder = facade::Builder::new("leasing", facade::Abi::new(1).unwrap()).unwrap();
+    builder.type_::<Token>("Token", &[], &[]).unwrap();
+    let token = || type_ref::Type::registered("Token").unwrap();
+    let mut change = signature::Builder::new();
+    change.parameter(type_ref::Type::reference(true, token()));
+    change.output(type_ref::Type::external(future, [type_ref::Type::unit()]).unwrap());
+    builder
+        .item(
+            item::Definition::function("change", change.finish())
+                .unwrap()
+                .imported(rawr_import::surface::identity::Selector::Declaration)
+                .lending(1),
+        )
+        .unwrap();
+    let mut made = signature::Builder::new();
+    made.output(token());
+    builder
+        .item(item::Definition::function("token", made.finish()).unwrap())
+        .unwrap();
+    let definition = builder.finish().unwrap();
+    let compiled = |body: &str| {
+        let mut engine = Engine::new();
+        engine
+            .register_host_facade(super::facade::definition().unwrap())
+            .unwrap();
+        engine.register_host_facade(definition.clone()).unwrap();
+        let source = format!(
+            "async fn len(items: &Vec<i64>) -> usize {{ items.len() }}
+             #[tokio::main] pub async fn main() {{ {body} }}"
+        );
+        Shared::new(engine)
+            .compile_authority(&source)
+            .err()
+            .map(|error| error.to_string())
+    };
+    let leased = "let mut t = leasing::token(); let f = leasing::change(&mut t);";
+    for (body, error) in [
+        (
+            "let mut v = vec![1]; let f = len(&v); v = vec![2]; f.await;".to_string(),
+            "cannot assign to `v` because it is borrowed (E0506)",
+        ),
+        (
+            "let v = vec![1]; let f = len(&v); let w = v; f.await;".to_string(),
+            "cannot move out of `v` because it is borrowed (E0505)",
+        ),
+        (
+            format!("{leased} t = leasing::token(); f.await;"),
+            "cannot assign to `t` because it is borrowed (E0506)",
+        ),
+        (
+            format!("{leased} let u = t; f.await;"),
+            "cannot move out of `t` because it is borrowed (E0505)",
+        ),
+        (
+            format!("{leased} let r = &t; f.await;"),
+            "cannot borrow `t` as immutable because it is also borrowed as mutable (E0502)",
+        ),
+    ] {
+        let report = compiled(&body).unwrap_or_else(|| panic!("accepted: {body}"));
+        assert!(report.starts_with(error), "{body}: {report}");
+    }
+    for body in [
+        "let mut v = vec![1]; let f = len(&v); f.await; v = vec![2]; let w = v;".to_string(),
+        format!("{leased} f.await; t = leasing::token(); let u = t;"),
+    ] {
+        assert_eq!(compiled(&body), None, "{body}");
+    }
 }
