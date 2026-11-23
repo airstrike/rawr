@@ -95,24 +95,83 @@ impl<'a> Parser<'a> {
         let outputs = Shared::clone(&self.models.opaque_outputs);
         let mut hidden = BTreeMap::new();
         for (opaque, opaque_output) in outputs.iter() {
-            let own = |ty: &Ty| matches!(ty, Ty::Param(_, Parameter::Opaque(own)) if own.opaque == *opaque);
+            let arguments = std::cell::RefCell::new(None);
+            let own = |ty: &Ty| match ty {
+                Ty::Param(_, Parameter::Opaque(own)) if own.opaque == *opaque => {
+                    *arguments.borrow_mut() = Some(own.arguments.clone());
+                    true
+                }
+                _ => false,
+            };
             if !contains(&ty, &own) {
                 continue;
             }
             let generic = std::slice::from_ref(&opaque_output.bounds);
             let fresh = self.fresh_generics(generic, output.span());
             if let Some(fresh) = fresh.into_values().next() {
-                hidden.insert(*opaque, fresh);
+                hidden.insert(*opaque, (fresh, arguments.take().unwrap_or_default()));
             }
         }
         if hidden.is_empty() {
             return;
         }
         self.return_ty = Some(substitute(&ty, &|ty| match ty {
-            Ty::Param(_, Parameter::Opaque(captured)) => hidden.get(&captured.opaque).cloned(),
+            Ty::Param(_, Parameter::Opaque(captured)) => {
+                hidden.get(&captured.opaque).map(|(fresh, _)| fresh.clone())
+            }
             _ => None,
         }));
         self.hidden_outputs = hidden;
+    }
+
+    /// An impl's method `member` of `trait_name` whose `output` refines an
+    /// `impl Trait` the trait's signature writes to a type of its own (RFC
+    /// 3245) proves the trait's opaque output's bounds of that type, as
+    /// rustc does where the type is written.
+    pub(super) fn prove_refinements(
+        &mut self,
+        trait_name: &str,
+        member: &str,
+        output: &type_ref::Type,
+    ) {
+        let Some(declared) = self
+            .models
+            .traits
+            .get(trait_name)
+            .and_then(|(_, declared)| {
+                declared
+                    .functions
+                    .iter()
+                    .find(|function| function.name.text == member)?
+                    .output
+                    .as_ref()
+            })
+        else {
+            return;
+        };
+        let mut found = Vec::new();
+        output.refinements(declared, &mut found);
+        let refined = found
+            .into_iter()
+            .filter_map(|(written, opaque)| match &opaque.target {
+                // Not its own `impl Trait`, which its body fills.
+                type_ref::Target::Opaque(Some(opaque))
+                    if !matches!(written, type_ref::Type::Path(own)
+                        if matches!(own.target, type_ref::Target::Opaque(_))) =>
+                {
+                    let bounds = self.models.opaque_outputs.get(opaque)?.bounds.clone();
+                    Some((Ty::from_resolved(written), written.span(), bounds))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (written, span, bounds) in refined {
+            let fresh = self.fresh_generics(std::slice::from_ref(&bounds), span);
+            if let Some(fresh) = fresh.into_values().next() {
+                let fits = self.unify_type(&fresh, &written);
+                debug_assert!(fits, "a fresh type unifies with any type");
+            }
+        }
     }
 
     /// The hidden type this body filled each of its function's opaque
@@ -123,7 +182,14 @@ impl<'a> Parser<'a> {
             filled: self
                 .hidden_outputs
                 .iter()
-                .map(|(opaque, hidden)| (*opaque, self.inference.resolve(hidden)))
+                .map(|(opaque, (hidden, arguments))| Filled {
+                    opaque: *opaque,
+                    hidden: self.inference.resolve(hidden),
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| self.inference.resolve(argument))
+                        .collect(),
+                })
                 .collect(),
             witnessed: std::mem::take(&mut self.witnessed_opaques),
             sends: std::mem::take(&mut self.opaque_sends),
@@ -479,7 +545,11 @@ impl<'a> Parser<'a> {
         }
         // An opaque output's hidden literal is its fallback kind before its
         // bounds are proved: `impl Display` of `42` is an `i32`.
-        for hidden in self.hidden_outputs.values().cloned().collect::<Vec<_>>() {
+        let hidden_outputs = self
+            .hidden_outputs
+            .values()
+            .map(|(hidden, _)| hidden.clone());
+        for hidden in hidden_outputs.collect::<Vec<_>>() {
             if let Some(fallback) = literal_fallback(&self.inference.resolve(&hidden)) {
                 let fits = self.unify_type(&hidden, &fallback);
                 debug_assert!(fits, "a literal unifies with its fallback kind");

@@ -815,8 +815,13 @@ fn lower_instances(
 }
 
 /// Whether each template whose erased body a running body calls has one:
-/// else that call reports what its generic read can't lower (D1115).
-fn erased_needed(unit: &Unit<'_>, assembly: &Assembly) -> Result<(), LoweringFailure> {
+/// else that call reports what its generic read can't lower (D1115), or
+/// the failure `gaps` keeps for it.
+fn erased_needed(
+    unit: &Unit<'_>,
+    assembly: &Assembly,
+    gaps: &mut BTreeMap<crate::item::Key, LoweringFailure>,
+) -> Result<(), LoweringFailure> {
     // The erased bodies that run: those the running bodies call, and
     // those each of those calls.
     let own = assembly
@@ -841,6 +846,9 @@ fn erased_needed(unit: &Unit<'_>, assembly: &Assembly) -> Result<(), LoweringFai
         if !uses.gap {
             needed.extend(uses.erased.iter().cloned());
             continue;
+        }
+        if let Some(failure) = gaps.remove(&template) {
+            return Err(failure);
         }
         if let Some(shell) = unit
             .program
@@ -1151,6 +1159,7 @@ pub(super) fn lower_with_context(
         #[cfg(feature = "rust-import")]
         imported.as_mut(),
     )?;
+    let mut gaps = witnessed_hidden(&witnesses, &mut assembly, &models)?;
     erased_needed(
         &Unit {
             engine,
@@ -1161,8 +1170,8 @@ pub(super) fn lower_with_context(
             numbering: ImmutableString::new(),
         },
         &assembly,
+        &mut gaps,
     )?;
-    witnessed_hidden(&witnesses, &assembly.hidden, &models)?;
     sent_hidden(engine, &assembly.hidden, &models)?;
     #[cfg(feature = "rust-import")]
     if let Some(session) = &mut session {
@@ -1413,9 +1422,22 @@ pub(super) struct Lowered {
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Hidden {
-    pub(super) filled: Vec<(type_ref::Opaque, Ty)>,
+    pub(super) filled: Vec<Filled>,
     pub(super) witnessed: Vec<Witnessed>,
     pub(super) sends: Vec<HiddenSend>,
+}
+
+/// The hidden type a body fills an opaque output with, and the type
+/// arguments the output has in that body: a trait's provided method,
+/// copied for each impl that keeps it, fills its trait's one opaque output
+/// at each impl's `Self` (D1109), as rustc's `<A as Make>::make` is its own
+/// type for each `A`.
+#[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct Filled {
+    pub(super) opaque: type_ref::Opaque,
+    pub(super) hidden: Ty,
+    pub(super) arguments: Box<[Ty]>,
 }
 
 /// An opaque output a generic call takes as a type argument at `span`,
@@ -1429,12 +1451,14 @@ pub(super) struct Witnessed {
     pub(super) arguments: Box<[bool]>,
 }
 
-/// The witness of an opaque output's one hidden type (D1109): known, or
-/// the witness of the type argument it is, at each call.
+/// The witness of an opaque output's hidden type (D1109): known, the
+/// witness of the type argument it is at each call, or known for each list
+/// of its type arguments' witnesses, which a call's own select.
 #[derive(Clone, PartialEq)]
 enum HiddenWitness {
     Known(String),
     Captured(usize),
+    ByArguments(Vec<(Box<[String]>, String)>),
 }
 
 /// A `Send` bound of `item` on a type `ty` that holds an opaque output,
@@ -1469,35 +1493,20 @@ pub(super) struct Declared {
 /// arguments, to the witness of its hidden type (D1109), which a generic
 /// call taking it as a type argument passes: written once every
 /// function's body has filled its own. Each opaque output's witness, if
-/// one hidden type has one.
+/// its hidden types have one.
 fn write_hidden_dispatcher(
     output: &mut location::Generated,
     hidden: &[(crate::program::source::Id, Hidden)],
     models: &Models,
 ) -> BTreeMap<type_ref::Opaque, Option<HiddenWitness>> {
-    let mut witnesses = BTreeMap::<type_ref::Opaque, Option<HiddenWitness>>::new();
-    for (opaque, ty) in hidden.iter().flat_map(|(_, hidden)| &hidden.filled) {
-        let witness = match ty {
-            Ty::Script(id, _) => Some(HiddenWitness::Known(id.number().to_string())),
-            // `fn wrap<T>(t: T) -> impl Shape { t }`: its call's `T`'s.
-            Ty::Param(name, super::ty::Parameter::Declared) => models
-                .opaque_outputs
-                .get(opaque)
-                .and_then(|output| output.captured.iter().position(|captured| captured == name))
-                .map(HiddenWitness::Captured),
-            ty => witness_code(ty).map(|code| HiddenWitness::Known(code.to_string())),
-        };
-        // A trait method's opaque output, which each impl fills (stage 4),
-        // has no one hidden type yet.
-        witnesses
-            .entry(*opaque)
-            .and_modify(|known| {
-                if *known != witness {
-                    *known = None;
-                }
-            })
-            .or_insert(witness);
+    let mut fills = BTreeMap::<type_ref::Opaque, Vec<&Filled>>::new();
+    for filled in hidden.iter().flat_map(|(_, hidden)| &hidden.filled) {
+        fills.entry(filled.opaque).or_default().push(filled);
     }
+    let witnesses = fills
+        .into_iter()
+        .map(|(opaque, fills)| (opaque, hidden_witness(opaque, &fills, models)))
+        .collect::<BTreeMap<_, _>>();
     let mut text = String::new();
     let mut at = None;
     for (opaque, witness) in &witnesses {
@@ -1505,14 +1514,27 @@ fn write_hidden_dispatcher(
             continue;
         };
         let [source, line, column, index] = opaque.numbers();
-        let witness = match witness {
-            HiddenWitness::Known(witness) => witness.clone(),
-            HiddenWitness::Captured(at) => format!("__rawr_arguments[{at}]"),
+        let body = match witness {
+            HiddenWitness::Known(witness) => format!("return {witness};"),
+            HiddenWitness::Captured(at) => format!("return __rawr_arguments[{at}];"),
+            HiddenWitness::ByArguments(arms) => {
+                let mut body = String::new();
+                for (arguments, witness) in arms {
+                    let test = arguments
+                        .iter()
+                        .enumerate()
+                        .map(|(at, argument)| format!("__rawr_arguments[{at}] == {argument}"))
+                        .collect::<Vec<_>>()
+                        .join(" && ");
+                    let _ = write!(body, "if {test} {{ return {witness}; }} ");
+                }
+                body
+            }
         };
         let _ = writeln!(
             text,
             "if __rawr_source == {source} && __rawr_line == {line} \
-             && __rawr_column == {column} && __rawr_index == {index} {{ return {witness}; }}"
+             && __rawr_column == {column} && __rawr_index == {index} {{ {body}}}"
         );
         at.get_or_insert(opaque.function());
     }
@@ -1529,15 +1551,66 @@ fn write_hidden_dispatcher(
     witnesses
 }
 
+/// The witness of `opaque`'s hidden type, which `fills` fill it with: the
+/// one every fill gives, else the one each list of type arguments the fills
+/// have gives, as each impl keeping a trait's provided method fills the
+/// method's opaque output at its own `Self`. `None` when it has none.
+fn hidden_witness(
+    opaque: type_ref::Opaque,
+    fills: &[&Filled],
+    models: &Models,
+) -> Option<HiddenWitness> {
+    let known = |ty: &Ty| match ty {
+        Ty::Script(id, _) => Some(id.number().to_string()),
+        ty => witness_code(ty).map(|code| code.to_string()),
+    };
+    let witness = |filled: &Filled| match &filled.hidden {
+        // `fn wrap<T>(t: T) -> impl Shape { t }`: its call's `T`'s.
+        Ty::Param(name, super::ty::Parameter::Declared) => models
+            .opaque_outputs
+            .get(&opaque)
+            .and_then(|output| output.captured.iter().position(|captured| captured == name))
+            .map(HiddenWitness::Captured),
+        ty => known(ty).map(HiddenWitness::Known),
+    };
+    let first = witness(fills.first()?);
+    if fills.iter().all(|filled| witness(filled) == first) {
+        return first;
+    }
+    // A trait's opaque output, which each impl keeping the provided method
+    // fills at its own type arguments.
+    let mut arms = Vec::<(Box<[String]>, String)>::new();
+    for filled in fills {
+        let arguments = filled
+            .arguments
+            .iter()
+            .map(known)
+            .collect::<Option<Box<[_]>>>()?;
+        let hidden = known(&filled.hidden)?;
+        match arms.iter().find(|(known, _)| *known == arguments) {
+            Some((_, other)) if *other != hidden => return None,
+            Some(_) => {}
+            None => arms.push((arguments, hidden)),
+        }
+    }
+    Some(HiddenWitness::ByArguments(arms))
+}
+
 /// Refuse a generic call taking as a type argument an opaque output with
 /// no one hidden type a witness names, or whose hidden type is a type
-/// argument with none at the call, as it refuses that type argument.
+/// argument with none at the call, as it refuses that type argument. A
+/// template's generic read may not know the hidden type its parameters
+/// choose, as `<M as Make>::make`'s is each impl's, which each instance
+/// names (D1115): its erased body then runs only where a call needs it,
+/// which reports this, by the template's key.
 fn witnessed_hidden(
     witnesses: &BTreeMap<type_ref::Opaque, Option<HiddenWitness>>,
-    hidden: &[(crate::program::source::Id, Hidden)],
+    assembly: &mut Assembly,
     models: &Models,
-) -> Result<(), LoweringFailure> {
-    for (source, hidden) in hidden {
+) -> Result<BTreeMap<crate::item::Key, LoweringFailure>, LoweringFailure> {
+    let mut gaps = BTreeMap::new();
+    for ((source, hidden), (template, uses)) in assembly.hidden.iter().zip(&mut assembly.instances)
+    {
         for Witnessed {
             opaque,
             span,
@@ -1547,6 +1620,7 @@ fn witnessed_hidden(
             let witnessed = match witnesses.get(opaque) {
                 Some(Some(HiddenWitness::Known(_))) => true,
                 Some(Some(HiddenWitness::Captured(at))) => arguments.get(*at) == Some(&true),
+                Some(Some(HiddenWitness::ByArguments(_))) => arguments.iter().all(|known| *known),
                 _ => false,
             };
             if witnessed {
@@ -1556,42 +1630,53 @@ fn witnessed_hidden(
                 || "impl Trait".into(),
                 |output| output.bounds.name.text.clone(),
             );
-            return Err(LoweringFailure::original(
+            let failure = LoweringFailure::original(
                 *source,
                 Error::UnsupportedNominalSyntax {
                     construct: format!("`{name}` as the type argument of a generic call").into(),
                     source: *span,
                 }
                 .into(),
-            ));
+            );
+            match template {
+                Some(template) => {
+                    uses.gap = true;
+                    gaps.entry(template.clone()).or_insert(failure);
+                }
+                None => return Err(failure),
+            }
         }
     }
-    Ok(())
+    Ok(gaps)
 }
 
 /// Refuse a thread's closure capturing an opaque output whose hidden type
 /// isn't `Send`, as rustc's auto traits see through it (D1109). An opaque
-/// output with no one hidden type passes, as rawr proves no auto trait.
+/// output with no one hidden type at its type arguments passes, as rawr
+/// proves no auto trait.
 fn sent_hidden(
     engine: &Engine,
     hidden: &[(crate::program::source::Id, Hidden)],
     models: &Models,
 ) -> Result<(), LoweringFailure> {
-    let mut revealed = BTreeMap::<type_ref::Opaque, Option<Ty>>::new();
-    for (opaque, ty) in hidden.iter().flat_map(|(_, hidden)| &hidden.filled) {
-        revealed
-            .entry(*opaque)
-            .and_modify(|known| {
-                if known.as_ref() != Some(ty) {
-                    *known = None;
-                }
-            })
-            .or_insert_with(|| Some(ty.clone()));
+    let mut fills = BTreeMap::<type_ref::Opaque, Vec<&Filled>>::new();
+    for filled in hidden.iter().flat_map(|(_, hidden)| &hidden.filled) {
+        fills.entry(filled.opaque).or_default().push(filled);
     }
-    // At its type arguments: `wrap::<Rc<f64>>`'s hidden `T` is `Rc<f64>`.
+    // At its type arguments: `wrap::<Rc<f64>>`'s hidden `T` is `Rc<f64>`,
+    // and a trait's provided method's is the one its impl's `Self` fills.
     let reveal = |ty: &Ty| match ty {
         Ty::Param(_, super::ty::Parameter::Opaque(captured)) => {
-            let hidden = revealed.get(&captured.opaque)?.as_ref()?;
+            let fills = fills.get(&captured.opaque)?;
+            let first = &fills.first()?.hidden;
+            let hidden = if fills.iter().all(|filled| filled.hidden == *first) {
+                first
+            } else {
+                &fills
+                    .iter()
+                    .find(|filled| *filled.arguments == *captured.arguments)?
+                    .hidden
+            };
             let output = models.opaque_outputs.get(&captured.opaque)?;
             let substitution = super::generics::opaque_substitution(output, &captured.arguments);
             Some((

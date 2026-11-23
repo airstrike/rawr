@@ -5410,7 +5410,22 @@ fn trait_impl_functions(
                 signature: function.name.span,
             });
         };
-        if signature(function, false) != signature(required, true) {
+        // An impl may refine the trait's `impl Trait` output to a type
+        // meeting its bounds (RFC 3245), which its body proves.
+        let unrefined = match (&function.output, &required.output) {
+            (Some(written), Some(declared)) => {
+                Some(written.unrefined(&substitute(declared))).filter(|output| output != written)
+            }
+            _ => None,
+        };
+        let refined = match unrefined {
+            Some(output) => std::borrow::Cow::Owned(item::Function {
+                output: Some(output),
+                ..function.clone()
+            }),
+            None => std::borrow::Cow::Borrowed(function),
+        };
+        if signature(&refined, false) != signature(required, true) {
             return Err(Error::InvalidMethodSignature {
                 owner: owner_name.into(),
                 method: function.name.text.clone(),
@@ -6305,6 +6320,12 @@ fn dyn_own_incompatibility(
         }
         if !function.generics.is_empty() {
             return Some(error(member, "this method has generic type parameters"));
+        }
+        if !function.opaque_outputs.is_empty() {
+            return Some(error(
+                member,
+                "this method references an `impl Trait` type in its return type",
+            ));
         }
         if function
             .parameters

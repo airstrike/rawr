@@ -3085,6 +3085,123 @@ main();
 }
 
 #[test]
+fn a_trait_methods_opaque_output_is_each_impls_own() {
+    // rustc's `<A as Make>::make` is its own opaque type for each impl, so
+    // a generic `T::zero()` dispatches on each impl's hidden type, through
+    // a generic body's instances and a provided method kept by each impl
+    // (D1109 stage 4).
+    let output = printed(
+        r#"
+trait Zero { fn zero() -> Self; fn val(&self) -> i64; }
+struct Z(i64);
+struct W(i64);
+impl Zero for Z { fn zero() -> Self { Z(1) } fn val(&self) -> i64 { self.0 } }
+impl Zero for W { fn zero() -> Self { W(2) } fn val(&self) -> i64 { self.0 * 10 } }
+trait Make { fn make(&self) -> impl Zero; }
+struct A; struct B;
+impl Make for A { fn make(&self) -> impl Zero { Z(5) } }
+impl Make for B { fn make(&self) -> impl Zero { W(6) } }
+fn same<T: Zero>(_: &T) -> T { T::zero() }
+fn both<M: Make>(m: &M) -> i64 { let v = m.make(); same(&v).val() + v.val() }
+fn main() {
+    let a = A.make();
+    println!("{} {}", same(&a).val(), same(&B.make()).val());
+    println!("{} {}", both(&A), both(&B));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 20\n6 80\n");
+    let output = printed(
+        r#"
+trait Zero { fn zero() -> Self; fn val(&self) -> i64; }
+#[derive(Clone)] struct A(i64);
+#[derive(Clone)] struct B(i64);
+impl Zero for A { fn zero() -> Self { A(7) } fn val(&self) -> i64 { self.0 } }
+impl Zero for B { fn zero() -> Self { B(8) } fn val(&self) -> i64 { self.0 } }
+trait Make: Clone + Zero { fn me(&self) -> impl Zero + Clone { self.clone() } }
+impl Make for A {}
+impl Make for B {}
+fn same<T: Zero>(_: &T) -> T { T::zero() }
+fn main() {
+    println!("{} {}", same(&A(1).me()).val(), same(&B(2).me()).val());
+    println!("{} {}", A(1).me().val(), B(2).me().val());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 8\n1 2\n");
+    // Two impls' opaque types are apart, and a trait with one is no
+    // `dyn` type (E0038).
+    let program = |body: &str| {
+        format!(
+            r#"
+trait Shape {{ fn area(&self) -> f64; }}
+struct Sq(f64);
+struct Ci(f64);
+impl Shape for Sq {{ fn area(&self) -> f64 {{ self.0 * self.0 }} }}
+impl Shape for Ci {{ fn area(&self) -> f64 {{ 3.0 * self.0 * self.0 }} }}
+trait Grow {{ fn grow(&self) -> impl Shape; }}
+impl Grow for Sq {{ fn grow(&self) -> impl Shape {{ Sq(self.0 + 1.0) }} }}
+impl Grow for Ci {{ fn grow(&self) -> impl Shape {{ Ci(self.0 + 1.0) }} }}
+fn main() {{ {body} }}
+main();
+"#
+        )
+    };
+    let report = refused(&program(
+        "let mut x = Sq(1.0).grow(); x = Ci(1.0).grow(); println!(\"{}\", x.area());",
+    ));
+    assert!(
+        report.contains("expected opaque type, found a different opaque type"),
+        "{report}"
+    );
+    let report = refused(&program(
+        "let b: Box<dyn Grow> = Box::new(Sq(1.0)); println!(\"{}\", b.grow().area());",
+    ));
+    assert!(
+        report.contains("references an `impl Trait` type in its return type"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_impl_may_refine_its_traits_impl_trait_output() {
+    // rustc lets an impl write its own type for its trait's `impl Trait`
+    // output (RFC 3245), which its callers then know, and proves the
+    // trait's bounds of it where it is written.
+    let output = printed(
+        r#"
+trait Shape { fn area(&self) -> f64; }
+struct Sq(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+impl Sq { fn side(&self) -> f64 { self.0 } }
+trait Grow { fn grow(&self) -> impl Shape; }
+impl Grow for Sq { fn grow(&self) -> Sq { Sq(self.0 + 1.0) } }
+fn grown<T: Grow>(t: &T) -> f64 { t.grow().area() }
+fn main() { println!("{} {}", Sq(1.0).grow().side(), grown(&Sq(2.0))); }
+main();
+"#,
+    );
+    assert_eq!(output, "2 9\n");
+    let report = refused(
+        r#"
+trait Shape { fn area(&self) -> f64; }
+struct Sq(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+trait Grow { fn grow(&self) -> impl Shape; }
+impl Grow for Sq { fn grow(&self) -> i64 { 3 } }
+fn main() { println!("{}", Sq(1.0).grow()); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `i64: Shape` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
 fn a_std_from_into_a_float_widens_an_integer() {
     // std's `From<u8> for f64` and the other integers a float holds
     // exactly, through a generic's bound and concretely (#2475).
