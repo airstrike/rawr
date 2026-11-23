@@ -56,8 +56,12 @@ pub struct Called {
     /// The byte offset in the source of the call's module.
     pub at: u32,
     /// The expansion as rustc prints it: one expression, or each
-    /// statement of a call in statement position.
+    /// statement of a call in statement position. A value `line!()`,
+    /// `column!()` or `file!()` gave is that macro's call again.
     pub items: Vec<String>,
+    /// The byte offset in the source of the place each of those calls
+    /// read, in the order they print (#2291).
+    pub locations: Vec<u32>,
 }
 
 /// What `--expand` writes.

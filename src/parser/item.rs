@@ -135,8 +135,12 @@ pub(crate) enum Expansion<'a> {
         rules: &'a crate::resolve::macro_rules::Rules,
         krate: &'a str,
     },
-    /// rustc's, as text.
-    Text(&'a str),
+    /// rustc's, as text, with where each location call in it reads
+    /// (`rawr_import::expand::call::Location`).
+    Text {
+        text: &'a str,
+        locations: &'a [Option<u32>],
+    },
 }
 
 /// Lay out what `call`, a call of the crate macro `name` among `unit`'s
@@ -228,7 +232,26 @@ fn lay_out_items(
             // lowering's to expand, as a program macro's is.
             super::item_macro::lay_out(rules, &tokens, krate, braced, braced)
         }
-        Expansion::Text(text) => Some(super::item_macro::place(text, call.span, name, braced)),
+        Expansion::Text { text, locations } => {
+            let laid = super::item_macro::place(text, call.span, name, braced);
+            // A location call the input holds reads where the input writes
+            // it (#2291).
+            let group = crate::resolve::lower_nominal::lex_rust(
+                &Engine::new_raw(),
+                &source.only([call.group]),
+            )
+            .into_iter()
+            .filter(|(token, _)| *token != Token::EOF)
+            .collect::<Vec<_>>();
+            let input = group
+                .get(1..group.len().saturating_sub(1))
+                .unwrap_or_default();
+            super::item_macro::locate_at(
+                &laid.0,
+                &crate::resolve::lower_nominal::location_origins(input, locations),
+            );
+            Some(laid)
+        }
     };
     let Some((text, mark)) = laid else {
         return Ok(None);

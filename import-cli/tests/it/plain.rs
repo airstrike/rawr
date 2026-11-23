@@ -2809,6 +2809,50 @@ fn a_crate_macro_expands_in_type_and_pattern_position() {
     assert_eq!(text(&run.stdout), "42 value eighty-four\n");
 }
 
+/// A crate macro's call reads `line!()` and `column!()` where rustc reads
+/// them (#2291): one the macro writes at the call, and one the call's
+/// input holds where the input writes it, as `cargo run` prints them. An
+/// edit that moves the call moves what they read, and the call's kept
+/// expansion is the same.
+#[test]
+fn a_crate_macros_location_calls_read_where_rustc_reads_them() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::fresh("plain-proc-macro-locations");
+    copy(Path::new(PROC_MACRO), &root);
+    let scale = |above: &str| {
+        fs::write(
+            root.join("src/scale.rs"),
+            format!(
+                "// rawr\n{above}pub fn label(value: i64) -> String {{\n    \
+                 let (line, column, inner_line, inner_column) = numerals::located!(\n        \
+                 line!(), column!()\n    );\n    \
+                 format!(\"value {{value}} {{line}} {{column}} {{inner_line}} {{inner_column}}\")\n}}\n"
+            ),
+        )
+        .unwrap();
+    };
+    scale("");
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 42 3 52 4 18\n");
+    scale("\n");
+    let run = rawr_import(&root, &["run"]);
+    assert_eq!(
+        text(&run.stdout),
+        "42 value 42 4 52 5 18\n",
+        "{}",
+        text(&run.stderr)
+    );
+}
+
 /// An edit that changes only a derive's expansion's bodies, as a new
 /// `#[serde(rename)]` does, swaps into the running program (#1040): rustc
 /// expands the item again, its expansion's source changes in place, and the

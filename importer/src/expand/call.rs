@@ -69,9 +69,18 @@ pub struct Call {
     pub place: Place,
 }
 
-/// The first line of an expansion source, before the artifact and the
-/// call.
+/// The first line of an expansion source, before the artifact, the
+/// locations and the call.
 const SOURCE_HEADER: &str = "// call ";
+
+/// The line of the small crate its first call is on: past any column a
+/// call's line reaches, so the driver tells a value `line!()` gave from
+/// one `column!()` gave (#2291).
+#[cfg_attr(
+    not(feature = "rustc-driver"),
+    allow(dead_code, reason = "only the driver's build runs an expansion")
+)]
+const FIRST_LINE: usize = 10_000;
 
 impl Call {
     /// The `use` that binds the macro at `path`
@@ -103,7 +112,7 @@ impl Call {
     #[must_use]
     pub fn source_path(&self, project: &Path) -> PathBuf {
         let mut digest = Sha256::new();
-        digest.update(b"rawr.import.expand.call/v1");
+        digest.update(b"rawr.import.expand.call/v2");
         // The place's byte is its order in `Place`.
         digest.update([self.place as u8]);
         digest.update(self.text().as_bytes());
@@ -148,15 +157,23 @@ impl Call {
     }
 }
 
+/// Where the value of a `line!()`, `column!()` or `file!()` call in a
+/// call's expansion is read (#2291): the byte offset in the call's input of
+/// the token that starts the input's own location call, or `None` for one
+/// the macro wrote, which rustc reads at the call.
+pub type Location = Option<u32>;
+
 /// The first line of the source of `call`'s expansion against the
-/// artifact whose digest is `artifact`.
+/// artifact whose digest is `artifact`, whose location calls read at
+/// `locations`.
 #[cfg_attr(
     not(feature = "rustc-driver"),
     allow(dead_code, reason = "only the driver's build runs an expansion")
 )]
-fn header(call: &Call, artifact: &str) -> String {
+fn header(call: &Call, artifact: &str, locations: &[Location]) -> String {
     let call = serde_json::to_string(call).unwrap_or_default();
-    format!("{SOURCE_HEADER}{artifact} {call}\n")
+    let locations = serde_json::to_string(locations).unwrap_or_default();
+    format!("{SOURCE_HEADER}{artifact} {locations} {call}\n")
 }
 
 /// The call a kept expansion source `text` is of, and the digest of the
@@ -168,8 +185,20 @@ fn header(call: &Call, artifact: &str) -> String {
 )]
 pub(super) fn built(text: &str) -> Option<(Call, &str)> {
     let (line, _) = text.split_once('\n')?;
-    let (artifact, call) = line.strip_prefix(SOURCE_HEADER)?.split_once(' ')?;
+    let (artifact, rest) = line.strip_prefix(SOURCE_HEADER)?.split_once(' ')?;
+    let (_, call) = rest.split_once(' ')?;
     Some((serde_json::from_str(call).ok()?, artifact))
+}
+
+/// Where each location call in a kept expansion source `text` reads, in
+/// the order the expansion writes them. None for a text that is no call's
+/// expansion source.
+#[must_use]
+pub fn locations(text: &str) -> Option<Vec<Location>> {
+    let (line, _) = text.split_once('\n')?;
+    let (_, rest) = line.strip_prefix(SOURCE_HEADER)?.split_once(' ')?;
+    let (locations, _) = rest.split_once(' ')?;
+    serde_json::from_str(locations).ok()
 }
 
 /// What a kept expansion source `text` holds after its header: the
@@ -194,20 +223,28 @@ pub fn expand(
     limits: &crate::limits::Limits,
 ) -> crate::Result<()> {
     let directory = super::directory(project);
-    let mut text = String::new();
+    let offset = |at: usize| u32::try_from(at).unwrap_or(u32::MAX);
+    let mut text = "\n".repeat(FIRST_LINE - 1);
+    // Each call's module, and where its input starts.
     let mut modules = Vec::with_capacity(calls.len());
     for (index, call) in calls.iter().enumerate() {
-        modules.push(u32::try_from(text.len()).unwrap_or(u32::MAX));
+        let module = offset(text.len());
         text.push_str(&format!("mod __rawr_expand_{index} {{\n"));
-        text.push_str(&call.function());
+        let function = call.function();
+        let input = text.len()
+            + function.find(&call.text()).unwrap_or_default()
+            + call.path.len()
+            + "!(".len();
+        text.push_str(&function);
         text.push_str("}\n");
+        modules.push((module, offset(input)));
     }
     let roots = calls
         .iter()
         .map(|call| call.path.split("::").next().unwrap_or_default())
         .collect::<std::collections::BTreeSet<_>>();
     let expanded = super::drive(&text, &roots, basis, edition, &directory, native, limits)?;
-    for (call, module) in calls.iter().zip(modules) {
+    for (call, (module, input)) in calls.iter().zip(modules) {
         let called = expanded
             .calls
             .iter()
@@ -216,7 +253,13 @@ pub fn expand(
                 reason: format!("the driver wrote no expansion of `{}`", call.text()).into(),
             })?;
         let artifact = basis.artifact(&call.path).unwrap_or_default();
-        let mut source = header(call, artifact);
+        let length = offset(call.input.len());
+        let locations = called
+            .locations
+            .iter()
+            .map(|&at| at.checked_sub(input).filter(|&within| within < length))
+            .collect::<Vec<_>>();
+        let mut source = header(call, artifact, &locations);
         for item in &called.items {
             source.push_str(item);
             source.push('\n');
@@ -239,7 +282,7 @@ pub fn expand(
 
 #[cfg(test)]
 mod tests {
-    use super::{built, header, kept, Call, Delimiter, Place};
+    use super::{built, header, kept, locations, Call, Delimiter, Place};
 
     fn call(input: &str, place: Place) -> Call {
         Call {
@@ -267,7 +310,7 @@ mod tests {
         // call, which a build of another artifact expands again.
         let source = format!(
             "{}((3) * 2)\n",
-            header(&call("3 + 1", Place::Statements), "a1")
+            header(&call("3 + 1", Place::Statements), "a1", &[])
         );
         assert_eq!(kept(&source), Some("((3) * 2)\n"));
         assert_eq!(
@@ -275,5 +318,18 @@ mod tests {
             Some((call("3 + 1", Place::Statements), "a1"))
         );
         assert_eq!(kept("((3) * 2)\n"), None);
+        // It names where each location call in the expansion reads: at the
+        // call, or at a token of its input (#2291).
+        let located = format!(
+            "{}(line!(), column!())\n",
+            header(&call("line!() ", Place::Expression), "a1", &[None, Some(0)])
+        );
+        assert_eq!(locations(&located), Some(vec![None, Some(0)]));
+        assert_eq!(
+            built(&located),
+            Some((call("line!() ", Place::Expression), "a1"))
+        );
+        assert_eq!(locations(&source), Some(Vec::new()));
+        assert_eq!(locations("((3) * 2)\n"), None);
     }
 }

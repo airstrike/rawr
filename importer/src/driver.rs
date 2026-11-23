@@ -519,6 +519,7 @@ fn expand(arguments: &[String]) -> Result<ExitCode, String> {
     let mut callbacks = compiler::expand::Expand {
         out: PathBuf::from(out),
         protocol: PROTOCOL_SCHEMA,
+        source: request.source.clone(),
         result: None,
     };
     let exit = rustc_driver::catch_with_exit_code(|| {
