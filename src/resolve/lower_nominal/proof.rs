@@ -379,14 +379,33 @@ impl<'a> Parser<'a> {
         )))
     }
 
+    /// Whether `ty` has `capability`. A std trait of a type std declares is
+    /// std's impl of it, selected from the std table as rustc selects it
+    /// (D711 step 3), where the table states the impl (`std_states`). The
+    /// rest are rawr's facts
+    /// about its own values (`Send`, `'static`), its iterators, and the
+    /// program's impls, derives and bounds.
     pub(super) fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {
         if let Some(parameter) = self.assumed(ty)
             && self.type_provides(&parameter, capability)
         {
             return true;
         }
-        match self.inference.resolve(ty) {
-            Ty::Unit => true,
+        let ty = self.inference.resolve(ty);
+        if let Some(definition) = capability.std_trait()
+            && std_states(&ty, capability)
+            && std_impl::declares(&ty)
+        {
+            return std_impl::holds(&mut std_impl::Probe(self), definition, &ty, &[], true, 0)
+                .is_ok();
+        }
+        match ty {
+            // `()` is `Clone` and `Copy` as a tuple is, and no iterator or
+            // error.
+            Ty::Unit => !matches!(
+                capability,
+                capability::Kind::Iterator | capability::Kind::Error
+            ),
             // `!` implements what core implements it for: it is `Copy`,
             // prints, compares, orders and hashes, but has no `Default`
             // and is no iterator. A type holding it is `Copy` as its other
@@ -411,40 +430,43 @@ impl<'a> Parser<'a> {
                 capability::Kind::Copy => !self.owning_closures.contains(&*key),
                 _ => false,
             },
-            // `[T; N]` is `Copy` when `T` is; `Vec<T>` is only `Clone`.
-            // `Vec<T>`, `VecDeque<T>` and `[T; 0]` are `Default` for any
-            // `T`, and the unsized `[T]` never is.
-            Ty::Array { element, kind } => match (capability, &kind) {
-                (
-                    capability::Kind::Default,
-                    sequence::Kind::Vec
-                    | sequence::Kind::Deque
-                    | sequence::Kind::Array(sequence::Length::Fixed(0)),
-                ) => true,
-                (capability::Kind::Default, sequence::Kind::Slice) => false,
-                // `[T; N]` of a const parameter has no `Default`: std implements
-                // it for each length up to 32, never for every `N`.
-                (capability::Kind::Default, sequence::Kind::Array(length))
-                    if length.fixed().is_none() =>
-                {
-                    false
-                }
-                _ => {
-                    (capability != capability::Kind::Copy || kind.is_array())
-                        && self.type_provides(&element, capability)
-                }
+            // `[T; N]`'s `Default`, which std implements for each length
+            // up to 32, never for every `N`.
+            Ty::Array {
+                element,
+                kind: sequence::Kind::Array(length),
+            } if capability == capability::Kind::Default => match length.fixed() {
+                Some(0) => true,
+                Some(length) => length <= 32 && self.type_provides(&element, capability),
+                None => false,
             },
-            Ty::Tuple(members) => members
-                .iter()
-                .all(|member| self.type_provides(member, capability)),
-            // `Option<T>` is `Default`, and otherwise derives from `T`.
-            Ty::Option(element) => {
-                capability == capability::Kind::Default || self.type_provides(&element, capability)
+            Ty::Array { element, .. } => {
+                !matches!(
+                    capability,
+                    capability::Kind::Iterator | capability::Kind::Error
+                ) && self.type_provides(&element, capability)
             }
-            // `Result<T, E>` is never `Default`, and otherwise derives from both.
+            // A tuple is `Clone` and `Copy` as rustc makes it, of members
+            // that are.
+            Ty::Tuple(members) => {
+                !matches!(
+                    capability,
+                    capability::Kind::Iterator | capability::Kind::Error
+                ) && members
+                    .iter()
+                    .all(|member| self.type_provides(member, capability))
+            }
+            Ty::Option(element) => {
+                !matches!(
+                    capability,
+                    capability::Kind::Iterator | capability::Kind::Error
+                ) && self.type_provides(&element, capability)
+            }
             Ty::Result(ok, err) => {
-                capability != capability::Kind::Default
-                    && self.type_provides(&ok, capability)
+                !matches!(
+                    capability,
+                    capability::Kind::Iterator | capability::Kind::Error
+                ) && self.type_provides(&ok, capability)
                     && self.type_provides(&err, capability)
             }
             #[cfg(feature = "rust-import")]
@@ -455,21 +477,10 @@ impl<'a> Parser<'a> {
             Ty::Char => crate::capability::builtin_supports("char", capability),
             Ty::Int(_) => crate::capability::builtin_supports("i64", capability),
             Ty::Float(_) => crate::capability::builtin_supports("f64", capability),
-            Ty::String => crate::capability::builtin_supports("String", capability),
-            // `str` is unsized: it has what a `String` has but a value's
-            // own (`Clone`, `Copy`, `Default`).
-            Ty::UnsizedStr => {
-                !matches!(
-                    capability,
-                    capability::Kind::Clone | capability::Kind::Copy | capability::Kind::Default
-                ) && crate::capability::builtin_supports("String", capability)
+            Ty::String | Ty::UnsizedStr | Ty::Str => {
+                crate::capability::builtin_supports("String", capability)
             }
-            // `&str` is `Copy`, and otherwise has what a `String` has.
-            Ty::Str => {
-                capability == capability::Kind::Copy
-                    || crate::capability::builtin_supports("String", capability)
-            }
-            // std's ranges derive from `T`, as each struct does.
+            // A range is an iterator where its element steps.
             range @ (Ty::InclusiveRange(_)
             | Ty::FloatRange
             | Ty::Range(_)
@@ -485,71 +496,35 @@ impl<'a> Parser<'a> {
             ),
             Ty::Ordering => crate::capability::builtin_supports("Ordering", capability),
             Ty::Time(time) => crate::capability::builtin_supports(time.name(), capability),
-            // `&T` compares, orders, hashes and prints as `T` does; a shared
-            // reference is `Copy`.
-            Ty::Reference { mutable, target } => match capability {
-                capability::Kind::PartialEq
-                | capability::Kind::Eq
-                | capability::Kind::PartialOrd
-                | capability::Kind::Ord
-                | capability::Kind::Hash
-                | capability::Kind::Debug => self.type_provides(&target, capability),
-                capability::Kind::Clone | capability::Kind::Copy => !mutable,
-                _ => false,
-            },
-            // Maps and sets are `Default`, never `Copy`, and otherwise derive
-            // from their arguments; only the B-tree kinds are ordered.
-            Ty::Keyed(kind, arguments) => match capability {
-                capability::Kind::Default => true,
-                capability::Kind::Copy => false,
-                capability::Kind::PartialOrd | capability::Kind::Ord | capability::Kind::Hash
-                    if kind.hashed() =>
-                {
-                    false
-                }
-                _ => arguments
+            // A borrow is neither `Send` nor `'static` by rawr's facts.
+            Ty::Reference { .. } => false,
+            // Maps and sets are `Send` and `'static` as their keys and
+            // values are.
+            Ty::Keyed(_, arguments) => {
+                !matches!(
+                    capability,
+                    capability::Kind::Iterator | capability::Kind::Error
+                ) && arguments
                     .iter()
-                    .all(|argument| self.type_provides(argument, capability)),
-            },
-            // `Reverse<T>` derives everything from `T`.
+                    .all(|argument| self.type_provides(argument, capability))
+            }
             Ty::Reverse(inner) => self.type_provides(&inner, capability),
-            // std's impls for `Cow<B>`, which ask of `B`.
             Ty::Cow(ref borrowed) => match capability {
                 capability::Kind::Send | capability::Kind::Static => {
                     self.type_provides(borrowed, capability)
                 }
-                capability => crate::resolve::std_trait::anywhere(capability.name()).is_some_and(
-                    |definition| {
-                        std_impl::holds(
-                            &mut std_impl::Probe(self),
-                            definition,
-                            &self.inference.resolve(ty),
-                            &[],
-                            true,
-                            0,
-                        )
-                        .is_ok()
-                    },
-                ),
+                _ => false,
             },
-            // `RefCell<T>` is `Clone`, `Default`, `Debug`, `PartialEq` and
-            // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
-            // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
-            // need `T: Copy`.
-            // A `Mutex<T>` is `Default` and `Debug` when `T` is, and
-            // `Send` and `Sync` when `T` is `Send`: it never compares,
-            // hashes or copies, and never `Clone`s.
-            Ty::Cell(CellKind::Mutex, inner) => {
+            // A `Mutex<T>`, `RefCell<T>` or `Cell<T>` is `Send` and
+            // `'static` when `T` is.
+            Ty::Cell(_, inner) => {
                 matches!(
                     capability,
-                    capability::Kind::Default
-                        | capability::Kind::Debug
-                        | capability::Kind::Send
-                        | capability::Kind::Static
+                    capability::Kind::Send | capability::Kind::Static
                 ) && self.type_provides(&inner, capability)
             }
-            // std's thread and channel handles are `Debug`, `Send` and
-            // `'static` as their values are, and a `Sender` is `Clone`.
+            // std's thread and channel handles are `Send` and `'static` as
+            // their values are.
             Ty::Thread(kind, inner) => match capability {
                 capability::Kind::Debug => true,
                 capability::Kind::Clone => kind.clones(),
@@ -559,19 +534,6 @@ impl<'a> Parser<'a> {
                 }
                 _ => false,
             },
-            Ty::Cell(kind, inner) => {
-                capability != capability::Kind::Copy
-                    && capability != capability::Kind::Hash
-                    && (kind == CellKind::RefCell
-                        || matches!(
-                            capability,
-                            capability::Kind::Default
-                                | capability::Kind::Send
-                                | capability::Kind::Static
-                        )
-                        || self.type_provides(&inner, capability::Kind::Copy))
-                    && self.type_provides(&inner, capability)
-            }
             // Rawr's iterators are iterators, and `Clone` when their items
             // are.
             Ty::Iter(item, _, _) => {
@@ -579,34 +541,22 @@ impl<'a> Parser<'a> {
                     || capability == capability::Kind::Clone
                         && self.type_provides(&item, capability)
             }
-            // `Box<T>` derives from `T`, and is never `Copy`. `Rc<T>` and
-            // `Arc<T>` are `Clone` for any `T`, and an `Rc` stays on its
-            // thread.
-            Ty::Boxed(target) => {
-                capability != capability::Kind::Copy && self.type_provides(&target, capability)
-            }
+            // `Box<T>` is what `T` is.
+            Ty::Boxed(target) => self.type_provides(&target, capability),
+            // An `Rc` stays on its thread, and an `Arc<T>` is `Send` when
+            // `T` is `Send` and `Sync`.
             Ty::Counted(counter, target) => match (counter, capability) {
-                (_, capability::Kind::Copy) | (Counter::Rc, capability::Kind::Send) => false,
-                (_, capability::Kind::Clone) => true,
-                // `Arc<T>` is `Send` when `T` is `Send` and `Sync`.
+                (Counter::Rc, capability::Kind::Send) => false,
                 (Counter::Arc, capability::Kind::Send) => {
                     self.type_provides(&target, capability) && self.shared_between_threads(&target)
                 }
                 _ => self.type_provides(&target, capability),
             },
-            // A `Weak` is `Clone`, `Debug` (`(Weak)`) and `Default`
-            // (`Weak::new`) for any `T`, and compares, orders or hashes
-            // nothing.
             Ty::Weak(counter, target) => match (counter, capability) {
-                (
-                    _,
-                    capability::Kind::Clone | capability::Kind::Debug | capability::Kind::Default,
-                ) => true,
                 (Counter::Arc, capability::Kind::Send) => {
                     self.type_provides(&target, capability) && self.shared_between_threads(&target)
                 }
-                (Counter::Arc, capability::Kind::Static) => self.type_provides(&target, capability),
-                (Counter::Rc, capability::Kind::Static) => self.type_provides(&target, capability),
+                (_, capability::Kind::Static) => self.type_provides(&target, capability),
                 _ => false,
             },
 
@@ -935,5 +885,23 @@ impl<'a> Parser<'a> {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
         })
+    }
+}
+
+/// Whether std's table states `ty`'s impl of the std trait `capability`.
+/// rustc makes `Clone` and `Copy` of a tuple itself, `!`'s impls are of a
+/// type stable Rust doesn't name, and the table writes the lengths of std's
+/// per-length `Default` impls for arrays as their anonymous constants.
+fn std_states(ty: &Ty, capability: capability::Kind) -> bool {
+    match ty {
+        Ty::Never => false,
+        Ty::Unit | Ty::Tuple(_) => {
+            !matches!(capability, capability::Kind::Clone | capability::Kind::Copy)
+        }
+        Ty::Array {
+            kind: sequence::Kind::Array(_),
+            ..
+        } => capability != capability::Kind::Default,
+        _ => true,
     }
 }

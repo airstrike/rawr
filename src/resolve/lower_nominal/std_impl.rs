@@ -285,6 +285,21 @@ impl Solve for Probe<'_, '_> {
     }
 }
 
+/// Whether std declares `ty`, a resolved type, so that std's table states
+/// its impls of std's traits.
+pub(super) fn declares(ty: &Ty) -> bool {
+    match ty {
+        Ty::UnsizedStr
+        | Ty::Str
+        | Ty::Reference { .. }
+        | Ty::Array { .. }
+        | Ty::Unit
+        | Ty::Tuple(_)
+        | Ty::Never => true,
+        ty => std_definition(ty).is_some(),
+    }
+}
+
 /// The simplified keys `impls.tsv` files `side`'s impls under, as rustc's
 /// simplified type: `None` for a type std doesn't declare.
 fn keys(solver: &impl Solve, side: &Ty) -> Option<Vec<&'static str>> {
