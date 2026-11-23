@@ -219,7 +219,7 @@ impl<'a> Parser<'a> {
                     .into_boxed_slice();
                 #[cfg(not(feature = "rust-import"))]
                 let instance = None;
-                let caller = self.location_caller(&output, span);
+                let caller = self.call_site(span);
                 ExecutableOp::Intrinsic {
                     proof: intrinsic::Proof::new(facade, owner, &item, operands, output, span)
                         .with_instance(instance)
@@ -364,24 +364,19 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Where a call at `span` that gives `output` is made, as rustc places
-    /// it, when `output` is a `std::panic::Location`: the location a
-    /// crate's `#[track_caller]` function sees there is the call's own, as
+    /// Where the program makes the call at `span`, as rustc places it: a
+    /// method call's name, else the call's start. A crate's
+    /// `#[track_caller]` function the call runs sees it as its caller, as
     /// `file!()`, `line!()` and `column!()` there name it.
-    fn location_caller(
-        &self,
-        output: &intrinsic::Type,
-        span: Span,
-    ) -> Option<crate::std_facade::panic::Site> {
-        if output.runtime() != std::any::TypeId::of::<std::panic::Location<'static>>() {
-            return None;
-        }
-        let at = span.start();
-        Some(crate::std_facade::panic::Site::new(
+    fn call_site(&self, span: Span) -> Option<Box<crate::std_facade::panic::Site>> {
+        let key = self.models.sources.key(self.models.context.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let (line, column) = crate::diagnostic::call_position(source.text(), span)?;
+        Some(Box::new(crate::std_facade::panic::Site::new(
             self.file_name(),
-            u32::try_from(at.line()?).ok()?,
-            u32::try_from(at.position()?).ok()?,
-        ))
+            u32::try_from(line).ok()?,
+            u32::try_from(column).ok()?,
+        )))
     }
 
     pub(super) fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {

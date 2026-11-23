@@ -8,8 +8,8 @@ pub const BACKTRACE_NOTE: &str =
     "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace";
 
 /// `report`, a run-time failure, as a program built by Cargo prints its
-/// panic on stderr: `thread 'main' panicked at <file>:<line>:<column>:`,
-/// the message, and Rust's note on backtraces.
+/// panic on stderr: a blank line, `thread 'main' (<id>) panicked at
+/// <file>:<line>:<column>:`, the message, and Rust's note on backtraces.
 #[must_use]
 pub fn panic(report: &Report) -> String {
     format!("{}{BACKTRACE_NOTE}\n", panicked(report, "main"))
@@ -72,8 +72,8 @@ pub(crate) fn located(error: &crate::EvalAltResult) -> Option<Report> {
 
 /// `report`, a run-time failure in the thread named `thread`, as Rust's
 /// panic hook prints it before its note on backtraces, which a process
-/// prints after its first panic only: `thread 'name' panicked at
-/// <file>:<line>:<column>:` and the message.
+/// prints after its first panic only: [`hook_text`] of where it panicked
+/// and its message.
 ///
 /// The file is the source identity of the report's primary label. The line
 /// and column are where rustc places a panic: the name of a method call, the
@@ -87,7 +87,7 @@ pub fn panicked(report: &Report, thread: &str) -> String {
         .iter()
         .find(|label| label.kind() == LabelKind::Primary)
         .and_then(|label| {
-            let (line, column) = caller(label.source().text(), label.span())?;
+            let (line, column) = call_position(label.source().text(), label.span())?;
             Some(format!("{}:{line}:{column}", label.source().identity()))
         })
         .or_else(|| {
@@ -96,11 +96,20 @@ pub fn panicked(report: &Report, thread: &str) -> String {
                 .first()
                 .map(|source| source.identity().to_owned())
         });
+    hook_text(thread, location.as_deref(), &panic_message(report))
+}
+
+/// A panic of the calling thread, named `thread`, at `location`, as Rust's
+/// panic hook prints it before its note on backtraces: a blank line, which
+/// starts the panic on a line of its own, `thread '<name>' (<id>) panicked
+/// at <location>:` and `message`. The id is the thread's own, as the
+/// system numbers it (`thread_id`), which every toolchain from Rust 1.91
+/// prints. A panic with no location names none.
+#[must_use]
+pub fn hook_text(thread: &str, location: Option<&str>, message: &str) -> String {
+    let id = super::thread_id::current();
     let at = location.map_or_else(String::new, |location| format!(" at {location}"));
-    format!(
-        "thread '{thread}' panicked{at}:\n{}\n",
-        panic_message(report)
-    )
+    format!("\nthread '{thread}' ({id}) panicked{at}:\n{message}\n")
 }
 
 /// The panic's message: a `panic!`'s text, or an evaluation error's text
@@ -134,9 +143,10 @@ pub fn panic_message(report: &Report) -> String {
 }
 
 /// The line and column rustc gives a panic in the expression `span` of
-/// `text`: the name of a method call that ends the expression, the `[` of an
+/// `text`, and the location a `#[track_caller]` function called there
+/// sees: the name of a method call that ends the expression, the `[` of an
 /// index that ends it, else its start.
-fn caller(text: &str, span: Span) -> Option<(usize, usize)> {
+pub(crate) fn call_position(text: &str, span: Span) -> Option<(usize, usize)> {
     let start = span.start();
     let (line, column) = (start.line()?, start.position()?);
     let end = span.end();
@@ -310,6 +320,11 @@ mod tests {
     use crate::diagnostic::{code, Report, Source};
     use crate::{Position, Span};
 
+    /// The id Rust's hook prints for this thread.
+    fn id() -> u64 {
+        crate::diagnostic::thread_id::current()
+    }
+
     fn at(text: &str, line: u16, start: u16, end: u16) -> String {
         let source = Source::new("src/main.rs", text).unwrap();
         let span = Span::new(Position::new(line, start), Position::new(line, end));
@@ -325,7 +340,10 @@ mod tests {
         let text = "fn main() {\n    panic!(\"boom\");\n}\n";
         assert_eq!(
             at(text, 2, 5, 18),
-            format!("thread 'main' panicked at src/main.rs:2:5:\nboom\n{BACKTRACE_NOTE}\n")
+            format!(
+                "\nthread 'main' ({}) panicked at src/main.rs:2:5:\nboom\n{BACKTRACE_NOTE}\n",
+                id()
+            )
         );
     }
 
@@ -351,7 +369,8 @@ mod tests {
         assert_eq!(
             panic(&report),
             format!(
-                "thread 'main' panicked at src/main.rs:\nindex out of bounds\n{BACKTRACE_NOTE}\n"
+                "\nthread 'main' ({}) panicked at src/main.rs:\nindex out of bounds\n{BACKTRACE_NOTE}\n",
+                id()
             )
         );
     }

@@ -13,12 +13,15 @@ mod requirement;
 pub mod section;
 pub(crate) mod source;
 pub mod suggestion;
+pub(crate) mod thread_id;
 mod view;
 pub mod wire;
 
 pub use crate::types::Rendered;
-pub(crate) use panic::located;
-pub use panic::{hooked, locate_panics_with, note, panic, panic_message, panicked, BACKTRACE_NOTE};
+pub(crate) use panic::{call_position, located};
+pub use panic::{
+    hook_text, hooked, locate_panics_with, note, panic, panic_message, panicked, BACKTRACE_NOTE,
+};
 pub(crate) use render::offset;
 pub use render::{render, render_with, show_paths_from, Color};
 pub use report::{

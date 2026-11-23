@@ -76,9 +76,9 @@ fn running() -> Option<Running> {
 
 impl Running {
     /// Print `text`, a panic's for the name of its thread, as this test's
-    /// panic, after a blank line as Rust's hook starts one.
+    /// panic.
     fn print(&self, text: impl FnOnce(&str) -> String) {
-        let text = format!("\n{}", text(&self.name));
+        let text = text(&self.name);
         match self.output {
             Output::Captured => super::harness::capture_text(&text),
             Output::Printed => eprint!("{text}"),
@@ -86,30 +86,40 @@ impl Running {
     }
 }
 
-/// Install, once, the panic hook that prints a running test's panics as
-/// [`print`] does. A panic on a thread running no test goes to the hook
-/// that was installed before.
-fn hook() {
+/// Install, once, rawr's panic hook for native code: it prints a running
+/// test's panics as [`print`] does, and a panic at an adapter's call of a
+/// crate's `#[track_caller]` function at the program's call, as rustc
+/// places it (`std_facade::panic::panicked_at`). Any other panic goes to
+/// the hook that was installed before.
+pub(crate) fn hook() {
     static INSTALLED: Once = Once::new();
     INSTALLED.call_once(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| match running() {
             Some(running) => running.print(|thread| hooked(info, thread)),
+            None if placed(info).is_some() => print(|thread| hooked(info, thread)),
             None => previous(info),
         }));
     });
+}
+
+/// The program's call that `info`'s panic is at, when it is at an
+/// adapter's call, which stands for that call.
+fn placed(info: &PanicHookInfo<'_>) -> Option<std::panic::Location<'static>> {
+    info.location()
+        .and_then(crate::std_facade::panic::panicked_at)
 }
 
 /// `info`'s panic, on the thread named `thread`, as Rust's hook prints it:
 /// where it panicked, its message, and the note on backtraces after the
 /// process's first panic.
 fn hooked(info: &PanicHookInfo<'_>, thread: &str) -> String {
-    let at = info
-        .location()
-        .map_or_else(String::new, |location| format!(" at {location}"));
+    let location = placed(info)
+        .map(|location| location.to_string())
+        .or_else(|| info.location().map(ToString::to_string));
     format!(
-        "thread '{thread}' panicked{at}:\n{}\n{}",
-        message(info.payload()),
+        "{}{}",
+        diagnostic::hook_text(thread, location.as_deref(), message(info.payload())),
         diagnostic::note()
     )
 }
