@@ -6,6 +6,16 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.23 (2026-11-22)
+
+- A std type that a `use` or a crate's re-export renames now names its functions in call paths too, as `Span::from_secs(2)` after `use std::time::Duration as Span;` or a crate's `pub use`. (#344)
+- A crate function bound to a local is called like the function itself: `let f = styles::warning; f(&theme)`. (#874)
+- An outside crate's head in a path, written `::name::..` or a native module's path through the app crate, no longer hides a `use` of that name in the call's arguments or the type's generic arguments. (#1962)
+- `#[cfg]` on a tuple struct's fields and on the variants and tuple fields of types declared in a body is now tested against rustc. (#605)
+- A crate's tuple-struct constructor is now tested from the package's own marked binary (`own_library::Wing('b')`). (#1168)
+- A panic prints what a Cargo-built program prints on current Rust: a blank line, then `thread 'main' (<id>) panicked at`, with the thread's id. A spawned thread's first panic is followed by the note on backtraces. (#36)
+- A panic raised in a crate's `#[track_caller]` function or method names the program's call, as under Cargo, not rawr's generated adapter. (#1952)
+
 ## 0.5.22 (2026-11-22)
 
 - A trait's method can return `impl Trait`. Each impl's method gives its own opaque type, as in rustc, so a generic call on the result dispatches on that impl's hidden type. That holds in generic bodies and for a provided method each impl keeps. An impl may refine the output to its own type, which its callers then see, and a type that doesn't meet the trait's bounds is rustc's E0277. A trait with such a method is no `dyn` type (E0038). (#2680)
