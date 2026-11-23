@@ -238,23 +238,7 @@ pub(super) fn write_trait_dispatchers(
                     ops.push(ExecutableOp::Prelude(PreludeOp::GenericDebug));
                     format!("return {generic}(self);")
                 }
-                (true, "PartialEq") => {
-                    let generic = format!("{SENTINEL}{}", ops.len());
-                    ops.push(ExecutableOp::Prelude(PreludeOp::GenericEqual));
-                    format!("return {generic}(self, __rawr_parameter_0);")
-                }
-                (true, "PartialOrd" | "Ord") => {
-                    let compare = format!("{SENTINEL}{}", ops.len());
-                    ops.push(ExecutableOp::Prelude(PreludeOp::Compare));
-                    let compared = format!("{compare}(self, __rawr_parameter_0)");
-                    if trait_name == "Ord" {
-                        let unwrap = format!("{SENTINEL}{}", ops.len());
-                        ops.push(ExecutableOp::Prelude(PreludeOp::Unwrap));
-                        format!("return {unwrap}({compared});")
-                    } else {
-                        format!("return {compared};")
-                    }
-                }
+                (true, "PartialEq" | "PartialOrd" | "Ord") => comparison_fallback(trait_name, ops),
                 // A std iterator is a runtime one (`lazy.rs`), which steps
                 // itself.
                 (true, "Iterator") if function.name.text == "next" => {
@@ -546,12 +530,39 @@ pub(super) fn write_instance_dispatchers(
             }
             let _ = writeln!(text, "{borrowed}");
         }
+        // `T: PartialOrd` at its `Rhs = Self`: a builtin or derived value
+        // compares as the non-generic dispatcher's do.
+        if models.std_traits.contains(trait_name)
+            && matches!(trait_name.as_str(), "PartialEq" | "PartialOrd")
+        {
+            let _ = writeln!(text, "{}", comparison_fallback(trait_name, ops));
+        }
         let _ = write!(
             text,
             "__rawr_throw \"`{trait_name}::{}` has no implementation for this value\";\n}}\n",
             function.name.text
         );
         output.declaration(source, declared.name.span, &text);
+    }
+}
+
+/// What a std comparison trait's dispatcher runs for a value no program
+/// impl is for: a builtin's or a derive's comparison with its own type.
+fn comparison_fallback(trait_name: &str, ops: &mut Vec<ExecutableOp>) -> String {
+    if trait_name == "PartialEq" {
+        let generic = format!("{SENTINEL}{}", ops.len());
+        ops.push(ExecutableOp::Prelude(PreludeOp::GenericEqual));
+        return format!("return {generic}(self, __rawr_parameter_0);");
+    }
+    let compare = format!("{SENTINEL}{}", ops.len());
+    ops.push(ExecutableOp::Prelude(PreludeOp::Compare));
+    let compared = format!("{compare}(self, __rawr_parameter_0)");
+    if trait_name == "Ord" {
+        let unwrap = format!("{SENTINEL}{}", ops.len());
+        ops.push(ExecutableOp::Prelude(PreludeOp::Unwrap));
+        format!("return {unwrap}({compared});")
+    } else {
+        format!("return {compared};")
     }
 }
 
