@@ -13391,3 +13391,59 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn a_literal_argument_takes_its_kind_from_an_into_bound_at_the_call() {
+    // A literal for `T: Into<f32>` is the `f32` of the one std `From` it
+    // fits, and one several impls take falls back, as rustc settles it
+    // before the call's instance is chosen; a program's `From<Turn> for
+    // f32` is the bound's too (#1719).
+    let output = printed(
+        r#"
+fn byte<T: Into<u8>>(v: T) -> u8 {
+    v.into()
+}
+fn degrees(turn: impl Into<f32>) -> f32 {
+    turn.into() * 360.0
+}
+fn halved<T: Into<f64>>(v: T) -> f64 {
+    v.into() / 2.0
+}
+struct Turn(f32);
+impl From<Turn> for f32 {
+    fn from(t: Turn) -> f32 {
+        t.0
+    }
+}
+fn main() {
+    let x = 255;
+    let y = x - 1;
+    println!("{} {} {} {}", byte(7), byte(y), degrees(0.5), degrees(Turn(0.25)));
+    println!("{} {} {}", halved(3), halved(2.5), halved(0.1f32));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 254 180 90\n1.5 1.25 0.05000000074505806\n");
+    // A literal no single impl takes is an `i32`, whose `From` the bound
+    // then needs, at the argument.
+    let report = rendered(
+        "fn degrees(turn: impl Into<f32>) -> f32 {\n    turn.into() * 360.0\n}\n\
+         fn main() {\n    println!(\"{}\", degrees(3));\n}\n",
+    );
+    let expected = [
+        "error[E0277]: the trait bound `f32: From<i32>` is not satisfied",
+        " --> main.rs:5:28",
+        "  |",
+        "5 |     println!(\"{}\", degrees(3));",
+        "  |                    ------- ^ the trait `From<i32>` is not implemented for `f32`",
+        "  |                    |",
+        "  |                    required by a bound introduced by this call",
+    ]
+    .join("\n");
+    assert!(
+        report.starts_with(&expected)
+            && report.contains("  = note: required for `i32` to implement `Into<f32>`\n"),
+        "{report}"
+    );
+}
