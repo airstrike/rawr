@@ -13,6 +13,13 @@ fn hidden() -> impl Staged + 'static {
     ])
 }
 
+/// A play behind a bound that names its associated types, which fix the
+/// hidden type's: its literal is a `u32` and its notes are `String`s
+/// (#2106).
+fn fixed() -> impl Staged<State = u32, Note = String> + 'static {
+    staged::play(|| (0, Vec::new())).stages([Stage::new("first", || (0, Vec::new()))])
+}
+
 /// The stages a borrow of `$play` has, beside those of a play built in the
 /// macro's body, whose `stages` builder is its type's own.
 macro_rules! counted {
@@ -34,4 +41,6 @@ fn main() {
     let missing = play.stages().iter().find(|stage| stage.name() == "none");
     println!("missing {:?}", staged::started(&play, missing));
     println!("counted {:?}", counted!(play));
+    let (state, notes) = fixed().start();
+    println!("start {} {:?}", state.wrapping_sub(1), notes);
 }

@@ -384,18 +384,10 @@ impl<'a> Parser<'a> {
         {
             return Ok(());
         }
-        let type_ref::Type::Path(opaque) = written else {
-            return Ok(());
-        };
-        let written_arguments = opaque
-            .arguments
-            .iter()
-            .filter_map(|argument| match argument {
-                type_ref::Argument::Type(ty) => {
-                    Some(instantiate(&Ty::from_resolved(ty), substitution))
-                }
-                type_ref::Argument::Lifetime(_) => None,
-            })
+        let written_arguments = written
+            .opaque_arguments()
+            .into_iter()
+            .map(|ty| instantiate(&Ty::from_resolved(ty), substitution))
             .collect::<Vec<_>>();
         // A known type fixes the bound's arguments a call leaves open, as
         // `Message` of `fn zoomed<Message>(content: impl Widget<Message>)`
@@ -447,6 +439,19 @@ impl<'a> Parser<'a> {
             | type_ref::Type::Reference { span, .. } => *span,
             type_ref::Type::Path(path) => path.span,
         };
+        // `impl Staged<State = u32>`: the hidden type's associated type is
+        // the bound's, through the crate's impls, as rustc proves the
+        // opaque type's bounds (#2106).
+        for (name, bound) in written.opaque_bindings() {
+            let bound = instantiate(&Ty::from_resolved(bound), substitution);
+            if let Some(associated) =
+                self.bound_associated(&resolved, trait_name, header.identity, &name, span)
+            {
+                // A mismatch is rustc's E0271, which the runner's build
+                // reports.
+                let _ = self.unify_type(&bound, &associated);
+            }
+        }
         let unfixed = |this: &Self, reason: &str| Error::UnsupportedNominalSyntax {
             construct: format!(
                 "`impl {trait_name}` whose body returns `{}`: {reason}",

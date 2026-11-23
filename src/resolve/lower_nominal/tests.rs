@@ -100,6 +100,55 @@ fn host_type_clones_share_one_parser_proof_allocation() {
         );
 }
 
+#[cfg(feature = "rust-import")]
+#[test]
+fn two_functions_crate_opaque_outputs_are_two_types() {
+    // rustc's opaque types of two functions differ whatever hidden type
+    // each reveals, and one function's is one type (D1117).
+    let facade = imported_alias_facade(false);
+    let definition = facade
+        .types()
+        .find(|definition| definition.path() == "aliases::First")
+        .expect("the alias fixture retains First")
+        .clone();
+    let engine = Engine::new_raw();
+    let program = resolve::resolve(engine.parse_unit("").unwrap(), &host::Registry::new()).unwrap();
+    let runtime =
+        crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
+    let models = Models::new(
+        &program,
+        runtime,
+        Shared::new(host::Registry::new()),
+        &engine,
+    );
+    let mut parser = super::Parser::new_with_offset(&engine, "", models, 0, 0, None);
+    let hidden = HostTyProof::new(definition, None, None);
+    let of = |function: &str| Ty::Host {
+        proof: hidden.tagged(super::ty::OpaqueTag {
+            function: crate::item::Key::new(
+                "app".into(),
+                Box::default(),
+                function.into(),
+                crate::item::Kind::Function,
+            ),
+            bound: "aliases::Shown".into(),
+            arguments: Box::default(),
+        }),
+        arguments: Box::default(),
+    };
+    let plain = Ty::Host {
+        proof: hidden.clone(),
+        arguments: Box::default(),
+    };
+    assert!(!parser.unify_type(&of("first"), &of("second")));
+    assert!(parser.unify_type(&of("first"), &of("first")));
+    assert!(parser.unify_type(&plain, &of("first")));
+    assert_eq!(
+        of("first").opaque_tag().map(|tag| tag.bound.as_str()),
+        Some("aliases::Shown")
+    );
+}
+
 #[test]
 fn executable_ops_remain_send_and_sync() {
     const fn assert_send_sync<T: Send + Sync>() {}

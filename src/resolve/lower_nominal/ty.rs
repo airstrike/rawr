@@ -21,6 +21,26 @@ pub(super) struct HostTyProof {
     pub(super) definition: crate::host::type_def::Definition,
     pub(super) alias: Option<crate::host::type_def::Definition>,
     pub(super) owner: Option<crate::host::facade::Dependency>,
+    /// The program function's `impl Trait` of a crate trait this type is
+    /// the hidden type of, at the value that function gives (D1117): the
+    /// value is lowered as this type and known by the bound. Two types
+    /// that differ only here are one type to everything but `unify`.
+    pub(super) opaque: Option<Box<OpaqueTag>>,
+}
+
+/// Which program function's `impl Trait` of a crate trait a value is
+/// (D1117), and the trait it is known by.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct OpaqueTag {
+    /// The function whose output it is.
+    pub(super) function: crate::item::Key,
+    /// The bound's trait, by its path from its crate's root.
+    pub(super) bound: ImmutableString,
+    /// The function's type arguments at the call, by their parameters'
+    /// names: two calls taking different ones give different types, as
+    /// rustc's opaque type captures them (D1110.2).
+    pub(super) arguments: Box<[Ty]>,
 }
 
 /// One imported type is one type at each of its paths, as rustc has it: a
@@ -91,7 +111,30 @@ impl HostTyProof {
             definition,
             alias,
             owner,
+            opaque: None,
         })
+    }
+
+    /// This type as the hidden type of the opaque output `tag` (D1117).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn tagged(&self, tag: OpaqueTag) -> crate::Shared<Self> {
+        crate::Shared::new(Self {
+            opaque: Some(Box::new(tag)),
+            ..self.clone()
+        })
+    }
+}
+
+impl Ty {
+    /// The crate trait's opaque output this value is (D1117), through any
+    /// borrows of it.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn opaque_tag(&self) -> Option<&OpaqueTag> {
+        match self {
+            Self::Host { proof, .. } => proof.opaque.as_deref(),
+            Self::Reference { target, .. } => target.opaque_tag(),
+            _ => None,
+        }
     }
 }
 

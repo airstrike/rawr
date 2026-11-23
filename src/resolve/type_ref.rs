@@ -1527,7 +1527,7 @@ fn resolve_impl(
             // The trait's written type arguments (`Message` of `impl
             // Widget<Message>`), which with its defaults fix what the
             // crate's impls decide of the hidden type (D604).
-            let arguments = bound
+            let mut arguments = bound
                 .segments
                 .last()
                 .into_iter()
@@ -1539,6 +1539,47 @@ fn resolve_impl(
                 .map(|ty| resolve(ty, types, host, native).map(Argument::Type))
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap_or_default();
+            // Its associated type bindings, which the parser writes beside
+            // the bounds as `=Staged=State<u32>`, kept after the arguments
+            // as a trait object's are, `=State<u32>`: they fix the hidden
+            // type's associated types (#2106).
+            let owner = bound
+                .segments
+                .last()
+                .map(|segment| segment.name.text.as_str())
+                .unwrap_or_default();
+            for argument in parsed.segments[0].arguments.iter() {
+                let item::type_ref::Argument::Type(item::type_ref::Type::Path(binding)) = argument
+                else {
+                    continue;
+                };
+                let [segment] = &binding.segments[..] else {
+                    continue;
+                };
+                let Some((written, name)) = segment
+                    .name
+                    .text
+                    .strip_prefix(item::type_ref::BINDING_PREFIX)
+                    .and_then(|rest| rest.split_once('='))
+                else {
+                    continue;
+                };
+                let [item::type_ref::Argument::Type(ty)] = &segment.arguments[..] else {
+                    continue;
+                };
+                if written != owner {
+                    continue;
+                }
+                let Ok(ty) = resolve(ty.clone(), types, host, native) else {
+                    continue;
+                };
+                arguments.push(Argument::Type(Type::Path(Path {
+                    name: format!("{}{name}", item::type_ref::BINDING_PREFIX).into(),
+                    target: Target::Builtin,
+                    arguments: Box::new([Argument::Type(ty)]),
+                    span: binding.span,
+                })));
+            }
             return Ok(Path {
                 target: Target::Builtin,
                 name: format!("{OPAQUE_PREFIX}{qualified}").into(),
@@ -2211,6 +2252,26 @@ impl Type {
     /// The associated type bindings of a trait object type
     /// `dyn Trait<Name = T>`: each name and type.
     pub(crate) fn dyn_bindings(&self) -> Vec<(ImmutableString, &Type)> {
+        self.bindings()
+    }
+
+    /// The associated type bindings of an imported trait's `impl
+    /// Trait<Name = T>` output (`OPAQUE_PREFIX`): each name and type.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn opaque_bindings(&self) -> Vec<(ImmutableString, &Type)> {
+        self.bindings()
+    }
+
+    /// The type arguments of an imported trait's `impl Trait<..>` output
+    /// (`OPAQUE_PREFIX`), its bindings left out.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn opaque_arguments(&self) -> Vec<&Type> {
+        self.dyn_arguments()
+    }
+
+    /// The `Name = T` bindings a trait path's arguments keep as
+    /// `=Name<T>`.
+    fn bindings(&self) -> Vec<(ImmutableString, &Type)> {
         let Type::Path(path) = self else {
             return Vec::new();
         };

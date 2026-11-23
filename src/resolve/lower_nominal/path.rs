@@ -1880,11 +1880,13 @@ impl<'a> Parser<'a> {
                 .as_deref()
                 .or(Some(definition.output())),
             &substitution,
+            definition.key(),
         );
         #[cfg(feature = "rust-import")]
         self.note_opaque_bound(
             definition.lifetimes().written_output.as_deref(),
             span(owner_span.start(), end),
+            &kept,
         );
         let kept = self.inference.resolve(&kept);
         self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
