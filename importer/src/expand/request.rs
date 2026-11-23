@@ -18,6 +18,9 @@ pub struct Request {
     pub dependency_directories: Vec<String>,
     /// Each crate the source names, by the alias the program uses.
     pub externs: Vec<Extern>,
+    /// Each crate the source names that the program doesn't depend on,
+    /// by its name, which rustc finds among the dependencies.
+    pub crates: Vec<String>,
     /// The source file to expand.
     pub source: String,
 }

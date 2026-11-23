@@ -410,6 +410,13 @@ fn drive(
                 path: path.to_string(),
             })
             .collect(),
+        // A crate the program reaches only through another's hidden
+        // segment, which rustc finds among the dependencies (#2290).
+        crates: roots
+            .iter()
+            .filter(|root| !basis.names(root))
+            .map(|root| (*root).to_owned())
+            .collect(),
         source: source_path.display().to_string(),
     };
     let request_path = work.join("request.json");

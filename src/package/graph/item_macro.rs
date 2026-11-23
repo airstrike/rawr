@@ -322,7 +322,7 @@ fn expansion_kept(
         .map(|token| (*token).clone())
         .collect::<Vec<_>>();
     let call_of = expand::Call {
-        path: host::path::visible(path),
+        path: path.to_owned(),
         delimiter,
         input: crate::resolve::lower_nominal::token_text(&inner),
         place: expand::Place::Statements,

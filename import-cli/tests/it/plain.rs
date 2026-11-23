@@ -2853,6 +2853,41 @@ fn a_crate_macros_location_calls_read_where_rustc_reads_them() {
     );
 }
 
+/// A library's macro that calls its proc macro through `$crate`, with a
+/// `$crate` macro call as its input, from a program that reaches the
+/// library only through another crate's re-export, runs as `cargo run`
+/// runs it (#2290): rustc names the hidden crate from its own root, in the
+/// call's path and its input.
+#[test]
+fn a_crate_macro_called_through_a_hidden_crate_expands_from_that_crate() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::fresh("plain-proc-macro-relay");
+    copy(Path::new(PROC_MACRO), &root);
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        manifest.replace("wrap = { path = \"wrap\" }", "relay = { path = \"relay\" }"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/scale.rs"),
+        "// rawr\npub fn label(value: i64) -> String {\n    \
+         format!(\"value {}\", value + relay::relayed!())\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 49\n");
+}
+
 /// An edit that changes only a derive's expansion's bodies, as a new
 /// `#[serde(rename)]` does, swaps into the running program (#1040): rustc
 /// expands the item again, its expansion's source changes in place, and the

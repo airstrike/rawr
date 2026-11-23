@@ -157,6 +157,86 @@ impl Call {
     }
 }
 
+/// The segment a path takes through a crate it reaches only as a macro's
+/// `$crate` does: `relay::__rawr_crate_wrap_<id>::seven` is `wrap`'s
+/// `seven`.
+#[cfg_attr(
+    not(feature = "rustc-driver"),
+    allow(dead_code, reason = "only the driver's build runs an expansion")
+)]
+const HIDDEN_CRATE: &str = "__rawr_crate_";
+
+/// Text as rustc names what it reaches (#2290): each path through a
+/// crate's hidden segment written from that crate's own root, the crates
+/// it names so, and where the text got shorter.
+#[cfg_attr(
+    not(feature = "rustc-driver"),
+    allow(dead_code, reason = "only the driver's build runs an expansion")
+)]
+#[derive(Debug, Default, PartialEq)]
+struct Spelled {
+    text: String,
+    crates: std::collections::BTreeSet<String>,
+    /// Each place in `text` a path was written shorter at, and the bytes
+    /// taken out there.
+    shortened: Vec<(usize, usize)>,
+}
+
+#[cfg_attr(
+    not(feature = "rustc-driver"),
+    allow(dead_code, reason = "only the driver's build runs an expansion")
+)]
+impl Spelled {
+    /// `text` with each path through a crate's hidden segment from that
+    /// crate's root: `relay::__rawr_crate_wrap_e0faf6e3da76dada::seven` is
+    /// `wrap::seven`.
+    fn of(text: &str) -> Self {
+        let identifier = |c: char| c.is_alphanumeric() || c == '_';
+        let mut spelled = Self::default();
+        let mut rest = text;
+        while let Some(at) = rest.find(HIDDEN_CRATE) {
+            let after = &rest[at + HIDDEN_CRATE.len()..];
+            let end = after.find(|c: char| !identifier(c)).unwrap_or(after.len());
+            let name = after[..end]
+                .rsplit_once('_')
+                .filter(|(name, id)| {
+                    !name.is_empty() && id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+                .map(|(name, _)| name);
+            let Some(name) = name else {
+                spelled.text.push_str(&rest[..at + HIDDEN_CRATE.len()]);
+                rest = after;
+                continue;
+            };
+            // The root the program reaches the crate through goes too.
+            let before = &rest[..at];
+            let root = before
+                .strip_suffix("::")
+                .map(|head| head.trim_end_matches(identifier))
+                .filter(|head| head.len() + 2 < before.len())
+                .unwrap_or(before);
+            spelled.text.push_str(root);
+            spelled.text.push_str(name);
+            let taken = (before.len() - root.len()) + HIDDEN_CRATE.len() + end - name.len();
+            spelled.shortened.push((spelled.text.len(), taken));
+            spelled.crates.insert(name.to_owned());
+            rest = &after[end..];
+        }
+        spelled.text.push_str(rest);
+        spelled
+    }
+
+    /// The offset in the text this was spelled from of `at` in its own.
+    fn original(&self, at: usize) -> usize {
+        at + self
+            .shortened
+            .iter()
+            .filter(|(place, _)| *place <= at)
+            .map(|(_, taken)| taken)
+            .sum::<usize>()
+    }
+}
+
 /// Where the value of a `line!()`, `column!()` or `file!()` call in a
 /// call's expansion is read (#2291): the byte offset in the call's input of
 /// the token that starts the input's own location call, or `None` for one
@@ -225,26 +305,36 @@ pub fn expand(
     let directory = super::directory(project);
     let offset = |at: usize| u32::try_from(at).unwrap_or(u32::MAX);
     let mut text = "\n".repeat(FIRST_LINE - 1);
-    // Each call's module, and where its input starts.
+    // Each call's module, where its input starts and the input as rustc
+    // reads it, which names a crate the program reaches through another's
+    // hidden segment from that crate's root (#2290).
     let mut modules = Vec::with_capacity(calls.len());
+    let mut roots = std::collections::BTreeSet::new();
     for (index, call) in calls.iter().enumerate() {
+        let path = Spelled::of(&call.path);
+        let input = Spelled::of(&call.input);
+        let spelled = Call {
+            path: path.text.clone(),
+            input: input.text.clone(),
+            ..call.clone()
+        };
         let module = offset(text.len());
         text.push_str(&format!("mod __rawr_expand_{index} {{\n"));
-        let function = call.function();
-        let input = text.len()
-            + function.find(&call.text()).unwrap_or_default()
-            + call.path.len()
+        let function = spelled.function();
+        let start = text.len()
+            + function.find(&spelled.text()).unwrap_or_default()
+            + spelled.path.len()
             + "!(".len();
         text.push_str(&function);
         text.push_str("}\n");
-        modules.push((module, offset(input)));
+        roots.insert(path.text.split("::").next().unwrap_or_default().to_owned());
+        roots.extend(path.crates);
+        roots.extend(input.crates.iter().cloned());
+        modules.push((module, offset(start), input));
     }
-    let roots = calls
-        .iter()
-        .map(|call| call.path.split("::").next().unwrap_or_default())
-        .collect::<std::collections::BTreeSet<_>>();
+    let roots = roots.iter().map(String::as_str).collect();
     let expanded = super::drive(&text, &roots, basis, edition, &directory, native, limits)?;
-    for (call, (module, input)) in calls.iter().zip(modules) {
+    for (call, (module, start, input)) in calls.iter().zip(modules) {
         let called = expanded
             .calls
             .iter()
@@ -253,11 +343,14 @@ pub fn expand(
                 reason: format!("the driver wrote no expansion of `{}`", call.text()).into(),
             })?;
         let artifact = basis.artifact(&call.path).unwrap_or_default();
-        let length = offset(call.input.len());
+        let length = offset(input.text.len());
         let locations = called
             .locations
             .iter()
-            .map(|&at| at.checked_sub(input).filter(|&within| within < length))
+            .map(|&at| {
+                let within = at.checked_sub(start).filter(|&within| within < length)?;
+                u32::try_from(input.original(usize::try_from(within).ok()?)).ok()
+            })
             .collect::<Vec<_>>();
         let mut source = header(call, artifact, &locations);
         for item in &called.items {
@@ -282,7 +375,7 @@ pub fn expand(
 
 #[cfg(test)]
 mod tests {
-    use super::{built, header, kept, locations, Call, Delimiter, Place};
+    use super::{built, header, kept, locations, Call, Delimiter, Place, Spelled};
 
     fn call(input: &str, place: Place) -> Call {
         Call {
@@ -331,5 +424,20 @@ mod tests {
         );
         assert_eq!(locations(&source), Some(Vec::new()));
         assert_eq!(locations("((3) * 2)\n"), None);
+    }
+
+    #[test]
+    fn a_path_through_a_hidden_segment_is_spelled_from_its_crate() {
+        let spelled = Spelled::of("relay::__rawr_crate_wrap_e0faf6e3da76dada::seven!(), line!()");
+        assert_eq!(spelled.text, "wrap::seven!(), line!()");
+        assert_eq!(spelled.crates.iter().collect::<Vec<_>>(), ["wrap"]);
+        // `line!` is where the input as written has it.
+        let at = spelled.text.find("line").unwrap();
+        assert_eq!(
+            spelled.original(at),
+            "relay::__rawr_crate_wrap_e0faf6e3da76dada::seven!(), ".len()
+        );
+        assert_eq!(spelled.original(0), 0);
+        assert_eq!(Spelled::of("numerals::double").text, "numerals::double");
     }
 }

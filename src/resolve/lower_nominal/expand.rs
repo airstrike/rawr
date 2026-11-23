@@ -626,11 +626,10 @@ impl Parser<'_> {
             Token::Unit => (Vec::new(), position),
             open => self.group_rest(&open, position, path)?,
         };
-        // A `$crate::name!` path through its crate's hidden segment is
-        // the macro rustc names from the dependency's root, as the facade
-        // holds a crate's macros (`Registry::hidden_macro`).
+        // A path through a crate's hidden segment, in the call's path or
+        // its input, is rustc's to name from that crate's root (#2290).
         let call = call::Call {
-            path: crate::host::path::visible(path),
+            path: path.to_owned(),
             delimiter,
             input: token_text(&tokens),
             place: match place {

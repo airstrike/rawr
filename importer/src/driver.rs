@@ -515,6 +515,16 @@ fn expand(arguments: &[String]) -> Result<ExitCode, String> {
         compiler_arguments.push("--extern".to_owned());
         compiler_arguments.push(format!("{}={}", crate_.alias, crate_.path));
     }
+    // A crate named by its name alone is found among the dependencies.
+    if !request.crates.is_empty() {
+        for directory in &request.dependency_directories {
+            compiler_arguments.push(format!("-Lcrate={directory}"));
+        }
+    }
+    for name in &request.crates {
+        compiler_arguments.push("--extern".to_owned());
+        compiler_arguments.push(name.clone());
+    }
     compiler_arguments.push(request.source.clone());
     let mut callbacks = compiler::expand::Expand {
         out: PathBuf::from(out),
