@@ -22,6 +22,7 @@ extern crate rustc_hir;
 extern crate rustc_infer;
 extern crate rustc_interface;
 extern crate rustc_log;
+extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
@@ -82,7 +83,7 @@ mod attempt_protocol;
 const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
-const PROTOCOL_SCHEMA: u32 = 103;
+const PROTOCOL_SCHEMA: u32 = 104;
 /// The commit of the nightly this driver was built with, which it reads
 /// metadata of and names in its version.
 const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");
@@ -514,10 +515,20 @@ fn expand(arguments: &[String]) -> Result<ExitCode, String> {
         compiler_arguments.push("--extern".to_owned());
         compiler_arguments.push(format!("{}={}", crate_.alias, crate_.path));
     }
+    // A crate the program reaches only through another's hidden segment is
+    // the artifact rustc loads beside the crates the program names (#2290).
+    if !request.crates.is_empty() {
+        let hidden = hidden_artifacts(&compiler_arguments, &request)?;
+        for (name, path) in hidden {
+            compiler_arguments.push("--extern".to_owned());
+            compiler_arguments.push(format!("{name}={}", path.display()));
+        }
+    }
     compiler_arguments.push(request.source.clone());
     let mut callbacks = compiler::expand::Expand {
         out: PathBuf::from(out),
         protocol: PROTOCOL_SCHEMA,
+        source: request.source.clone(),
         result: None,
     };
     let exit = rustc_driver::catch_with_exit_code(|| {
@@ -528,6 +539,37 @@ fn expand(arguments: &[String]) -> Result<ExitCode, String> {
         Some(Ok(())) => Ok(ExitCode::SUCCESS),
         None => Ok(exit),
     }
+}
+
+/// The artifact of each crate `request` names by its stable crate id, as
+/// rustc loads it beside the crates the request names: a run of
+/// `arguments` over a source of an `extern crate` of each, which loads
+/// their dependencies as the dependency graph resolves them.
+fn hidden_artifacts(
+    arguments: &[String],
+    request: &expand_request::Request,
+) -> Result<Vec<(String, PathBuf)>, String> {
+    let source = Path::new(&request.source).with_file_name("hidden.rs");
+    let text = request
+        .externs
+        .iter()
+        .map(|crate_| format!("extern crate {};\n", crate_.alias))
+        .collect::<String>();
+    fs::write(&source, text).map_err(|error| format!("writing {}: {error}", source.display()))?;
+    let mut arguments = arguments.to_vec();
+    arguments.push(source.display().to_string());
+    let mut callbacks = compiler::expand::Hidden {
+        wanted: request
+            .crates
+            .iter()
+            .map(|hidden| (hidden.name.clone(), hidden.id.clone()))
+            .collect(),
+        found: Vec::new(),
+    };
+    let _ = rustc_driver::catch_with_exit_code(|| {
+        crate::compat::compiler_entrypoint(&arguments, &mut callbacks);
+    });
+    Ok(callbacks.found)
 }
 
 fn validate_rustc_stack_authority(value: Option<&OsStr>) -> Result<(), String> {
