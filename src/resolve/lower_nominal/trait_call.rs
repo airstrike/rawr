@@ -18,6 +18,10 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
+        if let Some(definition) = self.concrete_impl_function(&self_ty, trait_name, function) {
+            let written = self.inference.resolve(&self_ty);
+            return self.call_associated(definition, arguments, call, Some(written));
+        }
         let mut substitution = self.fresh_generics(&function.generics, call);
         self.apply_trait_turbofish(&function.generics, &substitution, call)?;
         substitution.insert("Self".into(), self_ty.clone());
@@ -93,6 +97,29 @@ impl<'a> Parser<'a> {
             );
             return Ok(self.operator_expr(source, output, call));
         }
+        // `<Vec<u8> as Make>::make()` of `impl<T: Default> Make for T`: the
+        // blanket impl's function at the Self type, as coherence leaves it
+        // the one impl for a type without its own.
+        if let Some(definition) = self.blanket_function(&resolved, trait_name, &function.name.text)
+        {
+            let impl_substitution = definition
+                .generics()
+                .iter()
+                .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+                .collect::<BTreeMap<_, _>>();
+            let fits = self.unify_type(&impl_self_ty(&definition, &impl_substitution), &resolved);
+            debug_assert!(fits, "`blanket_function` found the impl for the Self type");
+            let name = self.method_call_name(&definition, &impl_substitution, call);
+            let witnesses = self.witness_arguments(definition.generics(), &impl_substitution, call);
+            let source = origin::Fragment::call(
+                &name,
+                arguments
+                    .iter()
+                    .map(ParsedExpr::rendered_source)
+                    .chain(witnesses),
+            );
+            return Ok(self.operator_expr(source, output, call));
+        }
         let dispatcher = if trait_arguments.is_empty() {
             static_dispatcher_name(trait_name, &function.name.text)
         } else {
@@ -112,11 +139,73 @@ impl<'a> Parser<'a> {
             ));
             placeholder
         };
+        // Every impl copies the `&mut` parameters the trait's signature
+        // has, so the dispatcher gives back what the one it runs does.
+        let copied = copied_parameters(
+            &function.parameters,
+            None,
+            function.formatter.as_ref(),
+            function.body.asynchronous,
+        );
+        let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
+        self.move_copied_in(&mut arguments, &copied);
         let source = origin::Fragment::call(
             &dispatcher,
             std::iter::once(witness).chain(arguments.iter().map(ParsedExpr::rendered_source)),
         );
+        let source = self.copied_call(source, &places)?;
         Ok(self.operator_expr(source, output, call))
+    }
+
+    /// The impl of the trait function `function` (one without `self`) whose
+    /// Self type is `self_ty`, when `self_ty` is one type and the trait has
+    /// no parameters of its own: `T::hash_slice(..)` in an instance whose
+    /// `T` is `Option<u8>` runs `Option<T>`'s impl at `u8`, as rustc's
+    /// monomorphised call does.
+    fn concrete_impl_function(
+        &mut self,
+        self_ty: &Ty,
+        trait_name: &ImmutableString,
+        function: &item::Function,
+    ) -> Option<method::Definition> {
+        let resolved = self.inference.resolve(self_ty);
+        if !super::instance::concrete(&resolved)
+            || self
+                .models
+                .traits
+                .get(trait_name)
+                .is_none_or(|(_, declared)| !declared.generics.is_empty())
+        {
+            return None;
+        }
+        let owner = owner_id(&resolved)?;
+        let definitions = self
+            .models
+            .trait_methods
+            .get(&(owner, function.name.text.clone()))?
+            .iter()
+            .filter(|definition| definition.trait_name() == Some(trait_name))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.fitting_impl(definitions, &resolved)
+    }
+
+    /// Whether `member` is a function without `self` of the std trait
+    /// `trait_name` whose impls rawr reads from std's text
+    /// (`std_trait::has_impls`): `<u8 as Hash>::hash_slice` is the impl's,
+    /// called as a program trait's function is.
+    pub(super) fn read_std_function(&self, trait_name: &str, member: &str) -> bool {
+        self.models
+            .traits
+            .get(trait_name)
+            .is_some_and(|(_, declared)| {
+                declared
+                    .std
+                    .is_some_and(crate::resolve::std_trait::has_impls)
+                    && declared.functions.iter().any(|function| {
+                        function.name.text.as_str() == member && function.receiver.is_none()
+                    })
+            })
     }
 
     /// Whether `name` is a crate trait a qualified call can name: one the
@@ -918,10 +1007,11 @@ impl<'a> Parser<'a> {
         start: Position,
     ) -> Result<ParsedExpr, Error> {
         let (member, member_span) = self.expect_member_name()?;
+        let ufcs = self.ufcs_trait(&trait_name) || self.read_std_function(&trait_name, &member);
         // `Trait::f::<T>(..)`: the function's own type arguments.
         let turbofish = if matches!(self.peek(), Token::DoubleColon)
             && matches!(self.peek_second(), Token::LessThan)
-            && self.ufcs_trait(&trait_name)
+            && ufcs
         {
             self.next();
             self.next();
@@ -941,7 +1031,7 @@ impl<'a> Parser<'a> {
         }
         // `<Look as Tone>::tone` of a crate's trait a `use` names: the
         // method on its first input or argument, as `Tone::tone` is.
-        if !self.ufcs_trait(&trait_name)
+        if !ufcs
             && let Some(binding) = self.models.import(&trait_name).cloned()
             && matches!(binding.target, item::Import::Module)
             && self
@@ -981,7 +1071,7 @@ impl<'a> Parser<'a> {
                 return self.method_value(member, inputs.into(), trait_span, member_span);
             }
         }
-        if !self.ufcs_trait(&trait_name) {
+        if !ufcs {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
                     "a qualified call through `{trait_name}`, which is not a trait the crate \
@@ -1121,7 +1211,10 @@ impl<'a> Parser<'a> {
                 });
             };
             let self_ty = self.inference.resolve(&self_ty);
-            if !generic_trait && !self.type_implements(&self_ty, &trait_name) {
+            let blanket = self
+                .blanket_function(&self_ty, &trait_name, &member)
+                .is_some();
+            if !generic_trait && !blanket && !self.type_implements(&self_ty, &trait_name) {
                 return Err(missing(self, &self_ty));
             }
             let witness = match &self_ty {
@@ -1129,6 +1222,9 @@ impl<'a> Parser<'a> {
                     self.capture_witnesses();
                     origin::Fragment::plain(witness_variable(name))
                 }
+                // The blanket impl's function is called by name, with no
+                // witness.
+                _ if blanket => origin::Fragment::plain("()"),
                 ty => match owner_id(ty) {
                     Some(id) => origin::Fragment::plain(owner_key(id)),
                     None => return Err(missing(self, ty)),

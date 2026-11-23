@@ -16,3 +16,14 @@ pub fn double(input: TokenStream) -> TokenStream {
 pub fn verbatim(input: TokenStream) -> TokenStream {
     input
 }
+
+/// `located!(tokens)`: `(line!(), column!(), tokens)`, the first two at
+/// the call and the tokens where the input writes them, as a macro that
+/// reports where it is called does.
+#[proc_macro]
+pub fn located(input: TokenStream) -> TokenStream {
+    let mut tuple: TokenStream = "line!(), column!(),".parse().expect("the calls parse");
+    tuple.extend(input);
+    let group = proc_macro::Group::new(proc_macro::Delimiter::Parenthesis, tuple);
+    TokenStream::from(proc_macro::TokenTree::Group(group))
+}

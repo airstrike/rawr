@@ -65,6 +65,30 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), elaborated(generic)))
             .collect();
         self.generic_traits = generic_traits(generics);
+        // `T: Hash` is a capability bound, and `Hash` std's declared trait
+        // where the program names it: `T::hash_slice` and `x.hash(state)`
+        // are its functions, which its impls give each type.
+        if self
+            .models
+            .traits
+            .get("Hash")
+            .is_some_and(|(_, declared)| declared.std == Some("core::hash::Hash"))
+        {
+            for generic in generics {
+                if !generic.bounds.contains(capability::Kind::Hash) {
+                    continue;
+                }
+                let traits = self
+                    .generic_traits
+                    .entry(generic.name.text.clone())
+                    .or_default();
+                if !traits.iter().any(|name| name == "Hash") {
+                    let mut named = traits.to_vec();
+                    named.push("Hash".into());
+                    *traits = named.into_boxed_slice();
+                }
+            }
+        }
         self.generic_trait_arguments = generic_trait_arguments(generics);
         self.inference.equalities = generic_equalities(generics);
         self.inference.trait_arguments = self
@@ -582,15 +606,25 @@ impl<'a> Parser<'a> {
             }
         }
         for (ty, trait_name, arguments, span, site) in std::mem::take(&mut self.pending_traits) {
-            let ty = self.inference.resolve(&ty);
+            let mut ty = self.inference.resolve(&ty);
             if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
                 continue;
             }
             // A `From` or `Into` bound selects std's impl, whose types fix
-            // what the converted value leaves open.
+            // what the converted value leaves open. A literal no impl fixed
+            // has its fallback kind by the end of the body, which the impl
+            // is then proved for: `3` for `impl Into<f32>` is an `i32`.
             if self.prelude_trait(&trait_name)
                 && let [argument] = &arguments[..]
             {
+                let source = match trait_name.as_str() {
+                    "From" => argument.clone(),
+                    _ => ty.clone(),
+                };
+                if let Some(fallback) = literal_fallback(&self.inference.resolve(&source)) {
+                    self.unify_type(&source, &fallback);
+                    ty = self.inference.resolve(&ty);
+                }
                 match trait_name.as_str() {
                     "From" => self.settle_conversion(&ty, argument),
                     _ => self.settle_conversion(argument, &ty),
@@ -607,16 +641,34 @@ impl<'a> Parser<'a> {
                     if let Some(error) = self.conversion_not_yet(&target, &source, span) {
                         return Err(error);
                     }
-                    // rustc names the `From` impl an `Into` bound needs.
+                    // rustc names the `From` impl an `Into` bound needs, at
+                    // the argument whose type the bound is of.
+                    // An `Into` bound is met by core's blanket impl over
+                    // `From`, which rustc notes.
+                    let operation = site
+                        .as_ref()
+                        .and_then(|site| site.place.as_ref())
+                        .map_or(span, |place| place.argument);
+                    let target_name = target.name(&self.models);
+                    let source_name = self.fallback_name(&source);
+                    let chain = if trait_name.as_str() == "Into" {
+                        crate::resolve::Chain::new(Box::new([crate::resolve::Requirement {
+                            ty: source_name.clone(),
+                            trait_name: format!("Into<{target_name}>").into(),
+                            site: None,
+                        }]))
+                    } else {
+                        crate::resolve::Chain::default()
+                    };
                     return Err(Error::MissingCapability {
-                        owner: target.name(&self.models),
-                        capability: format!("From<{}>", self.fallback_name(&source)).into(),
-                        operation: span,
+                        owner: target_name,
+                        capability: format!("From<{source_name}>").into(),
+                        operation,
                         derive: false,
-                        declared: None,
-                        required_by: None,
+                        declared: self.declared_name(&target),
+                        required_by: site,
                         formatted: None,
-                        chain: crate::resolve::Chain::default(),
+                        chain,
                     });
                 }
                 // The innermost obligation the program's impls needed:
@@ -1227,6 +1279,9 @@ impl<'a> Parser<'a> {
                     _ => (Ty::Unknown, Ty::Unknown),
                 };
                 let source = self.inference.resolve(&source);
+                if self.fix_number_source(&target, &source) {
+                    continue;
+                }
                 if contains_open_literal(&source)
                     && let Some(target) = owner_id(&self.inference.resolve(&target))
                     && self.fix_conversion_source(target, &source)
@@ -1259,6 +1314,31 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    /// Give `source`, a literal's open kind, the one kind std's `From`
+    /// impls for the number `target` take, if one alone does: `0.5` for
+    /// `impl Into<f32>` is an `f32`, and `7` for `impl Into<u8>` a `u8`.
+    /// Where several do, the literal falls back to its default kind, whose
+    /// impl rustc then proves or refuses.
+    fn fix_number_source(&mut self, target: &Ty, source: &Ty) -> bool {
+        let target = self.inference.resolve(target);
+        if !matches!(target, Ty::Int(_) | Ty::Float(_)) || is_unsettled(&target) {
+            return false;
+        }
+        let kinds: Vec<Ty> = match source {
+            Ty::Int(Int::Var(_)) => Int::KINDS.iter().map(|(_, kind)| Ty::Int(*kind)).collect(),
+            Ty::Float(Float::Var(_)) => vec![Ty::Float(Float::F32), Ty::Float(Float::F64)],
+            _ => return false,
+        };
+        let taken: Vec<Ty> = kinds
+            .into_iter()
+            .filter(|kind| self.std_from(&target, kind))
+            .collect();
+        let [kind] = &taken[..] else {
+            return false;
+        };
+        self.unify_type(source, kind)
     }
 
     /// Give `source`, an open literal's type, the source type of the one

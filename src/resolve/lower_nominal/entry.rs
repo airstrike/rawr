@@ -758,6 +758,7 @@ fn lower_instances(
             .program
             .methods
             .iter()
+            .chain(&unit.program.builtin_methods)
             .find(|definition| demand.method() && definition.key() == &demand.template);
         let function = shells.get(&demand.template).copied();
         let source = match (method, function) {
@@ -863,6 +864,7 @@ fn erased_needed(
             .program
             .methods
             .iter()
+            .chain(&unit.program.builtin_methods)
             .find(|definition| definition.key() == &template)
         {
             return Err(erased_failure(unit, Body::Method(definition)));

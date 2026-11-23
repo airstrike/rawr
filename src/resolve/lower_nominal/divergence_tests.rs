@@ -13412,6 +13412,529 @@ main();
 }
 
 #[test]
+fn a_generic_impl_for_a_std_type_runs_per_instance() {
+    // `impl<T: Tag> Tag for Vec<T>` reached through a generic runs at its
+    // element type, so `T::tag_all` is `u8`'s own, `u32`'s default or
+    // `Option<u8>`'s instance, and a builtin's trait method takes a `&mut`
+    // argument, as rustc's monomorphised calls do.
+    let output = printed(
+        r#"
+trait Tag {
+    fn tag(&self, out: &mut Vec<String>);
+    fn tag_all(data: &[Self], out: &mut Vec<String>)
+    where
+        Self: Sized,
+    {
+        for piece in data {
+            piece.tag(out)
+        }
+    }
+}
+impl Tag for u8 {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("u8 {}", self)) }
+    fn tag_all(data: &[u8], out: &mut Vec<String>) { out.push(format!("u8s {:?}", data)) }
+}
+impl Tag for u32 {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("u32 {}", self)) }
+}
+struct P(u8);
+impl Tag for P {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("P {}", self.0)) }
+}
+impl<T: Tag> Tag for Option<T> {
+    fn tag(&self, out: &mut Vec<String>) {
+        match self {
+            None => out.push("none".to_string()),
+            Some(v) => v.tag(out),
+        }
+    }
+}
+impl<T: Tag> Tag for Vec<T> {
+    fn tag(&self, out: &mut Vec<String>) {
+        out.push(format!("len {}", self.len()));
+        T::tag_all(self, out)
+    }
+}
+fn show<T: Tag>(x: &T) -> Vec<String> {
+    let mut out = Vec::new();
+    x.tag(&mut out);
+    out
+}
+fn main() {
+    let mut out = Vec::new();
+    7u8.tag(&mut out);
+    println!("{:?}", out);
+    println!("{:?}", show(&Some(3u32)));
+    println!("{:?}", show(&vec![1u8, 2]));
+    println!("{:?}", show(&vec![1u32, 2]));
+    println!("{:?}", show(&vec![P(1), P(2)]));
+    println!("{:?}", show(&vec![Some(1u8), None]));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"u8 7\"]\n[\"u32 3\"]\n[\"len 2\", \"u8s [1, 2]\"]\n[\"len 2\", \"u32 1\", \"u32 \
+         2\"]\n[\"len 2\", \"P 1\", \"P 2\"]\n[\"len 2\", \"u8 1\", \"none\"]\n"
+    );
+}
+
+#[test]
+fn a_program_trait_implemented_for_tuples_runs_for_each_arity() {
+    // Each tuple arity is its own Self type, whose impl runs at its
+    // members' types: called directly, through a generic and through a
+    // trait object (#2685).
+    let output = printed(
+        r#"
+trait Tag {
+    fn tag(&self) -> String;
+}
+impl Tag for u8 {
+    fn tag(&self) -> String { format!("u8:{}", self) }
+}
+impl Tag for u32 {
+    fn tag(&self) -> String { format!("u32:{}", self) }
+}
+impl<A: Tag, B: Tag> Tag for (A, B) {
+    fn tag(&self) -> String { self.0.tag() + "," + &self.1.tag() }
+}
+impl<A: Tag, B: Tag, C: Tag> Tag for (A, B, C) {
+    fn tag(&self) -> String { format!("[{} {} {}]", self.0.tag(), self.1.tag(), self.2.tag()) }
+}
+impl Tag for () {
+    fn tag(&self) -> String { "unit".to_string() }
+}
+fn show<T: Tag>(x: &T) -> String {
+    x.tag()
+}
+fn main() {
+    println!("{}", (1u8, 2u32).tag());
+    println!("{}", show(&((1u8, 2u8), 3u32)));
+    println!("{}", show(&(1u8, (), 3u32)));
+    let d: &dyn Tag = &(5u32, 6u8);
+    println!("{}", d.tag());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "u8:1,u32:2\nu8:1,u8:2,u32:3\n[u8:1 unit u32:3]\nu32:5,u8:6\n"
+    );
+}
+
+#[test]
+fn hash_writes_into_a_program_hasher_with_rustcs_calls() {
+    // std's impls, a derive and a program's own `hash` write a value into
+    // a `Hasher` with the calls rustc's do: an integer with its kind's
+    // `write_*`, a slice of integers its bytes in one `write`, a `str` its
+    // bytes and `0xff`, a sequence its length first, and an enum its
+    // discriminant as its `repr` integer (#2499).
+    let output = printed(
+        r#"
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+
+struct Log(Vec<String>);
+impl Hasher for Log {
+    fn finish(&self) -> u64 { self.0.len() as u64 }
+    fn write(&mut self, bytes: &[u8]) { self.0.push(format!("{:?}", bytes)); }
+    fn write_u8(&mut self, i: u8) { self.0.push(format!("u8 {}", i)); }
+    fn write_usize(&mut self, i: usize) { self.0.push(format!("usize {}", i)); }
+}
+
+#[derive(PartialEq, Eq)]
+struct Name(String);
+impl Hash for Name {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_lowercase().hash(state);
+    }
+}
+
+mod shapes {
+    #[derive(Hash)]
+    pub enum E {
+        A,
+        B(u8),
+        C { x: u32, y: bool },
+    }
+}
+
+#[derive(Hash)]
+struct W<'a, H> {
+    name: &'a str,
+    h: H,
+}
+
+#[derive(Hash)]
+#[repr(u8)]
+enum Small {
+    X = 4,
+    Y,
+}
+
+fn show<T: Hash + ?Sized>(x: &T) -> Vec<String> {
+    let mut h = Log(Vec::new());
+    x.hash(&mut h);
+    h.0
+}
+
+fn main() {
+    let mut h = Log(Vec::new());
+    7u8.hash(&mut h);
+    'c'.hash(&mut h);
+    "hi".hash(&mut h);
+    u16::hash_slice(&[1, 2], &mut h);
+    println!("{:?}", h.0);
+    println!("{:?}", show(&Some(5u8)));
+    println!("{:?}", show(&vec![1u8, 2]));
+    println!("{:?}", show(&(1u8, String::from("a"))));
+    println!("{:?}", show(&Ok::<u8, String>(1)));
+    println!("{:?}", show(&vec![Some(1u8), None]));
+    println!("{:?}", show("str"));
+    println!("{:?}", show(&Name(String::from("AB"))));
+    println!("{:?}", show(&shapes::E::A));
+    println!("{:?}", show(&shapes::E::C { x: 1, y: true }));
+    println!("{:?}", show(&W { name: "n", h: 2u16 }));
+    println!("{:?}", show(&Small::Y));
+    let mut set = HashSet::new();
+    set.insert(Name(String::from("a")));
+    set.insert(Name(String::from("b")));
+    println!("{}", set.len());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"u8 7\", \"[99, 0, 0, 0]\", \"[104, 105]\", \"u8 255\", \"[1, 0, 2, 0]\"]\n[\"usize \
+         1\", \"u8 5\"]\n[\"usize 2\", \"[1, 2]\"]\n[\"u8 1\", \"[97]\", \"u8 255\"]\n[\"usize \
+         0\", \"u8 1\"]\n[\"usize 2\", \"usize 1\", \"u8 1\", \"usize 0\"]\n[\"[115, 116, 114]\", \
+         \"u8 255\"]\n[\"[97, 98]\", \"u8 255\"]\n[\"usize 0\"]\n[\"usize 2\", \"[1, 0, 0, 0]\", \
+         \"u8 1\"]\n[\"[110]\", \"u8 255\", \"[2, 0]\"]\n[\"u8 5\"]\n2\n"
+    );
+}
+
+#[test]
+fn default_hasher_is_sip_with_zero_keys() {
+    // `DefaultHasher::new()` is SipHash-1-3 with zero keys, so `finish`
+    // prints what rustc's build does, by either of its paths, through a
+    // generic `H: Hasher` and after a derive's writes (#2687).
+    let output = printed(
+        r#"
+use std::collections::hash_map::DefaultHasher as Old;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+#[derive(Hash)]
+struct P {
+    x: u8,
+    name: String,
+}
+
+fn digest<T: Hash + ?Sized>(x: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    x.hash(&mut s);
+    s.finish()
+}
+
+fn main() {
+    let mut s = DefaultHasher::new();
+    7u8.hash(&mut s);
+    let mut t = DefaultHasher::default();
+    t.write_u8(7);
+    println!("{} {}", s.finish(), t.finish());
+    println!("{}", digest(&P { x: 1, name: String::from("a") }));
+    println!("{}", digest("hello"));
+    let mut o = Old::new();
+    o.write(&[1, 2, 3]);
+    o.write_u64(9);
+    let c = o.clone();
+    println!("{} {}", o.finish(), c.finish());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "18443343337670940607 18443343337670940607\n6126082892521519421\n16156531084128653017\n\
+         3557016591249593222 3557016591249593222\n"
+    );
+}
+
+#[test]
+fn try_into_an_integer_beside_a_program_try_from_of_the_same_source() {
+    // A program's `TryFrom<i64>` doesn't take every `try_into()` of an
+    // `i64`: one into an integer is std's, chosen once the target is
+    // known, and the program impl's `Error` is proved `Debug` once it is
+    // selected (#773).
+    let output = printed(
+        r#"
+use std::convert::TryFrom;
+use std::convert::TryInto;
+#[derive(Debug)]
+struct Even(i64);
+impl TryFrom<i64> for Even {
+    type Error = String;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        if v % 2 == 0 { Ok(Even(v)) } else { Err(format!("{v} is odd")) }
+    }
+}
+fn small(v: i64) -> Result<u8, std::num::TryFromIntError> {
+    let b: u8 = v.try_into()?;
+    Ok(b + 1)
+}
+fn main() {
+    let a: Result<Even, _> = 4i64.try_into();
+    let b: Result<Even, String> = 3i64.try_into();
+    let c: Result<u8, _> = 300i64.try_into();
+    let e: i32 = 7i64.try_into().unwrap();
+    println!("{:?} {:?} {:?} {}", a, b, c, e);
+    println!("{:?} {:?}", small(9), small(-1));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Ok(Even(4)) Err(\"3 is odd\") Err(TryFromIntError(PosOverflow)) 7\n\
+         Ok(10) Err(TryFromIntError(NegOverflow))\n"
+    );
+    let report = refused(
+        r#"
+use std::convert::TryFrom;
+use std::convert::TryInto;
+struct Quiet;
+struct Even(i64);
+impl TryFrom<i64> for Even {
+    type Error = Quiet;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        if v % 2 == 0 { Ok(Even(v)) } else { Err(Quiet) }
+    }
+}
+fn main() {
+    let e: Even = 4i64.try_into().unwrap();
+    println!("{}", e.0);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Quiet` doesn't implement `Debug`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_literal_argument_takes_its_kind_from_an_into_bound_at_the_call() {
+    // A literal for `T: Into<f32>` is the `f32` of the one std `From` it
+    // fits, and one several impls take falls back, as rustc settles it
+    // before the call's instance is chosen; a program's `From<Turn> for
+    // f32` is the bound's too (#1719).
+    let output = printed(
+        r#"
+fn byte<T: Into<u8>>(v: T) -> u8 {
+    v.into()
+}
+fn degrees(turn: impl Into<f32>) -> f32 {
+    turn.into() * 360.0
+}
+fn halved<T: Into<f64>>(v: T) -> f64 {
+    v.into() / 2.0
+}
+struct Turn(f32);
+impl From<Turn> for f32 {
+    fn from(t: Turn) -> f32 {
+        t.0
+    }
+}
+fn main() {
+    let x = 255;
+    let y = x - 1;
+    println!("{} {} {} {}", byte(7), byte(y), degrees(0.5), degrees(Turn(0.25)));
+    println!("{} {} {}", halved(3), halved(2.5), halved(0.1f32));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 254 180 90\n1.5 1.25 0.05000000074505806\n");
+    // A literal no single impl takes is an `i32`, whose `From` the bound
+    // then needs, at the argument.
+    let report = rendered(
+        "fn degrees(turn: impl Into<f32>) -> f32 {\n    turn.into() * 360.0\n}\n\
+         fn main() {\n    println!(\"{}\", degrees(3));\n}\n",
+    );
+    let expected = [
+        "error[E0277]: the trait bound `f32: From<i32>` is not satisfied",
+        " --> main.rs:5:28",
+        "  |",
+        "5 |     println!(\"{}\", degrees(3));",
+        "  |                    ------- ^ the trait `From<i32>` is not implemented for `f32`",
+        "  |                    |",
+        "  |                    required by a bound introduced by this call",
+    ]
+    .join("\n");
+    assert!(
+        report.starts_with(&expected)
+            && report.contains("  = note: required for `i32` to implement `Into<f32>`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_blanket_impls_function_without_self_and_its_iterator_methods_run() {
+    // A blanket impl's function without `self` runs at the type the path
+    // or a generic caller names, and `self.next()` of a `&mut self` method
+    // over an iterator steps the caller's iterator (#1555).
+    let output = printed(
+        r#"
+use std::fmt::Display;
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+trait Named {
+    fn named(prefix: &str) -> String;
+}
+impl<T: Display + Default> Named for T {
+    fn named(prefix: &str) -> String {
+        format!("{prefix}{}", T::default())
+    }
+}
+fn build<T: Default>() -> T {
+    <T as Make>::make()
+}
+trait Tally {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>);
+    fn tally(self) -> usize;
+}
+impl<T: Iterator<Item = i64>> Tally for T {
+    fn first_two(&mut self) -> (Option<i64>, Option<i64>) {
+        let a = self.next();
+        let b = self.next();
+        (a, b)
+    }
+    fn tally(self) -> usize {
+        self.count()
+    }
+}
+fn main() {
+    let v = <Vec<u8> as Make>::make();
+    let s: String = Make::make();
+    let built: Vec<i64> = build();
+    println!("{:?} {:?} {} {:?} {}", v, s, i32::make(), built, build::<u8>());
+    println!("{} {}", <i32 as Named>::named("n="), String::named("s="));
+    let mut it = vec![1i64, 2, 3, 4].into_iter();
+    println!("{:?} {:?} {}", it.first_two(), it.next(), it.tally());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[] \"\" 0 [] 0\nn=0 s=\n(Some(1), Some(2)) Some(3) 1\n"
+    );
+    let report = refused(
+        r#"
+trait Make {
+    fn make() -> Self;
+}
+impl<T: Default> Make for T {
+    fn make() -> Self {
+        T::default()
+    }
+}
+struct Opaque;
+fn main() {
+    let _o = <Opaque as Make>::make();
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `Opaque: Make` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_comparison_impl_at_another_type_is_selected_by_both_operands() {
+    // `impl PartialEq<Feet> for Meters` beside the derive: `==`, `!=` and
+    // `<` select by both operands' types, through references too, and a
+    // generic's `T: PartialEq<U>` compares its instances' (#700).
+    let output = printed(
+        r#"
+use std::cmp::Ordering;
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Meters(f64);
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Feet(f64);
+impl PartialEq<Feet> for Meters {
+    fn eq(&self, other: &Feet) -> bool {
+        (self.0 - other.0 * 0.3048).abs() < 1e-9
+    }
+}
+impl PartialEq<Meters> for Feet {
+    fn eq(&self, other: &Meters) -> bool {
+        other == self
+    }
+}
+impl PartialOrd<Feet> for Meters {
+    fn partial_cmp(&self, other: &Feet) -> Option<Ordering> {
+        self.0.partial_cmp(&(other.0 * 0.3048))
+    }
+}
+struct Score(i64);
+impl PartialEq for Score {
+    fn eq(&self, other: &Score) -> bool {
+        self.0 == other.0
+    }
+}
+impl PartialEq<i64> for Score {
+    fn eq(&self, other: &i64) -> bool {
+        self.0 == *other
+    }
+}
+fn same<T: PartialEq<U>, U>(a: &T, b: &U) -> bool {
+    a == b
+}
+fn main() {
+    let m = Meters(0.3048);
+    let f = Feet(1.0);
+    println!("{} {} {} {}", m == f, f == m, m != Feet(2.0), m == Meters(1.0));
+    println!("{} {} {} {}", m < Feet(2.0), m > Feet(2.0), same(&m, &f), same(&m, &m));
+    let s = Score(5);
+    println!("{} {} {} {}", s == Score(5), s == 5, s != 6, s == Score(4));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "true true true false\ntrue false true true\ntrue true true false\n"
+    );
+    // An impl at another type alone: the right operand must be of it.
+    let report = rendered(
+        "struct Meters(f64);\nstruct Feet(f64);\nimpl PartialEq<Feet> for Meters {\n    \
+         fn eq(&self, other: &Feet) -> bool { self.0 == other.0 }\n}\n\
+         fn main() {\n    let m = Meters(1.0);\n    println!(\"{}\", m == Meters(1.0));\n}\n",
+    );
+    let expected = [
+        "error[E0308]: mismatched types",
+        " --> main.rs:8:25",
+        "  |",
+        "8 |     println!(\"{}\", m == Meters(1.0));",
+        "  |                         ^^^^^^^^^^ expected `Feet`, found `Meters`",
+    ]
+    .join("\n");
+    assert!(report.starts_with(&expected), "{report}");
+}
+
+#[test]
 fn an_impl_for_a_reference_is_an_impl_of_its_own_self_type() {
     // `impl Describe for &Point` beside `Point`'s is the impl rustc
     // selects for `&Point`: a method call by its probe's order, a path

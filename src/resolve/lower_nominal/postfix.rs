@@ -1376,7 +1376,12 @@ impl<'a> Parser<'a> {
             // the builtin's own method of that name comes first, as
             // Rust's inherent methods do.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
+                // A shared `str` is rawr's `&str`, the `str` Self type an
+                // impl's header reads.
+                let shared_str = matches!(&builtin, Ty::Reference { mutable: false, target }
+                    if **target == Ty::UnsizedStr);
                 let receiver = match &builtin {
+                    _ if shared_str => Ty::Str,
                     Ty::Reference { target, .. } => (**target).clone(),
                     ty => ty.clone(),
                 };
@@ -1432,6 +1437,9 @@ impl<'a> Parser<'a> {
                     }
                     let (args, end) = self.parse_borrowing_arguments("method arguments")?;
                     let owner_name = receiver.name(&self.models);
+                    if shared_str {
+                        value.ty = Ty::Str;
+                    }
                     value = match self.call_owner_method(
                         value,
                         owner,
@@ -2240,7 +2248,13 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.unscoped_method(owner, member, &value.ty, member_span) {
             return Err(error);
         }
+        // An iterator is its own receiver, which a `&mut self` method
+        // steps in place.
         if matches!(impl_self_ty(definition, &BTreeMap::new()), Ty::Iter(..))
+            && !matches!(
+                without_references(&self.inference.resolve(&value.ty)),
+                Ty::Iter(..)
+            )
             && let Some(iterator) = self.iterator_of(&value)
         {
             value = iterator;

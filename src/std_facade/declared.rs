@@ -9,10 +9,13 @@ use crate::receiver::Mode;
 
 pub(super) static STEPS: &[Step] = &[
     Step::Module("char"),
+    Step::Module("collections"),
+    Step::Module("collections::hash_map"),
     Step::Module("env"),
     Step::Module("ffi"),
     Step::Module("fmt"),
     Step::Module("fs"),
+    Step::Module("hash"),
     Step::Module("io"),
     Step::Module("num"),
     Step::Module("panic"),
@@ -374,6 +377,20 @@ pub(super) static STEPS: &[Step] = &[
         path: "fmt::Alignment",
         variants: &[("Left", &[]), ("Right", &[]), ("Center", &[])],
         non_exhaustive: false,
+    },
+    Step::Held {
+        std: "std::hash::DefaultHasher",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Default,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Alias {
+        path: "collections::hash_map::DefaultHasher",
+        target: "hash::DefaultHasher",
     },
     Step::Held {
         std: "std::panic::Location",
@@ -5885,6 +5902,93 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Registered("fmt::Alignment"),
     },
     Step::Item {
+        path: "hash::DefaultHasher::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("hash::DefaultHasher"),
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::default",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("hash::DefaultHasher"),
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::finish",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_u8",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::U8)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_u16",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::U16)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_u32",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::U32)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_u64",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::U64)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_usize",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Usize)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_i8",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::I8)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_i16",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::I16)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_i32",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::I32)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_i64",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::I64)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "hash::DefaultHasher::write_isize",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Isize)],
+        output: Ty::Unit,
+    },
+    Step::Item {
         path: "panic::Location::file",
         kind: Kind::Method(Mode::Shared),
         inputs: &[],
@@ -7780,6 +7884,110 @@ pub(super) static STEPS: &[Step] = &[
         std: "std::char::from_u32_unchecked",
     },
     Step::StdAlias {
+        path: "collections::BTreeMap",
+        std: "std::collections::BTreeMap",
+    },
+    Step::StdAlias {
+        path: "collections::BTreeSet",
+        std: "std::collections::BTreeSet",
+    },
+    Step::StdAlias {
+        path: "collections::BinaryHeap",
+        std: "std::collections::BinaryHeap",
+    },
+    Step::StdAlias {
+        path: "collections::Bound",
+        std: "std::collections::Bound",
+    },
+    Step::StdAlias {
+        path: "collections::HashMap",
+        std: "std::collections::HashMap",
+    },
+    Step::StdAlias {
+        path: "collections::HashSet",
+        std: "std::collections::HashSet",
+    },
+    Step::StdAlias {
+        path: "collections::LinkedList",
+        std: "std::collections::LinkedList",
+    },
+    Step::StdAlias {
+        path: "collections::TryReserveError",
+        std: "std::collections::TryReserveError",
+    },
+    Step::StdAlias {
+        path: "collections::TryReserveErrorKind",
+        std: "std::collections::TryReserveErrorKind",
+    },
+    Step::StdAlias {
+        path: "collections::VecDeque",
+        std: "std::collections::VecDeque",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::Drain",
+        std: "std::collections::hash_map::Drain",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::Entry",
+        std: "std::collections::hash_map::Entry",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::ExtractIf",
+        std: "std::collections::hash_map::ExtractIf",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::HashMap",
+        std: "std::collections::hash_map::HashMap",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::IntoIter",
+        std: "std::collections::hash_map::IntoIter",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::IntoKeys",
+        std: "std::collections::hash_map::IntoKeys",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::IntoValues",
+        std: "std::collections::hash_map::IntoValues",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::Iter",
+        std: "std::collections::hash_map::Iter",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::IterMut",
+        std: "std::collections::hash_map::IterMut",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::Keys",
+        std: "std::collections::hash_map::Keys",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::OccupiedEntry",
+        std: "std::collections::hash_map::OccupiedEntry",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::OccupiedError",
+        std: "std::collections::hash_map::OccupiedError",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::RandomState",
+        std: "std::collections::hash_map::RandomState",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::VacantEntry",
+        std: "std::collections::hash_map::VacantEntry",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::Values",
+        std: "std::collections::hash_map::Values",
+    },
+    Step::StdAlias {
+        path: "collections::hash_map::ValuesMut",
+        std: "std::collections::hash_map::ValuesMut",
+    },
+    Step::StdAlias {
         path: "env::Args",
         std: "std::env::Args",
     },
@@ -8054,6 +8262,34 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "fs::soft_link",
         std: "std::fs::soft_link",
+    },
+    Step::StdAlias {
+        path: "hash::BuildHasher",
+        std: "std::hash::BuildHasher",
+    },
+    Step::StdAlias {
+        path: "hash::BuildHasherDefault",
+        std: "std::hash::BuildHasherDefault",
+    },
+    Step::StdAlias {
+        path: "hash::Hash",
+        std: "std::hash::Hash",
+    },
+    Step::StdAlias {
+        path: "hash::Hasher",
+        std: "std::hash::Hasher",
+    },
+    Step::StdAlias {
+        path: "hash::RandomState",
+        std: "std::hash::RandomState",
+    },
+    Step::StdAlias {
+        path: "hash::SipHasher",
+        std: "std::hash::SipHasher",
+    },
+    Step::StdAlias {
+        path: "hash::SipHasher13",
+        std: "std::hash::SipHasher13",
     },
     Step::StdAlias {
         path: "io::BorrowedBuf",

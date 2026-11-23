@@ -1800,7 +1800,7 @@ impl<'a> Parser<'a> {
             });
         }
         // `Type::NAME`: an associated const is its value.
-        let (mut arguments, end) = if definition.constant() {
+        let (arguments, end) = if definition.constant() {
             (Vec::new(), text_end(member_span.start(), &member))
         } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
             let expression = span(owner_span.start(), member_span.end());
@@ -1826,31 +1826,40 @@ impl<'a> Parser<'a> {
             }
             self.parse_borrowing_arguments("associated function arguments")?
         };
-        let substitution =
-            self.method_substitution(&definition, None, span(owner_span.start(), end))?;
-        if let Some(written) = self.written_owners.remove(&owner_span.start())
+        let written = self.written_owners.remove(&owner_span.start());
+        self.call_associated(
+            definition,
+            arguments,
+            span(owner_span.start(), end),
+            written,
+        )
+    }
+
+    /// The call `call` of the associated function `definition` with its
+    /// `arguments` read: its generics inferred, `written`, the Self type a
+    /// path writes, fixing its impl's, and its `&mut` arguments copied,
+    /// lent or kept as its signature says.
+    pub(super) fn call_associated(
+        &mut self,
+        definition: method::Definition,
+        mut arguments: Vec<ParsedExpr>,
+        call: Span,
+        written: Option<Ty>,
+    ) -> Result<ParsedExpr, Error> {
+        let substitution = self.method_substitution(&definition, None, call)?;
+        if let Some(written) = written
             && !definition.owner_arguments().is_empty()
         {
             let owner = impl_self_ty(&definition, &substitution);
-            self.require_type(&written, &owner, span(owner_span.start(), end))?;
+            self.require_type(&written, &owner, call)?;
         }
-        self.require_arguments(
-            &definition,
-            &mut arguments,
-            span(owner_span.start(), end),
-            &substitution,
-        )?;
+        self.require_arguments(&definition, &mut arguments, call, &substitution)?;
         self.lend_arguments(&definition, &mut arguments, &substitution, None);
         // A generic associated function compiled per instantiation is
         // its instance for the types this call gives it (D629).
         #[cfg(feature = "rust-import")]
-        let definition =
-            self.bind_method_instance(definition, &substitution, span(owner_span.start(), end))?;
-        let witnesses = self.witness_arguments(
-            definition.generics(),
-            &substitution,
-            span(owner_span.start(), end),
-        );
+        let definition = self.bind_method_instance(definition, &substitution, call)?;
+        let witnesses = self.witness_arguments(definition.generics(), &substitution, call);
         let copied = method_copied(&definition, &self.models);
         let lent = method_lent(&definition);
         let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
@@ -1860,7 +1869,7 @@ impl<'a> Parser<'a> {
         let kept = method_kept(&definition);
         self.mutable_arguments(&arguments, kept.iter().copied())?;
         self.lend_kept(&mut arguments, &kept)?;
-        let name = self.method_call_name(&definition, &substitution, span(owner_span.start(), end));
+        let name = self.method_call_name(&definition, &substitution, call);
         let source = origin::Fragment::call(
             name.as_str(),
             arguments
@@ -1885,16 +1894,16 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         self.note_opaque_bound(
             definition.lifetimes().written_output.as_deref(),
-            span(owner_span.start(), end),
+            call,
             &kept,
         );
         let kept = self.inference.resolve(&kept);
-        self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
+        self.kept_by_call(call, &kept, None, &summary);
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
             source,
             ty: kept,
-            span: span(owner_span.start(), end),
+            span: call,
             lvalue: None,
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,
@@ -2149,9 +2158,17 @@ impl<'a> Parser<'a> {
         // `char::to_ascii_uppercase`, `String::len(&s)`: a method of the
         // type as std declares it. A call of a number's inherent method is
         // its own (`parse_number_method`).
+        // A trait function an impl the program sees gives the type
+        // (`u8::hash_slice` of std's `Hash` impl) is that impl's.
+        let impl_function = owner_id(&builtin).is_some_and(|owner| {
+            self.models
+                .trait_methods
+                .contains_key(&(owner, member.clone()))
+        });
         if (!matches!(builtin, Ty::Int(_) | Ty::Float(_))
             || !matches!(self.peek(), Token::LeftParen | Token::Unit)
             || std_method::inherent(&builtin, &member).is_none())
+            && !impl_function
             && let Some(value) =
                 self.std_method_path(builtin.clone(), &name, &member, name_span, member_span)
         {
@@ -2230,9 +2247,15 @@ impl<'a> Parser<'a> {
         if builtin == Ty::String && member.as_str() == "from_iter" {
             return self.parse_from_iter(builtin, name_span.start());
         }
-        let (mut arguments, end) = self.parse_call_arguments("associated function arguments")?;
-        let expression = span(name_span.start(), end);
         let owner = owner_id(&builtin);
+        // A trait function of an impl for the type may take `&mut place`,
+        // which its call copies back (`call_associated`).
+        let (mut arguments, end) = if impl_function {
+            self.parse_borrowing_arguments("associated function arguments")?
+        } else {
+            self.parse_call_arguments("associated function arguments")?
+        };
+        let expression = span(name_span.start(), end);
         // `char::from_digit(n, radix)` and `char::from_u32(n)`: an
         // `Option<char>`.
         if builtin == Ty::Char
@@ -2295,6 +2318,7 @@ impl<'a> Parser<'a> {
                 member.as_str(),
                 "from" | "try_from" | "default" | "from_str_radix" | "from_str"
             )
+            && !impl_function
             && !arguments.is_empty()
         {
             let mut receiver = arguments.remove(0);
@@ -2495,10 +2519,17 @@ impl<'a> Parser<'a> {
                 chain: crate::resolve::Chain::default(),
             });
         }
-        // A crate trait's function without `self` for this type.
-        let found = owner
+        // A crate trait's function without `self` for this type: its own
+        // impl's, else a blanket impl's whose where-clauses hold for it.
+        let implemented = owner
             .and_then(|id| self.models.trait_methods.get(&(id, member.clone())))
             .and_then(|definitions| definitions.first())
+            .cloned();
+        let definition = match implemented {
+            Some(definition) => Some(definition),
+            None => self.blanket_method(&builtin, &member),
+        };
+        let found = definition
             .and_then(|definition| definition.trait_name().cloned())
             .and_then(|trait_name| {
                 let (_, declared) = self.models.traits.get(&trait_name)?;

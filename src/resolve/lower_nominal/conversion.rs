@@ -157,21 +157,31 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_try_into(&mut self, value: ParsedExpr, end: Position) -> ParsedExpr {
         let source = self.inference.resolve(&value.ty);
         let expression = span(value.span.start(), end);
-        let placeholder = call_placeholder(&conversion_placeholder(self.pending_conversions.len()));
+        let index = self.pending_conversions.len();
+        let placeholder = call_placeholder(&conversion_placeholder(index));
         let target = self.inference.fresh();
         let error = self.inference.fresh();
+        // An integer may go into an integer by std's `TryFrom`, whose
+        // helper takes operands after the value.
+        let operands = matches!(source, Ty::Int(_)).then(|| try_operands_placeholder(index));
+        let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
+        if let Some(operands) = &operands {
+            rendered.push_text(operands.as_str());
+        }
+        rendered.push_text(")");
         self.pending_conversions.push(PendingConversion {
-            placeholder: placeholder.clone(),
+            placeholder,
             source,
             target: target.clone(),
             span: expression,
             host: None,
-            try_from: Some(error.clone()),
+            try_from: Some(TryConversion {
+                error: error.clone(),
+                operands,
+            }),
             lending: None,
             try_error: false,
         });
-        let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
-        rendered.push_text(")");
         self.operator_expr(
             rendered,
             Ty::Result(Box::new(target), Box::new(error)),
@@ -187,7 +197,7 @@ impl<'a> Parser<'a> {
             .pending_conversions
             .iter()
             .filter_map(|conversion| {
-                let error = conversion.try_from.as_ref()?;
+                let error = &conversion.try_from.as_ref()?.error;
                 let target = self.inference.resolve(&conversion.target);
                 (!matches!(target, Ty::Infer(_))
                     && matches!(self.inference.resolve(error), Ty::Infer(_)))
@@ -195,6 +205,11 @@ impl<'a> Parser<'a> {
             })
             .collect::<Vec<_>>();
         for (target, source, error) in pending {
+            // No program impl is for an integer: std's between integers.
+            if let (Ty::Int(_), Ty::Int(_)) = (&target, &source) {
+                self.unify_type(&error, &Ty::ParseError(ParseError::TryFromInt));
+                continue;
+            }
             for (_, from, owner) in self.program_try_froms() {
                 let checkpoint = self.inference.checkpoint();
                 if !(self.unify_type(&owner, &target) && self.unify_type(&from, &source)) {
@@ -218,12 +233,13 @@ impl<'a> Parser<'a> {
     }
 
     /// The helper of `source.try_into()` into `target`: the program's
-    /// `TryFrom<source>` for it, its `Error` the call's `error`.
+    /// `TryFrom<source>` for it, or std's between two integers, its
+    /// `Error` the call's.
     pub(super) fn try_from_helper(
         &mut self,
         target: &Ty,
         source: &Ty,
-        error: &Ty,
+        try_into: &TryConversion,
         call: Span,
     ) -> Result<String, Error> {
         for (definition, from, owner) in self.program_try_froms() {
@@ -239,9 +255,29 @@ impl<'a> Parser<'a> {
                 "Error".into(),
             ));
             if !matches!(declared, Ty::Projection(..)) {
-                self.unify_type(error, &declared);
+                self.unify_type(&try_into.error, &declared);
+            }
+            if let Some(operands) = &try_into.operands {
+                self.write_over(operands, "");
             }
             return Ok(method_name(&definition));
+        }
+        // std's `impl TryFrom<i64> for u8` and its kin: the integer
+        // `try_from` a `try_into()` of an integer runs where no program
+        // impl takes it.
+        if let (Ty::Int(_), Ty::Int(_), Some(operands)) =
+            (self.inference.resolve(target), source, &try_into.operands)
+        {
+            let code = INT_METHODS
+                .iter()
+                .position(|(method, ..)| *method == "try_from")
+                .expect("`try_from` is an integer method");
+            self.write_over(operands, &format!(", {code}, 0"));
+            self.unify_type(&try_into.error, &Ty::ParseError(ParseError::TryFromInt));
+            return Ok(self.push_op(Op::Kinded {
+                op: PreludeOp::IntMethod,
+                kinds: [target.clone(), source.clone()],
+            }));
         }
         let (source, target) = (source.name(&self.models), target.name(&self.models));
         Err(Error::MissingCapability {
@@ -1336,8 +1372,8 @@ impl<'a> Parser<'a> {
             let target = self.inference.resolve(&conversion.target);
             let helper = if let Some(lending) = conversion.lending {
                 self.lending_helper(lending, &conversion)?
-            } else if let Some(error) = &conversion.try_from {
-                self.try_from_helper(&target, &conversion.source, error, conversion.span)?
+            } else if let Some(try_into) = &conversion.try_from {
+                self.try_from_helper(&target, &conversion.source, try_into, conversion.span)?
             } else if conversion.try_error && matches!(target, Ty::Infer(_)) {
                 // Nothing in the body fixes the closure's error: rustc can't
                 // pick the `From` impl the `?` converts through (E0282).
@@ -1723,15 +1759,25 @@ pub(super) struct PendingConversion {
     /// A facade value's `.into()`: its type's own `into` forms, chosen by
     /// their output, or the target's `from` of it.
     pub(super) host: Option<HostInto>,
-    /// `.try_into()`: the error type of the `Result` it gives, the target's
-    /// `TryFrom::Error` (#757).
-    pub(super) try_from: Option<Ty>,
+    /// `.try_into()`, whose impl is chosen once its target is known.
+    pub(super) try_from: Option<TryConversion>,
     /// `.as_ref()` or `.borrow()` of a native value: the std trait whose
     /// impl lends the target (`lending`).
     pub(super) lending: Option<super::lending::Lending>,
     /// A closure's `?`, whose target is the closure's error: one the body
     /// never fixes is rustc's E0282 (#1977).
     pub(super) try_error: bool,
+}
+
+/// A pending `.try_into()` (#757).
+pub(super) struct TryConversion {
+    /// The error type of the `Result` it gives, the target's
+    /// `TryFrom::Error`.
+    pub(super) error: Ty,
+    /// The placeholder after an integer source's value, written as the
+    /// integer `try_from`'s operands where the target is an integer, and
+    /// blank where a program's impl is chosen.
+    pub(super) operands: Option<String>,
 }
 
 /// The `into` forms of a facade value's type, and the value's span.

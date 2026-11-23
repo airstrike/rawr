@@ -1,4 +1,4 @@
-//! std's `path`, `ffi`, `io`, `env`, `fs`, `process`, `num`, `fmt`,
+//! std's `path`, `ffi`, `io`, `env`, `fs`, `process`, `num`, `fmt`, `hash`,
 //! `char`, `panic`, `sync::atomic`, `sync::mpsc`, `thread` and `time` items
 //! for every program (D528.4). Every [`Engine`](crate::Engine) made by
 //! `Engine::new` declares them, and every runtime registry binds them, so a
@@ -27,6 +27,7 @@ mod env;
 mod file;
 mod fmt;
 mod fs;
+mod hash;
 mod held;
 mod io;
 mod metadata;
@@ -208,6 +209,7 @@ fn build() -> Result<facade::Definition, host::Error> {
     buffered::register_debug();
     num::register_debug();
     fmt::register_debug();
+    hash::register_debug();
     panic::register_debug();
     case::register_debug();
     sync::register_debug();
@@ -234,6 +236,7 @@ fn held() -> Vec<held::Held> {
         case::HELD.as_slice(),
         num::HELD.as_slice(),
         fmt::HELD.as_slice(),
+        hash::HELD.as_slice(),
         panic::HELD.as_slice(),
         sync::HELD.as_slice(),
         atomic::HELD.as_slice(),
@@ -257,6 +260,7 @@ fn bind(binds: &mut impl Bind) {
     command::bind(binds);
     num::bind(binds);
     fmt::bind(binds);
+    hash::bind(binds);
     panic::bind(binds);
     case::bind(binds);
     sync::bind(binds);

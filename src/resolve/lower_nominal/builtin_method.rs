@@ -1596,7 +1596,7 @@ impl<'a> Parser<'a> {
         };
         // `unwrap` and `expect` show the other variant's value, so it must be
         // `Debug`, as in Rust.
-        let debug = |this: &Self, ty: &Ty| {
+        let debug = |this: &mut Self, ty: &Ty| {
             // A `parse` whose target is still open: each error it can have
             // is `Debug`. A closure's error its `?` converts into is settled
             // when the body ends, and is rustc's E0282 if nothing fixes it.
@@ -1609,6 +1609,21 @@ impl<'a> Parser<'a> {
                     || this.pending_conversions.iter().any(|conversion| {
                         conversion.try_error && this.inference.resolve(&conversion.target) == open
                     }));
+            // A `try_into()` whose target is still open: its error is the
+            // selected `TryFrom` impl's, whose `Debug` is proved once the
+            // impl is chosen, as rustc's obligation waits for it.
+            let selected = matches!(open, Ty::Infer(_))
+                && this.pending_conversions.iter().any(|conversion| {
+                    conversion
+                        .try_from
+                        .as_ref()
+                        .is_some_and(|try_into| this.inference.resolve(&try_into.error) == open)
+                });
+            if selected {
+                this.pending_bounds
+                    .push((open, capability::Kind::Debug, member_span, None));
+                return Ok(());
+            }
             if pending || this.type_provides(ty, capability::Kind::Debug) {
                 Ok(())
             } else {
