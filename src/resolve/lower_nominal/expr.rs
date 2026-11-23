@@ -644,7 +644,7 @@ impl<'a> Parser<'a> {
                     _ => None,
                 };
                 self.unmovable.insert(
-                    operand.span,
+                    &operand,
                     Unplaced {
                         moved: ("E0507", format!("cannot move out of {behind}")),
                         assigned,
@@ -1169,16 +1169,17 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::Comma) {
             let end = self.expect(Token::RightParen, "')' after expression")?;
             let before = value.source.as_str().to_string();
+            let unmovable = self.unmovable.get(&value).cloned();
             value.source = value.source.surrounded("(", ")");
             self.flow().same_origins(span(open, end), value.span);
-            if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
-                self.unmovable.insert(span(open, end), unmovable);
-            }
             if self.is_value_expression(value.span) {
                 self.values.insert(span(open, end));
             }
             self.note_known_parenthesized(value.span, span(open, end));
             value.span = span(open, end);
+            if let Some(unmovable) = unmovable {
+                self.unmovable.insert(&value, unmovable);
+            }
             // `(x) = 1` and `(*r) += 1` assign the place inside, and `&mut
             // (x)` borrows it, as rustc does; elsewhere the lowering reads it
             // as a value. `(*r).push(1)` and `(f(&mut v)).push(1)` change

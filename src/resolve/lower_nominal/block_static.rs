@@ -438,8 +438,7 @@ impl Parser<'_> {
         };
         if let Ok(read) = &read {
             self.static_reads.insert(read.span);
-            self.unmovable
-                .insert(read.span, Unplaced::static_item(name));
+            self.unmovable.insert(read, Unplaced::static_item(name));
             if self.may_hold_borrow(&ty) {
                 self.flow().set_origins(read.span, Vec::new());
             }

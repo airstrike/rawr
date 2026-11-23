@@ -328,7 +328,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(origin::Fragment, Span), Error> {
         let (assignment, operator_at) = self.next();
         let Some(lvalue) = value.lvalue else {
-            let refused = self.unplaced_assignment(value.span, &assignment, operator_at)?;
+            let refused = self.unplaced_assignment(&value, &assignment, operator_at)?;
             return Err(refused.unwrap_or_else(|| self.unsupported("assignment target")));
         };
         let binding_name = lvalue.binding().clone();

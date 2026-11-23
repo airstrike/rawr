@@ -56,14 +56,15 @@ impl<'a> Parser<'a> {
             let key = Ty::Thread(thread::Kind::LocalKey, Box::new(ty));
             return self.operator_expr(source, key, span);
         }
+        let source = origin::Fragment::call(function.generated.as_str(), []);
+        let read = self.operator_expr(source, ty, span);
         // A static is a place no use moves out of; a constant's use is a
         // value of its own.
         if function.definition.body.static_item {
             self.unmovable
-                .insert(span, Unplaced::static_item(&function.definition.name.text));
+                .insert(&read, Unplaced::static_item(&function.definition.name.text));
         }
-        let source = origin::Fragment::call(function.generated.as_str(), []);
-        self.operator_expr(source, ty, span)
+        read
     }
 
     /// The key the program's `static` `definition` keeps its value by, when
