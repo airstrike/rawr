@@ -69,12 +69,14 @@ const BUILT_IN: &[&str] = &[
 const RAWR: &[&str] = &["preview"];
 
 /// rustc's error for the first of `attributes` that names nothing in
-/// scope, where `uses` are the file's imports. An attribute whose path has
+/// scope, where `uses` are the file's imports and `helpers` the helper
+/// attributes of the crate derives on the item. An attribute whose path has
 /// more than one segment is a tool's or a crate's, which rustc resolves
 /// through that crate, and is not checked here.
 pub(crate) fn unknown<'a>(
     attributes: impl IntoIterator<Item = &'a crate::item::Attribute>,
     uses: &[&item::Use],
+    helpers: &[ImmutableString],
 ) -> Option<Error> {
     attributes.into_iter().find_map(|attribute| {
         let [segment] = attribute.path.segments.as_ref() else {
@@ -86,6 +88,7 @@ pub(crate) fn unknown<'a>(
             || RAWR.contains(&name)
             || name.starts_with("cfg")
             || name.starts_with("rustc_")
+            || helpers.iter().any(|helper| helper.as_str() == name)
             || uses.iter().any(|used| {
                 used.bindings
                     .iter()

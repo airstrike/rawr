@@ -79,26 +79,48 @@ const SOURCE_HEADER: &str = "// derive ";
 /// The digest an expansion source names its item's text `text` by.
 fn item_digest(text: &str) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"rawr.import.expand.item/v1");
+    digest.update(b"rawr.import.expand.item/v2");
     digest.update(text.as_bytes());
     hex(&digest.finalize())
 }
 
 /// An expansion source's text: a line naming the macro `resolved`
 /// (`serde::Serialize`) the items come from, the item text `item` they were
-/// expanded from and the digest `artifact` of the macro crate's artifact
-/// they were expanded against, then the items.
+/// expanded from, the digest `artifact` of the macro crate's artifact they
+/// were expanded against and the helper attributes the derive declares,
+/// then the items `expanded` holds.
 #[must_use]
-pub fn source_text(resolved: &str, item: &str, artifact: &str, items: &[String]) -> String {
+pub fn source_text(
+    resolved: &str,
+    item: &str,
+    artifact: &str,
+    expanded: Option<&request::Expansion>,
+) -> String {
+    let (items, helpers) = expanded.map_or((&[][..], &[][..]), |expansion| {
+        (expansion.items.as_slice(), expansion.helpers.as_slice())
+    });
     let mut text = format!(
-        "{SOURCE_HEADER}{resolved} {} {artifact}\n",
-        item_digest(item)
+        "{SOURCE_HEADER}{resolved} {} {artifact} {}\n",
+        item_digest(item),
+        helpers.join(",")
     );
     for item in items {
         text.push_str(item);
         text.push('\n');
     }
     text
+}
+
+/// The helper attributes (`serde`) the derive a kept expansion source
+/// `text` comes from declares, which its item and the item's members may
+/// carry (#2516).
+pub fn helpers(text: &str) -> impl Iterator<Item = &str> {
+    let line = text.split_once('\n').map_or("", |(line, _)| line);
+    line.strip_prefix(SOURCE_HEADER)
+        .and_then(|words| words.split(' ').nth(3))
+        .unwrap_or_default()
+        .split(',')
+        .filter(|helper| !helper.is_empty())
 }
 
 /// What a kept expansion source is of an item as the program writes it
@@ -155,15 +177,17 @@ pub fn keep_sources(
     let mut expansions = expanded.expansions.iter().collect::<Vec<_>>();
     for (written, resolved) in &item.derives {
         let name = macro_name(written);
-        let items = expansions
+        let expansion = expansions
             .iter()
             .position(|expansion| macro_name(&expansion.derive) == name)
-            .map(|index| expansions.remove(index).items.as_slice())
-            .unwrap_or_default();
+            .map(|index| expansions.remove(index));
         let path = source_path(project, &item.path, written);
         let staged = path.with_extension(format!("rs.{}", std::process::id()));
         let artifact = basis.artifact(resolved).unwrap_or_default();
-        std::fs::write(&staged, source_text(resolved, &item.text, artifact, items))?;
+        std::fs::write(
+            &staged,
+            source_text(resolved, &item.text, artifact, expansion),
+        )?;
         std::fs::rename(&staged, &path)?;
     }
     Ok(())
@@ -386,6 +410,13 @@ fn drive(
                 path: path.to_string(),
             })
             .collect(),
+        // A crate the program reaches only through another's hidden
+        // segment, which rustc finds among the dependencies (#2290).
+        crates: roots
+            .iter()
+            .filter(|root| !basis.names(root))
+            .map(|root| (*root).to_owned())
+            .collect(),
         source: source_path.display().to_string(),
     };
     let request_path = work.join("request.json");
@@ -462,20 +493,27 @@ fn split(
 #[cfg(test)]
 mod tests {
     use super::{
-        built, crate_source, kept, request, source, source_path, source_text, split, Item, Kept,
+        built, crate_source, helpers, kept, request, source, source_path, source_text, split, Item,
+        Kept,
     };
 
     #[test]
     fn an_expansion_source_names_its_macro_and_its_item_and_follows_it() {
         let item = "struct A;";
-        let text = source_text(
-            "serde::Serialize",
-            item,
-            "a1",
-            &["impl A for B {}".to_owned()],
-        );
+        let expansion = request::Expansion {
+            derive: "Serialize".to_owned(),
+            at: 0,
+            items: vec!["impl A for B {}".to_owned()],
+            helpers: vec!["serde".to_owned(), "skip".to_owned()],
+        };
+        let text = source_text("serde::Serialize", item, "a1", Some(&expansion));
         assert!(text.starts_with("// derive serde::Serialize "), "{text}");
         assert_eq!(built(&text), Some(("serde::Serialize", "a1")));
+        // It names the attributes the derive declares (#2516).
+        assert_eq!(helpers(&text).collect::<Vec<_>>(), ["serde", "skip"]);
+        let none = source_text("serde::Serialize", item, "a1", None);
+        assert_eq!(helpers(&none).count(), 0);
+        assert_eq!(built(&none), Some(("serde::Serialize", "a1")));
         assert!(text.ends_with("\nimpl A for B {}\n"), "{text}");
         assert_eq!(kept(&text, item), Some(Kept::Current("serde::Serialize")));
         // An edit to the item leaves the source stale, not another's.
@@ -542,6 +580,7 @@ mod tests {
             derive: derive.to_owned(),
             at,
             items: vec![format!("impl {derive} {at}")],
+            helpers: Vec::new(),
         };
         let expanded = request::Expanded {
             protocol: 53,
