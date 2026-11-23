@@ -692,6 +692,7 @@ pub(super) fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_re
         Ty::Bool => builtin("bool", Vec::new()),
         Ty::Char => builtin("char", Vec::new()),
         Ty::String => builtin("String", Vec::new()),
+        Ty::UnsizedStr => builtin(crate::resolve::type_ref::UNSIZED_STR, Vec::new()),
         // A `&str` is the `String` path with the reference's lifetime.
         Ty::Str => type_ref::Type::Path(type_ref::Path {
             name: "String".into(),

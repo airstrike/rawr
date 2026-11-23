@@ -13441,3 +13441,95 @@ main();
         "u8:1,u32:2\nu8:1,u8:2,u32:3\n[u8:1 unit u32:3]\nu32:5,u8:6\n"
     );
 }
+
+#[test]
+fn hash_writes_into_a_program_hasher_with_rustcs_calls() {
+    // std's impls, a derive and a program's own `hash` write a value into
+    // a `Hasher` with the calls rustc's do: an integer with its kind's
+    // `write_*`, a slice of integers its bytes in one `write`, a `str` its
+    // bytes and `0xff`, a sequence its length first, and an enum its
+    // discriminant as its `repr` integer (#2499).
+    let output = printed(
+        r#"
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+
+struct Log(Vec<String>);
+impl Hasher for Log {
+    fn finish(&self) -> u64 { self.0.len() as u64 }
+    fn write(&mut self, bytes: &[u8]) { self.0.push(format!("{:?}", bytes)); }
+    fn write_u8(&mut self, i: u8) { self.0.push(format!("u8 {}", i)); }
+    fn write_usize(&mut self, i: usize) { self.0.push(format!("usize {}", i)); }
+}
+
+#[derive(PartialEq, Eq)]
+struct Name(String);
+impl Hash for Name {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_lowercase().hash(state);
+    }
+}
+
+mod shapes {
+    #[derive(Hash)]
+    pub enum E {
+        A,
+        B(u8),
+        C { x: u32, y: bool },
+    }
+}
+
+#[derive(Hash)]
+struct W<'a, H> {
+    name: &'a str,
+    h: H,
+}
+
+#[derive(Hash)]
+#[repr(u8)]
+enum Small {
+    X = 4,
+    Y,
+}
+
+fn show<T: Hash + ?Sized>(x: &T) -> Vec<String> {
+    let mut h = Log(Vec::new());
+    x.hash(&mut h);
+    h.0
+}
+
+fn main() {
+    let mut h = Log(Vec::new());
+    7u8.hash(&mut h);
+    'c'.hash(&mut h);
+    "hi".hash(&mut h);
+    u16::hash_slice(&[1, 2], &mut h);
+    println!("{:?}", h.0);
+    println!("{:?}", show(&Some(5u8)));
+    println!("{:?}", show(&vec![1u8, 2]));
+    println!("{:?}", show(&(1u8, String::from("a"))));
+    println!("{:?}", show(&Ok::<u8, String>(1)));
+    println!("{:?}", show(&vec![Some(1u8), None]));
+    println!("{:?}", show("str"));
+    println!("{:?}", show(&Name(String::from("AB"))));
+    println!("{:?}", show(&shapes::E::A));
+    println!("{:?}", show(&shapes::E::C { x: 1, y: true }));
+    println!("{:?}", show(&W { name: "n", h: 2u16 }));
+    println!("{:?}", show(&Small::Y));
+    let mut set = HashSet::new();
+    set.insert(Name(String::from("a")));
+    set.insert(Name(String::from("b")));
+    println!("{}", set.len());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"u8 7\", \"[99, 0, 0, 0]\", \"[104, 105]\", \"u8 255\", \"[1, 0, 2, 0]\"]\n[\"usize \
+         1\", \"u8 5\"]\n[\"usize 2\", \"[1, 2]\"]\n[\"u8 1\", \"[97]\", \"u8 255\"]\n[\"usize \
+         0\", \"u8 1\"]\n[\"usize 2\", \"usize 1\", \"u8 1\", \"usize 0\"]\n[\"[115, 116, 114]\", \
+         \"u8 255\"]\n[\"[97, 98]\", \"u8 255\"]\n[\"usize 0\"]\n[\"usize 2\", \"[1, 0, 0, 0]\", \
+         \"u8 1\"]\n[\"[110]\", \"u8 255\", \"[2, 0]\"]\n[\"u8 5\"]\n2\n"
+    );
+}

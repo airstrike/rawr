@@ -960,6 +960,8 @@ impl<'a> Parser<'a> {
                 // name the program knows it by.
                 if !through_crate
                     && !self.ufcs_trait(&trait_name)
+                    && !matches!(self.peek(), Token::Identifier(member)
+                        if self.read_std_function(&trait_name, &member))
                     && let Some(std_name) = self
                         .written_std_trait(&written)
                         .or_else(|| crate::resolve::std_trait::anywhere(&trait_name))

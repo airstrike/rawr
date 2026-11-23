@@ -22,6 +22,7 @@ pub(crate) mod package;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod record;
 pub(crate) mod similar;
+mod std_hash;
 pub(crate) mod std_path;
 pub(crate) mod std_trait;
 pub mod tail;
@@ -5462,9 +5463,7 @@ fn trait_impl_functions(
         {
             continue;
         }
-        // std's `Hash::hash`: rawr hashes a value by its contents, so the
-        // parser keeps an impl's `hash` as the mark (`hashes_as_rust`).
-        if !provided && declared.std != Some("core::hash::Hash") {
+        if !provided {
             missing.push(format!("`{}`", required.name.text));
             continue;
         }

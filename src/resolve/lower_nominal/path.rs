@@ -2158,9 +2158,17 @@ impl<'a> Parser<'a> {
         // `char::to_ascii_uppercase`, `String::len(&s)`: a method of the
         // type as std declares it. A call of a number's inherent method is
         // its own (`parse_number_method`).
+        // A trait function an impl the program sees gives the type
+        // (`u8::hash_slice` of std's `Hash` impl) is that impl's.
+        let impl_function = owner_id(&builtin).is_some_and(|owner| {
+            self.models
+                .trait_methods
+                .contains_key(&(owner, member.clone()))
+        });
         if (!matches!(builtin, Ty::Int(_) | Ty::Float(_))
             || !matches!(self.peek(), Token::LeftParen | Token::Unit)
             || std_method::inherent(&builtin, &member).is_none())
+            && !impl_function
             && let Some(value) =
                 self.std_method_path(builtin.clone(), &name, &member, name_span, member_span)
         {
@@ -2239,9 +2247,15 @@ impl<'a> Parser<'a> {
         if builtin == Ty::String && member.as_str() == "from_iter" {
             return self.parse_from_iter(builtin, name_span.start());
         }
-        let (mut arguments, end) = self.parse_call_arguments("associated function arguments")?;
-        let expression = span(name_span.start(), end);
         let owner = owner_id(&builtin);
+        // A trait function of an impl for the type may take `&mut place`,
+        // which its call copies back (`call_associated`).
+        let (mut arguments, end) = if impl_function {
+            self.parse_borrowing_arguments("associated function arguments")?
+        } else {
+            self.parse_call_arguments("associated function arguments")?
+        };
+        let expression = span(name_span.start(), end);
         // `char::from_digit(n, radix)` and `char::from_u32(n)`: an
         // `Option<char>`.
         if builtin == Ty::Char
@@ -2304,6 +2318,7 @@ impl<'a> Parser<'a> {
                 member.as_str(),
                 "from" | "try_from" | "default" | "from_str_radix" | "from_str"
             )
+            && !impl_function
             && !arguments.is_empty()
         {
             let mut receiver = arguments.remove(0);

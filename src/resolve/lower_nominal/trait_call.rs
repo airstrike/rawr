@@ -167,6 +167,24 @@ impl<'a> Parser<'a> {
         self.fitting_impl(definitions, &resolved)
     }
 
+    /// Whether `member` is a function without `self` of the std trait
+    /// `trait_name` whose impls rawr reads from std's text
+    /// (`std_trait::has_impls`): `<u8 as Hash>::hash_slice` is the impl's,
+    /// called as a program trait's function is.
+    pub(super) fn read_std_function(&self, trait_name: &str, member: &str) -> bool {
+        self.models
+            .traits
+            .get(trait_name)
+            .is_some_and(|(_, declared)| {
+                declared
+                    .std
+                    .is_some_and(crate::resolve::std_trait::has_impls)
+                    && declared.functions.iter().any(|function| {
+                        function.name.text.as_str() == member && function.receiver.is_none()
+                    })
+            })
+    }
+
     /// Whether `name` is a crate trait a qualified call can name: one the
     /// crate declares, not a std trait Rawr provides itself.
     pub(super) fn ufcs_trait(&self, name: &str) -> bool {
@@ -961,10 +979,11 @@ impl<'a> Parser<'a> {
         start: Position,
     ) -> Result<ParsedExpr, Error> {
         let (member, member_span) = self.expect_member_name()?;
+        let ufcs = self.ufcs_trait(&trait_name) || self.read_std_function(&trait_name, &member);
         // `Trait::f::<T>(..)`: the function's own type arguments.
         let turbofish = if matches!(self.peek(), Token::DoubleColon)
             && matches!(self.peek_second(), Token::LessThan)
-            && self.ufcs_trait(&trait_name)
+            && ufcs
         {
             self.next();
             self.next();
@@ -984,7 +1003,7 @@ impl<'a> Parser<'a> {
         }
         // `<Look as Tone>::tone` of a crate's trait a `use` names: the
         // method on its first input or argument, as `Tone::tone` is.
-        if !self.ufcs_trait(&trait_name)
+        if !ufcs
             && let Some(binding) = self.models.import(&trait_name).cloned()
             && matches!(binding.target, item::Import::Module)
             && self
@@ -1024,7 +1043,7 @@ impl<'a> Parser<'a> {
                 return self.method_value(member, inputs.into(), trait_span, member_span);
             }
         }
-        if !self.ufcs_trait(&trait_name) {
+        if !ufcs {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
                     "a qualified call through `{trait_name}`, which is not a trait the crate \
