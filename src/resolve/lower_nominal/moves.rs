@@ -22,7 +22,7 @@ impl<'a> Parser<'a> {
         if let Some(Unplaced {
             moved: (code, message),
             ..
-        }) = self.unmovable.get(&value.span)
+        }) = self.unmovable.get(value)
             && self.moves_by_value(&value.ty)
         {
             return Err(Error::BorrowConflict {

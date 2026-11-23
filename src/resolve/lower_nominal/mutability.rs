@@ -176,7 +176,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// rustc's error for an assignment to `place`, which has no lvalue,
+    /// rustc's error for an assignment to `assignee`, which has no lvalue,
     /// after its `operator` at `at`. A value that is no place is E0070
     /// (E0067 for a compound assignment), found while the assignment's
     /// types are checked. A place with a pointer above it that can't change
@@ -186,10 +186,11 @@ impl<'a> Parser<'a> {
     /// place rawr gives no lvalue of its own yet.
     pub(super) fn unplaced_assignment(
         &mut self,
-        place: Span,
+        assignee: &ParsedExpr,
         operator: &Token,
         at: Position,
     ) -> Result<Option<Error>, Error> {
+        let place = assignee.span;
         if self.is_value_expression(place) {
             return Ok(Some(Error::InvalidAssignee {
                 compound: *operator != Token::Equals,
@@ -200,7 +201,7 @@ impl<'a> Parser<'a> {
         let Some(Unplaced {
             assigned: Some(assigned),
             ..
-        }) = self.unmovable.get(&place).cloned()
+        }) = self.unmovable.get(assignee).cloned()
         else {
             return Ok(None);
         };

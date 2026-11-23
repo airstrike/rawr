@@ -107,6 +107,7 @@ mod traits;
 mod trimmed;
 mod ty;
 mod unify;
+mod unmovable;
 mod wide;
 
 #[cfg(test)]
@@ -333,6 +334,7 @@ use ty::{
     CellKind, Counter, Float, FnCandidate, HostTyProof, Int, Keyed, Parameter, PartialEqImpl,
     Pointer, Time, Ty, Unassignable, Unplaced, UNSIGNED_SOURCE, WIDE_I128, WIDE_U128,
 };
+use unmovable::Unmovable;
 use wide::{
     kind_value, wide_i128, wide_method, wide_order, wide_u128, wide_value, PendingFloat,
     PendingFloatKind, PendingWide, Wide,
@@ -467,9 +469,9 @@ struct Parser<'a> {
     /// move (`move_local`).
     shared_field_reads: BTreeSet<Span>,
     /// Places Rust can't move out of that the lowering gives no place of
-    /// their own (`*r`, `*rc`, `[s][0]`), by their span: what rustc
-    /// refuses of each.
-    unmovable: BTreeMap<Span, Unplaced>,
+    /// their own (`*r`, `*rc`, `[s][0]`, a static), by the expression each
+    /// is: what rustc refuses of each.
+    unmovable: Unmovable,
     /// Expressions that are values and never places, by their span: a
     /// literal, an operator's result, a tuple or an array, and any of them
     /// in parentheses. An assignment to one is rustc's E0070
@@ -1132,7 +1134,7 @@ impl<'a> Parser<'a> {
             matched_bindings: BTreeSet::new(),
             local_types: Vec::new(),
             shared_field_reads: BTreeSet::new(),
-            unmovable: BTreeMap::new(),
+            unmovable: Unmovable::default(),
             values: BTreeSet::new(),
             destructuring: BTreeSet::new(),
             index_mut_elements: BTreeSet::new(),

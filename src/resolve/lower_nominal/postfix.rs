@@ -1630,16 +1630,19 @@ impl<'a> Parser<'a> {
                 );
                 // A member of what can't be moved out of or assigned to, as
                 // an `Arc`'s value, can't be either.
-                if let Some(unmovable) = self.unmovable.get(&value.span) {
-                    let part = unmovable.member(&member);
-                    self.unmovable.insert(span(value.span.start(), end), part);
-                }
+                let part = self
+                    .unmovable
+                    .get(&value)
+                    .map(|unmovable| unmovable.member(&member));
                 value = self.operator_expr(
                     source,
                     members[index].clone(),
                     span(value.span.start(), end),
                 );
                 value.lvalue = lvalue;
+                if let Some(part) = part {
+                    self.unmovable.insert(&value, part);
+                }
                 continue;
             }
             let number = match &builtin {
@@ -2081,6 +2084,13 @@ impl<'a> Parser<'a> {
             };
             let substitution = self.nominal_substitution(definition_id, &arguments);
             let ty = instantiate(&Ty::from_resolved(&field.ty), &substitution);
+            // A field of what can't be moved out of, as an `Rc`'s value,
+            // can't be either (rustc's E0507), known before a temporary
+            // holds the value.
+            let part = self
+                .unmovable
+                .get(&value)
+                .map(|unmovable| unmovable.member(&member));
             // A field of a value made here is read from its temporary, and
             // of a place read through a reference stays that place.
             let through_reference =
@@ -2122,12 +2132,6 @@ impl<'a> Parser<'a> {
             let owner = definition.id();
             let expression_span = span(value.span.start(), member_span.end());
             self.note_fn_value(&field.ty, expression_span);
-            // A field of what can't be moved out of, as an `Rc`'s value,
-            // can't be either (rustc's E0507).
-            if let Some(unmovable) = self.unmovable.get(&value.span) {
-                let part = unmovable.member(&member);
-                self.unmovable.insert(expression_span, part);
-            }
             self.part_of(
                 (value.span, &value.ty),
                 expression_span,
@@ -2149,6 +2153,9 @@ impl<'a> Parser<'a> {
                 evaluation: crate::host::usage::Evaluation::Required,
             }
             .retain_origin();
+            if let Some(part) = part {
+                self.unmovable.insert(&value, part);
+            }
         }
 
         if let Some(boxed) = rebox {
@@ -3028,9 +3035,12 @@ impl<'a> Parser<'a> {
             )),
             _ => None,
         };
+        let unowned = lvalue.is_none();
+        let mut indexed = self.operator_expr(source, element, span(value.span.start(), end));
+        indexed.lvalue = lvalue;
         // An element of a value that is no local's: rustc's E0508 for an
         // array's, E0507 for a `Vec`'s or a slice's, moved out by value.
-        if lvalue.is_none() {
+        if unowned {
             let owner = self.inference.resolve(&value.ty);
             let message = match (&owner, length) {
                 (Ty::Array { .. }, Some(_)) => format!(
@@ -3041,7 +3051,7 @@ impl<'a> Parser<'a> {
             };
             let code = if length.is_some() { "E0508" } else { "E0507" };
             self.unmovable.insert(
-                span(value.span.start(), end),
+                &indexed,
                 Unplaced {
                     moved: (code, message),
                     assigned: None,
@@ -3049,8 +3059,6 @@ impl<'a> Parser<'a> {
                 },
             );
         }
-        let mut indexed = self.operator_expr(source, element, span(value.span.start(), end));
-        indexed.lvalue = lvalue;
         Ok(indexed)
     }
 

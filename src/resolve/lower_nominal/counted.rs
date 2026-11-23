@@ -674,7 +674,7 @@ impl Parser<'_> {
                 self.counted_value(value);
                 // Its parts can't be moved out of (rustc's E0507).
                 self.unmovable.insert(
-                    value.span,
+                    value,
                     Unplaced {
                         moved: (
                             "E0507",
