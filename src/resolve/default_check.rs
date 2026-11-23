@@ -28,6 +28,29 @@ pub(super) fn shells(items: &[item::Shell], traits: &Traits) -> Vec<item::Shell>
         .collect()
 }
 
+/// Where each default body is that no impl receives and no check reads: a
+/// std trait's or a facade trait's, whose borrows and moves are left to
+/// rustc (#2692).
+#[cfg(test)]
+pub(super) fn unchecked(items: &[item::Shell], traits: &Traits) -> Vec<Span> {
+    let received = received(items, traits);
+    traits
+        .iter()
+        .filter(|(_, (_, declared))| declared.std.is_some() || declared.declaration.is_some())
+        .flat_map(|(name, (_, declared))| {
+            declared
+                .functions
+                .iter()
+                .zip(declared.provided.iter())
+                .filter(|(function, provided)| {
+                    **provided && !received.contains(&(name.clone(), function.name.text.clone()))
+                })
+                .map(|(function, _)| function.name.span)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// Each trait function some impl receives its trait's body of, as
 /// `(trait, function)`.
 fn received(

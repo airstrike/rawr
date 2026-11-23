@@ -3727,6 +3727,13 @@ fn resolve_methods(
     // A default body no impl receives is checked as the method of a
     // check-only `impl<Self: Trait> Trait for Self` (#191).
     let mut checks = default_check::shells(items, &traits);
+    #[cfg(test)]
+    for span in default_check::unchecked(items, &traits) {
+        crate::resolve::borrowck::note_unlowered(
+            "a trait's default body that no impl receives",
+            span,
+        );
+    }
     let mut checked_defaults = Vec::new();
     let shells = items.len();
     for (index, shell) in items.iter_mut().chain(&mut checks).enumerate() {
