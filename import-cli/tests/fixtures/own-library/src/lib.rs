@@ -1,6 +1,7 @@
 //! The package's library, which its marked binary names by the crate name,
 //! as Cargo builds the binary (#1164): an iced-shaped `run` generic over
-//! the program's state and messages, and a type of its own.
+//! the program's state and messages, a type of its own, a tuple struct, a
+//! module's function and a re-export of a std type under another name.
 
 /// A floor of the building.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -23,6 +24,20 @@ impl Floor {
 
     pub fn label(&self) -> String {
         format!("floor {}", self.number)
+    }
+}
+
+/// A building's wing, by its letter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Wing(pub char);
+
+/// How long a trip takes: std's `Duration` under the building's name.
+pub use std::time::Duration as Ride;
+
+pub mod signs {
+    /// The sign on a floor's door.
+    pub fn door(floor: &super::Floor) -> String {
+        format!("door {}", floor.number)
     }
 }
 

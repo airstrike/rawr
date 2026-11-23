@@ -13328,3 +13328,78 @@ fn a_local_key_method_of_another_impl_is_rustcs_e0599_with_its_notes() {
         );
     }
 }
+
+#[test]
+fn cfg_leaves_out_tuple_struct_fields_and_a_block_s_members() {
+    // A tuple struct's field and, in a body, a variant and a tuple field
+    // that a `#[cfg(..)]` leaves out are gone from the constructor, the
+    // patterns and `Debug`, as rustc builds them (#605).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct T(#[cfg(any())] u8, i32, #[cfg(all())] i64);
+fn main() {
+    #[derive(Debug)]
+    enum L { X, #[cfg(any())] Y, Z(#[cfg(any())] String, u8) }
+    #[derive(Debug)]
+    struct U(#[cfg(any())] String, u8);
+    let t = T(1, 2);
+    let n = match L::Z(9) { L::X => 0, L::Z(n) => n };
+    println!("{:?} {} {} {:?} {:?} {}", t, t.0, t.1, L::X, U(7), n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "T(1, 2) 1 2 X U(7) 9\n");
+}
+
+#[test]
+fn a_renamed_std_type_names_its_functions() {
+    // `use std::time::Duration as Span;` binds std's `Duration`, so
+    // `Span::from_millis` is its function, called or as a value, as a type
+    // it names already was (#344).
+    let output = printed(
+        r#"
+use std::time::Duration as Span;
+use std::time::Instant as Moment;
+fn wait(s: Span) -> Span {
+    s + Span::from_millis(1)
+}
+fn main() {
+    let c: Span = Span::from_secs(1);
+    let f = Span::from_secs;
+    println!("{:?} {:?} {:?} {:?}", c, wait(Span::ZERO), Span::from_secs_f64(0.25), f(3));
+    println!("{}", Moment::now().elapsed() < Span::from_secs(60));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1s 1ms 250ms 3s\ntrue\n");
+}
+
+#[test]
+fn an_outside_crate_s_head_leaves_its_arguments_to_their_scope() {
+    // `::core::cmp::max`'s head is the crate `core`, which no `use`
+    // shadows, but its arguments, and a type's generic arguments, read
+    // `core` as the `use` binds it, as rustc resolves them (#1962).
+    let output = printed(
+        r#"
+mod m {
+    #[derive(Debug)]
+    pub struct X;
+    pub fn min(a: i32, b: i32) -> i32 {
+        a * 100 + b
+    }
+}
+use m as core;
+fn main() {
+    println!("{}", ::core::cmp::max(core::min(1, 2), 3));
+    println!("{}", ::core::cmp::max(3, { core::min(4, 5) }));
+    let x: ::core::option::Option<core::X> = Some(core::X);
+    println!("{:?}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "102\n405\nSome(X)\n");
+}
