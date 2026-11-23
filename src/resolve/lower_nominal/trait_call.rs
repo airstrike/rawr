@@ -1241,6 +1241,40 @@ impl<'a> Parser<'a> {
                 call,
             );
         };
+        // Other than the receiver and the parameters: rustc's E0061 for
+        // the function the path names, whose receiver is `Self`'s where
+        // the path writes it.
+        if arguments.len() != function.parameters.len() + 1 {
+            let receiver_self = self_ty.clone().unwrap_or_else(|| self.inference.fresh());
+            let receiver = match receiver_mode {
+                crate::item::Receiver::Shared(_) | crate::item::Receiver::Mutable(_) => {
+                    Ty::Reference {
+                        mutable: matches!(receiver_mode, crate::item::Receiver::Mutable(_)),
+                        target: Box::new(receiver_self),
+                    }
+                }
+                _ => receiver_self,
+            };
+            let inputs: Vec<Ty> = std::iter::once(receiver)
+                .chain(
+                    function
+                        .parameters
+                        .iter()
+                        .map(|parameter| Ty::from_resolved(&parameter.ty)),
+                )
+                .collect();
+            let declaration = self.trait_declaration(&trait_name, &member);
+            return Err(self.path_argument_count(
+                crate::resolve::Qualified(&trait_name, &member)
+                    .to_string()
+                    .into(),
+                start,
+                &inputs,
+                declaration,
+                &arguments,
+                end,
+            ));
+        }
         if arguments.is_empty() {
             return Err(Error::InvalidMethodCall {
                 owner: trait_name.clone(),
@@ -1360,13 +1394,33 @@ impl<'a> Parser<'a> {
             });
         };
         if arguments.len() != function.parameters.len() {
-            return Err(Error::argument_count(
-                Callee::Method,
-                crate::resolve::Qualified(param, &function.name.text).to_string(),
-                function.parameters.len(),
-                arguments.len(),
-                span(member_span.start(), end),
-            ));
+            let inputs: Vec<Ty> = function
+                .parameters
+                .iter()
+                .map(|parameter| Ty::from_resolved(&parameter.ty))
+                .collect();
+            let declaration = self.trait_declaration(trait_name, &function.name.text);
+            let here = declaration.as_ref().is_some_and(|declared| declared.here);
+            let parameters = declaration
+                .as_ref()
+                .map_or(
+                    &function.parameters[..],
+                    |declared| &declared.parameters[..],
+                );
+            let places = self.argument_places(member_span, &inputs, parameters, here, &arguments);
+            return Err(Error::ArgumentCount {
+                callee: Callee::Method,
+                name: crate::resolve::Qualified(param, &function.name.text)
+                    .to_string()
+                    .into(),
+                expected: function.parameters.len(),
+                found: arguments.len(),
+                call: span(member_span.start(), end),
+                definition: declaration
+                    .filter(|declared| declared.here)
+                    .map(|declared| declared.name),
+                arguments: Some(places),
+            });
         }
         // A trait object's value is unsized: it cannot be moved out.
         if matches!(self_ty, Ty::Dyn(..))

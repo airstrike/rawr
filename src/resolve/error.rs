@@ -254,6 +254,9 @@ pub enum Callee {
     AssociatedFunction,
     /// A method called on a receiver (`value.method(..)`).
     Method,
+    /// A method called by its path, its receiver the first argument
+    /// (`Trait::method(&value, ..)`): a function, defined as a method.
+    MethodPath,
     /// A closure, or a value of a closure trait's type (E0057).
     Closure,
     /// A tuple struct's constructor.
@@ -275,7 +278,9 @@ impl Callee {
     /// The noun rustc's message names the callee by.
     const fn noun(self) -> &'static str {
         match self {
-            Self::Function | Self::AssociatedFunction | Self::Closure => "function",
+            Self::Function | Self::AssociatedFunction | Self::MethodPath | Self::Closure => {
+                "function"
+            }
             Self::Method => "method",
             Self::Struct => "struct",
             Self::Variant => "enum variant",
@@ -288,7 +293,7 @@ impl Callee {
         match self {
             Self::Function => "function defined here",
             Self::AssociatedFunction => "associated function defined here",
-            Self::Method => "method defined here",
+            Self::Method | Self::MethodPath => "method defined here",
             Self::Closure => "closure defined here",
             Self::Struct => "tuple struct defined here",
             Self::Variant => "tuple variant defined here",
