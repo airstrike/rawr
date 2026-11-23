@@ -1164,11 +1164,22 @@ impl Parser<'_> {
         }
         // `view<'a>(items: &'a [Item]) -> impl Show + 'a`'s value keeps
         // the borrows of the inputs at the lifetime its type names.
-        let kept: Vec<Tap> = (0..arguments)
-            .filter(|index| item.lends(*index))
-            .map(|index| all(Input::Argument(index)))
+        // An async method's future keeps them, and its receiver where the
+        // output keeps that too.
+        let lent_receiver = matches!(
+            mode,
+            Some(signature::Receiver::Shared | signature::Receiver::Mutable)
+        ) && item.lends_receiver();
+        let kept: Vec<Tap> = lent_receiver
+            .then(|| all(Input::Receiver))
+            .into_iter()
+            .chain(
+                (0..arguments)
+                    .filter(|index| item.lends(*index))
+                    .map(|index| all(Input::Argument(index))),
+            )
             .collect();
-        if !kept.is_empty() {
+        if kept.len() > usize::from(lent_receiver) {
             return Summary::taps(mode, kept, Vec::new());
         }
         // `again(&self) -> Self` of an imported `impl Trait` value keeps

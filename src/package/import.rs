@@ -3607,12 +3607,18 @@ fn lends(signature: &representability::signature::Signature) -> u32 {
             .opaques()
             .iter()
             .any(|opaque| opaque.definition() == definition.as_bytes()));
+    // An async fn's future holds every input the call takes, as rustc's
+    // desugaring moves each into it: the future keeps their borrows while
+    // it lives, as the runtime leases them (D683.2).
+    let future = is_future(output);
     let captured = signature
         .inputs()
         .iter()
         .enumerate()
         .filter(|(_, input)| {
-            opaque && matches!(input, Type::Parameter(parameter) if names(output, *parameter))
+            future
+                || opaque
+                    && matches!(input, Type::Parameter(parameter) if names(output, *parameter))
         })
         .filter_map(|(index, _)| u32::try_from(index).ok());
     signature
@@ -3622,6 +3628,13 @@ fn lends(signature: &representability::signature::Signature) -> u32 {
         .chain(captured)
         .filter(|index| *index < 32)
         .fold(0, |bits, index| bits | 1 << index)
+}
+
+/// Whether `ty` is a future, the type an imported `async fn`'s output, or
+/// any `impl Future`, crosses as.
+fn is_future(ty: &representability::convert::Type) -> bool {
+    matches!(ty, representability::convert::Type::Nominal { definition, .. }
+        if *definition == rawr_import::surface::identity::Definition::future())
 }
 
 /// The inputs of `signature`, by bit, whose `&mut` value keeps the
