@@ -820,16 +820,39 @@ impl Parser<'_> {
         (lazy, vec![lazy::NEXT.to_string().into(), "()".into()])
     }
 
-    /// `&mut it` of a local iterator, std's `impl Iterator for &mut I`: a
-    /// chain that steps the local where it is.
+    /// `&mut it` of an iterator place, std's `impl Iterator for &mut I`: a
+    /// chain that steps the place where it is.
     pub(super) fn borrowed_iterator(
         &mut self,
         place: &ParsedExpr,
         item: Ty,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
-        if let Some(Lvalue::Binding { binding, .. }) = &place.lvalue {
-            self.require_mutable_binding(binding, place.span)?;
+        match &place.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => {
+                self.require_mutable_binding(binding, place.span)?;
+            }
+            Some(lvalue) => {
+                if let Some(error) = self.immutable_borrow(place, expression) {
+                    return Err(error);
+                }
+                if let Some(binding) = self.mutation_binding(lvalue.binding())
+                    && !binding.mutable
+                    && matches!(binding.kind, BindingKind::Receiver { .. })
+                {
+                    let written = self.written(expression).and_then(|text| {
+                        Some(
+                            text.strip_prefix('&')?
+                                .trim_start()
+                                .strip_prefix("mut")?
+                                .trim_start()
+                                .to_owned(),
+                        )
+                    });
+                    return Err(self.receiver_borrow(&binding.ty, written, expression));
+                }
+            }
+            None => {}
         }
         self.mutable_use(place, place.span);
         let pipeline = self.place_pipeline(place)?;
@@ -841,6 +864,29 @@ impl Parser<'_> {
     fn place_pipeline(&mut self, place: &ParsedExpr) -> Result<Pipeline, Error> {
         let (item, option) = (self.temporary("item"), self.temporary("option"));
         let (method, arguments) = self.next_method();
+        // A field of the receiver is reached through the receiver's shared
+        // handle, as a closure that changes `self` reaches it, so a chain
+        // kept as a runtime iterator steps the field itself.
+        let mut setup = origin::Fragment::default();
+        let mut through = None;
+        if let Some(Lvalue::Field(field)) = &place.lvalue
+            && field.binding.as_str() == "self"
+            && self.closures.is_empty()
+        {
+            setup.push_text(format!(
+                "let {SELF_CAPTURE} = {share}({slot}{this}); ",
+                share = crate::engine::KEYWORD_SHARE,
+                slot = crate::engine::KEYWORD_SLOT_OF,
+                this = crate::engine::KEYWORD_THIS,
+            ));
+            let mut shared = place.clone();
+            shared.lvalue = Some(Lvalue::Field(lvalue::Field {
+                binding: SELF_CAPTURE.into(),
+                ..field.clone()
+            }));
+            through = Some(shared);
+        }
+        let place = through.as_ref().unwrap_or(place);
         let next = self.mutation_call(place, &method, arguments)?;
         let mut entry = origin::Fragment::plain(format!("let {option} = "));
         entry.push(next);
@@ -853,6 +899,10 @@ impl Parser<'_> {
         entry.push_text("; ");
         let mut pipeline = Self::loop_pipeline(item);
         pipeline.segments[0].entry = entry;
+        if through.is_some() {
+            pipeline.setup = setup;
+            pipeline.names.push(SELF_CAPTURE.into());
+        }
         Ok(pipeline)
     }
 

@@ -3198,6 +3198,76 @@ main();
 }
 
 #[test]
+fn a_mut_of_a_std_iterator_field_steps_the_field() {
+    // std's `impl Iterator for &mut I` of a field: a `for`, `by_ref`, a
+    // generic `&mut I` and a kept chain each go on where the last stopped
+    // (#2500).
+    let output = printed(
+        r#"
+struct S { it: std::vec::IntoIter<i32> }
+fn first_two<I: Iterator<Item = i32>>(i: &mut I) -> Vec<i32> { i.take(2).collect() }
+impl S {
+    fn word(&mut self) -> Option<i32> {
+        for w in &mut self.it { return Some(w * 10); }
+        None
+    }
+    fn pair(&mut self) -> Vec<i32> { self.it.by_ref().take(2).collect() }
+    fn kept(&mut self) -> Option<i32> {
+        let mut two = (&mut self.it).skip(1);
+        two.next()
+    }
+}
+fn main() {
+    let mut s = S { it: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].into_iter() };
+    let a: Vec<i32> = s.it.by_ref().take(2).collect();
+    let b = first_two(&mut s.it);
+    println!("{:?} {:?} {:?} {:?} {:?}", a, b, s.word(), s.pair(), s.kept());
+    let mut c = Vec::new();
+    for x in &mut s.it { c.push(x); }
+    println!("{:?} {:?}", c, s.it.next());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[1, 2] [3, 4] Some(50) [6, 7] Some(9)\n[10, 11, 12] None\n"
+    );
+    let report = refused(
+        r#"
+struct S { it: std::vec::IntoIter<i32> }
+fn main() {
+    let s = S { it: vec![1, 2].into_iter() };
+    for x in &mut s.it { println!("{}", x); }
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0596]: cannot borrow `s.it` as mutable, as `s` is not declared as mutable"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+struct S { it: std::vec::IntoIter<i32> }
+impl S {
+    fn all(&self) { for x in &mut self.it { println!("{}", x); } }
+}
+fn main() { S { it: vec![1].into_iter() }.all(); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0596]: cannot borrow `self.it` as mutable, as it is behind a `&` reference"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
 fn a_generic_over_a_std_writer_runs_stds_impl() {
     // std's `impl fmt::Write for String` and `impl io::Write for Vec<u8>`
     // are what a generic bounded by the trait runs, and `write!` is the

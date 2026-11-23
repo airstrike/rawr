@@ -1851,7 +1851,14 @@ impl<'a> Parser<'a> {
                 value.prelude = origin::Fragment::default();
             }
             if value.source.as_str().trim_start().starts_with('{') {
+                // An iterator's chain stays the wrapped value's, so a `for`
+                // over it runs the chain in its own loop.
+                let chain = self.pipelines.remove(value.source.as_str());
                 value.source = std::mem::take(&mut value.source).surrounded("(", ")");
+                if let Some(chain) = chain {
+                    self.pipelines
+                        .insert(value.source.as_str().to_owned(), chain);
+                }
             }
             value
         })
