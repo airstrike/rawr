@@ -13547,3 +13547,53 @@ main();
          xyz 0\n[49, 50, 51] [52, 53]\nErr(UnexpectedEof) [49, 50, 51] []\n2 [55, 56] [57]\n"
     );
 }
+
+#[test]
+fn as_deref_mut_runs_a_programs_deref_mut_on_the_payload_where_it_is() {
+    // `o.as_deref_mut()` of an `Option<W>` whose `W` has the program's
+    // `DerefMut` calls `deref_mut` once on the payload in `o`, so a push
+    // through what it gives changes `o`; `None` gives `None`. Using `o`
+    // while the result lives is rustc's E0502, and an immutable `o` its
+    // E0596 (#816). The output and the reports are rustc's.
+    let head = r#"
+use std::ops::{Deref, DerefMut};
+#[derive(Debug)]
+struct W(Vec<i64>);
+impl Deref for W { type Target = Vec<i64>; fn deref(&self) -> &Vec<i64> { &self.0 } }
+impl DerefMut for W { fn deref_mut(&mut self) -> &mut Vec<i64> { println!("deref_mut"); &mut self.0 } }
+"#;
+    let output = printed(&format!(
+        "{head}{}",
+        r#"
+fn main() {
+    let mut o = Some(W(vec![1]));
+    if let Some(v) = o.as_deref_mut() { v.push(3); }
+    println!("{:?}", o);
+    let mut n: Option<W> = None;
+    println!("{:?}", n.as_deref_mut());
+    let v: Option<&mut Vec<i64>> = o.as_deref_mut();
+    v.unwrap().push(4);
+    println!("{:?} {:?}", o.as_deref(), o.as_ref().map(|w| w.len()));
+}
+main();
+"#
+    ));
+    assert_eq!(
+        output,
+        "deref_mut\nSome(W([1, 3]))\nNone\nderef_mut\nSome([1, 3, 4]) Some(3)\n"
+    );
+    for (body, report) in [
+        (
+            "let mut o = Some(W(vec![])); let v = o.as_deref_mut(); o.is_some(); \
+             v.unwrap().push(1);",
+            "error[E0502]: cannot borrow `o` as immutable because it is also borrowed as mutable",
+        ),
+        (
+            "let o = Some(W(vec![])); o.as_deref_mut();",
+            "error[E0596]: cannot borrow `o` as mutable, as it is not declared as mutable",
+        ),
+    ] {
+        let refused = refused(&format!("{head}fn main() {{ {body} }}\nmain();\n"));
+        assert!(refused.starts_with(report), "{body}\n{refused}");
+    }
+}
