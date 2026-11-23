@@ -10375,6 +10375,46 @@ main();
 }
 
 #[test]
+fn a_closure_storing_its_parameter_in_a_capture_stores_what_each_call_gives() {
+    // `|r| w.push(r)`, whose parameter's type the body infers, has `r`'s
+    // region be `w`'s: each call's argument is stored in `w` (#148).
+    refused_as(&[
+        (
+            "fn main() { let mut w: Vec<&i32> = Vec::new(); { let x = 1; let mut g = |r| w.push(r); \
+             g(&x); } println!(\"{:?}\", w); }",
+            "error[E0597]: `x` does not live long enough\n --> <script>:1:90",
+        ),
+        (
+            "fn main() { let mut x = 1; let mut w: Vec<&i32> = Vec::new(); let mut g = |r| w.push(r); \
+             g(&x); x = 2; println!(\"{:?} {}\", w, x); }",
+            "error[E0506]: cannot assign to `x` because it is borrowed",
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn main() {
+    let mut x = 1;
+    let y = 2;
+    let mut w: Vec<&i32> = Vec::new();
+    {
+        let mut g = |r| w.push(r);
+        g(&y);
+        g(&y);
+    }
+    let mut n = 0;
+    let mut h = |r: &i32| n += *r;
+    h(&x);
+    x = 3;
+    h(&x);
+    println!("{:?} {} {}", w, n, x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[2, 2] 4 3\n");
+}
+
+#[test]
 fn std_from_runs_char_byte_text_and_slice_conversions() {
     // std's `From<char> for u32`, `From<u8> for char`, `From<&str> for
     // Vec<u8>`, `From<&[T]> for Vec<T>` and `From<Vec<T>> for Box<[T]>`,

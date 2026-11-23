@@ -215,6 +215,10 @@ pub(crate) struct Closure {
     /// the path below it, and whether the place is copied rather than
     /// moved.
     pub(crate) by_value: Vec<(Span, Vec<Projection>, bool)>,
+    /// Each parameter whose borrows its body stores in what it captured
+    /// (`|r| w.push(r)`), by its position, and its local: a call gives it
+    /// the borrows its argument holds there.
+    pub(crate) given: Vec<(usize, Local)>,
 }
 
 /// A local a closure captures, as the lowering knows it: where it is
@@ -1550,6 +1554,7 @@ impl Recorder {
         body: ClosureBody,
         captured: &[Captured],
         parameters: &[Span],
+        free: &[Span],
         tail: Option<Held>,
         moved: bool,
         span: Span,
@@ -1727,7 +1732,15 @@ impl Recorder {
                 .push(Origin::Loan(loan));
         }
         // What the body stores in a local it captured by reference, traced
-        // back to what the closure captured, flows into that local.
+        // back to what the closure captured, flows into that local. So does
+        // a parameter's, whose type the body infers (`|r| w.push(r)`): its
+        // region is the captured local's, and each call gives it what its
+        // argument holds.
+        let free: BTreeSet<Local> = free
+            .iter()
+            .filter_map(|declaration| self.locals.get(declaration).copied())
+            .collect();
+        let mut given = Vec::new();
         if !stored.is_empty() {
             let tracer = Tracer {
                 body: &self.body,
@@ -1739,6 +1752,7 @@ impl Recorder {
                     .iter()
                     .filter_map(|declaration| self.locals.get(declaration).copied())
                     .collect(),
+                free: &free,
                 captures: &by_local,
             };
             let mut flows = Vec::new();
@@ -1758,6 +1772,16 @@ impl Recorder {
                     path,
                     at,
                 }));
+            }
+            for (index, declaration) in parameters.iter().enumerate() {
+                if let Some(&local) = self.locals.get(declaration)
+                    && free.contains(&local)
+                    && flows
+                        .iter()
+                        .any(|flow| matches!(flow.from, Origin::Local(from, _) if from == local))
+                {
+                    given.push((index, local));
+                }
             }
             self.body.flows.extend(flows);
         }
@@ -1779,6 +1803,7 @@ impl Recorder {
                     .iter()
                     .filter_map(|declaration| self.locals.get(declaration).copied())
                     .collect(),
+                free: &BTreeSet::new(),
                 captures: &by_local,
             };
             let mut kept = Vec::new();
@@ -1800,6 +1825,7 @@ impl Recorder {
             mutable,
             copy: copy_closure,
             by_value,
+            given,
         }
     }
 
@@ -1817,6 +1843,24 @@ impl Recorder {
     /// written there.
     pub(crate) fn closure_keeps(&self, span: Span) -> Option<&Option<Held>> {
         self.closure_keeps.get(&span)
+    }
+
+    /// A call of the closure `key` here gives each parameter its body
+    /// stores (`Closure::given`) what the argument at its position holds,
+    /// by the arguments' spans.
+    pub(crate) fn give(&mut self, key: &crate::item::Key, arguments: &[Span]) {
+        let Some(closure) = self.closures.get(key) else {
+            return;
+        };
+        for (index, local) in closure.given.clone() {
+            if let Some(held) = arguments
+                .get(index)
+                .and_then(|argument| self.origins.get(argument))
+                .cloned()
+            {
+                self.flow_into(local, &held);
+            }
+        }
     }
 
     /// The closure `key` of this body, if these facts know it.
@@ -2435,6 +2479,9 @@ struct Tracer<'a> {
     /// each to the captured local.
     upvars: BTreeMap<Local, Local>,
     parameters: BTreeSet<Local>,
+    /// The parameters whose types the body infers, whose borrows are what
+    /// each call gives them.
+    free: &'a BTreeSet<Local>,
     /// For each captured local: whether it is captured by reference, and
     /// the loans of its captures.
     captures: &'a BTreeMap<Local, (bool, Vec<Origin>)>,
@@ -2487,6 +2534,10 @@ impl Tracer<'_> {
                 }
                 if let Some(captured) = self.upvars.get(&local) {
                     kept.push(Origin::local(*captured));
+                    return true;
+                }
+                if self.free.contains(&local) {
+                    kept.push(Origin::local(local));
                     return true;
                 }
                 if self.parameters.contains(&local) {
