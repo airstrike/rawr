@@ -12768,6 +12768,30 @@ fn a_local_key_method_of_another_impl_is_rustcs_e0599_with_its_notes() {
 }
 
 #[test]
+fn a_renamed_std_type_names_its_functions() {
+    // `use std::time::Duration as Span;` binds std's `Duration`, so
+    // `Span::from_millis` is its function, called or as a value, as a type
+    // it names already was (#344).
+    let output = printed(
+        r#"
+use std::time::Duration as Span;
+use std::time::Instant as Moment;
+fn wait(s: Span) -> Span {
+    s + Span::from_millis(1)
+}
+fn main() {
+    let c: Span = Span::from_secs(1);
+    let f = Span::from_secs;
+    println!("{:?} {:?} {:?} {:?}", c, wait(Span::ZERO), Span::from_secs_f64(0.25), f(3));
+    println!("{}", Moment::now().elapsed() < Span::from_secs(60));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1s 1ms 250ms 3s\ntrue\n");
+}
+
+#[test]
 fn an_outside_crate_s_head_leaves_its_arguments_to_their_scope() {
     // `::core::cmp::max`'s head is the crate `core`, which no `use`
     // shadows, but its arguments, and a type's generic arguments, read

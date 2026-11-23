@@ -684,10 +684,16 @@ fn a_crate_with_no_usable_item_says_why_its_item_cant_be_used() {
 /// name, as Cargo builds the binary with the library as a dependency
 /// (#1164): it calls the library's `run`, generic over the binary's own
 /// state and message types, with its own functions, and uses the
-/// library's type by a `use` and by its path.
+/// library's type by a `use` and by its path. It calls the library's tuple
+/// struct's constructor (#1168), a module's function through a local
+/// (#874), and a function of std's `Duration`, which the library
+/// re-exports as `Ride` (#344).
 #[test]
 fn a_marked_binary_names_its_packages_library_by_the_crate_name() {
-    lane_runs_as_cargo_does(&OWN_LIBRARY.lease(&[]), "floor 2 after 4 trips\ntrue\n");
+    lane_runs_as_cargo_does(
+        &OWN_LIBRARY.lease(&[]),
+        "floor 2 after 4 trips\ntrue\nWing('b') b door 4 1.5s 2s\n",
+    );
 }
 
 /// A generic trait's provided method that gives an opaque `impl Total`,

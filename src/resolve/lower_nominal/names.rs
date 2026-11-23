@@ -120,14 +120,17 @@ impl<'a> Parser<'a> {
     /// through the `use` that binds its first segment, from std's root, or
     /// through the edition's prelude. `None` for a path whose first
     /// segment the program declares (a type, a generic parameter, an alias)
-    /// or nothing in scope makes std's. A module the std facade holds
-    /// (`rawr_std::sync`) is its std path, and a std type Rawr represents
-    /// its canonical path (`std_path::canonical`).
+    /// or nothing in scope makes std's. A `use` that renames a std type
+    /// binds std's path, as `Span` after `use std::time::Duration as
+    /// Span;` is `std::time::Duration`, though a type it names reads as
+    /// an alias (#344). A module the std facade holds (`rawr_std::sync`)
+    /// is its std path, and a std type Rawr represents its canonical path
+    /// (`std_path::canonical`).
     pub(super) fn std_scoped(&self, path: &str) -> Option<String> {
         let first = path.split("::").next().unwrap_or(path);
         if self.generics.contains_key(first)
             || self.models.get(first).is_some()
-            || self.models.alias(first).is_some()
+            || self.models.alias(first).is_some() && self.models.import(first).is_none()
         {
             return None;
         }

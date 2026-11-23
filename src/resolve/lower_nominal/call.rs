@@ -817,6 +817,24 @@ impl<'a> Parser<'a> {
             Some(function) => (function.source.surrounded("(", ")"), function.ty),
             None => (callee, ty),
         };
+        // `let f = styles::warning; f(&theme)`: a crate function's item
+        // names the one function its call reaches, as rustc's type of it
+        // does (#874).
+        #[cfg(feature = "rust-import")]
+        if let Ty::ImportedFunctionItem {
+            item: Some(proof), ..
+        } = self.inference.resolve(&ty)
+        {
+            let ImportedFunctionProof { item, owner, .. } = *proof;
+            let (arguments, end) = self.parse_call_arguments("function arguments")?;
+            let mut inputs = Vec::with_capacity(arguments.len());
+            for mut argument in arguments {
+                self.move_local(&mut argument)?;
+                inputs.push(argument);
+            }
+            let call = span(name_span.start(), end);
+            return self.call_host_function(&[item], Some(owner), inputs, call);
+        }
         let choice = matches!(ty, Ty::FnChoice { .. });
         // A crate function's signature says what its value keeps; a
         // closure's body does.
