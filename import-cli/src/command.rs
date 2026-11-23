@@ -227,10 +227,9 @@ fn program(
         return rawr_cli::on_base(loaded, check, arguments, handed);
     }
     let rawr_cli::base::Loaded { target, graph, .. } = loaded;
-    // rustc checks the crate while Rawr works.
-    let cargo = rawr_cli::cargo::begin(&graph);
     if check {
-        let cargo = cargo.map(owner::Checking::start);
+        // rustc checks the crate while Rawr works.
+        let cargo = rawr_cli::cargo::begin(&graph).map(owner::Checking::start);
         rawr_import::progress::begin_phases();
         let checked = owner::check(&target, Some(graph), &Plain::PROGRAM);
         rawr_import::progress::phase("checking");
@@ -255,6 +254,8 @@ fn program(
             ExitCode::FAILURE
         };
     }
+    // rustc checks the crate once the runner is built.
+    let cargo = rawr_cli::cargo::defer(&graph);
     let ran = owner::run_program(
         &target,
         Some(graph),
@@ -307,8 +308,8 @@ fn tests(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
         return rawr_cli::harness::run(loaded, &options);
     }
     let rawr_cli::base::Loaded { target, graph, .. } = loaded;
-    // rustc checks the tests while Rawr works.
-    let cargo = rawr_cli::cargo::begin_tests(&graph);
+    // rustc checks the tests once the runner is built.
+    let cargo = rawr_cli::cargo::defer_tests(&graph);
     ended(owner::run_tests(
         &target,
         graph,

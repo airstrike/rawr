@@ -184,6 +184,43 @@ impl Checking {
     }
 }
 
+/// The project's `cargo check` beside `rawr run` or `rawr test`, read for
+/// its status alone: the runner's own build settles the shared bindings
+/// (D609.4), so no build script's outputs are read. It waits for the
+/// first runner build to end ([`Companion::started`]), and is reaped as it
+/// ends.
+enum Companion {
+    /// Not started yet.
+    Deferred(rawr_cli::cargo::Deferred),
+    /// Running, waited for on a thread of its own.
+    Running(std::thread::JoinHandle<rawr_cli::cargo::Status>),
+}
+
+impl Companion {
+    /// The check, started now unless it already runs.
+    #[must_use]
+    fn started(self) -> Self {
+        match self {
+            Self::Deferred(deferred) => {
+                let pending = deferred.start();
+                Self::Running(std::thread::spawn(move || pending.finish()))
+            }
+            running @ Self::Running(_) => running,
+        }
+    }
+
+    /// What the check said, once it ends; started now if it wasn't.
+    #[must_use]
+    fn finish(self) -> rawr_cli::cargo::Status {
+        match self {
+            Self::Deferred(deferred) => deferred.start().finish(),
+            Self::Running(thread) => thread
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        }
+    }
+}
+
 /// Publish, or refuse, the shared bindings a check used or extracted, once
 /// the project's own `cargo check` has run their build scripts, as a run
 /// does after its runner build (D609.4, #661). A `cargo check` that failed
@@ -243,6 +280,7 @@ pub fn run(
         None,
         &cells,
         &mut kept,
+        &mut None,
     )
     .map_err(Unchecked::into_report);
     events(ran.as_ref().map_err(Some), None);
@@ -284,16 +322,17 @@ pub fn run_program(
     graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
     arguments: &[std::ffi::OsString],
-    cargo: Option<rawr_cli::cargo::Pending>,
+    cargo: Option<rawr_cli::cargo::Deferred>,
     handed: Option<rawr_cli::events::Handed>,
     answers: rawr::project::cargo::Answers,
 ) -> Result<i32, Option<diagnostic::Report>> {
     // Ctrl-C at the terminal ends the program with SIGINT, as a shell
     // reports it.
     const INTERRUPTED: i32 = 128 + 2;
-    // Cargo is reaped as it ends, not when the session first ends, so no
-    // finished check is left a zombie through a long start or run.
-    let mut cargo = cargo.map(Checking::start);
+    // Cargo starts once the first runner is built, and is reaped as it
+    // ends, not when the session first ends, so no finished check is left
+    // a zombie through a long run.
+    let mut cargo = cargo.map(Companion::Deferred);
     let program = rawr_import::process::Arguments {
         name: rawr_cli::supervise::program_name(target),
         arguments: arguments.to_vec(),
@@ -337,6 +376,7 @@ pub fn run_program(
         reload.as_ref(),
         &cells,
         &mut kept,
+        &mut cargo,
     );
     loop {
         let restarted = matches!(ran, Ok(Ended::Restart(..)));
@@ -346,7 +386,7 @@ pub fn run_program(
         let checked = if restarted {
             None
         } else {
-            let pending = cargo.take().map(|checking| checking.finish().status);
+            let pending = cargo.take().map(Companion::finish);
             match &ran {
                 Err(unchecked) if unchecked.is_copy() && pending.is_none() => {
                     checked_now(&location(target), kept.cargo())
@@ -434,6 +474,7 @@ pub fn run_program(
             reload.as_ref(),
             &cells,
             &mut kept,
+            &mut cargo,
         );
     }
 }
@@ -452,7 +493,7 @@ pub fn run_tests(
     graph: rawr::package::Graph,
     profile: &dyn crate::Profile,
     arguments: &[std::ffi::OsString],
-    cargo: Option<rawr_cli::cargo::Pending>,
+    cargo: Option<rawr_cli::cargo::Deferred>,
     answers: rawr::project::cargo::Answers,
 ) -> Result<i32, Option<diagnostic::Report>> {
     let program = rawr_import::process::Arguments {
@@ -462,8 +503,9 @@ pub fn run_tests(
         output: None,
     };
     let lifecycle = rawr_import::process::Lifecycle::Run;
-    // Cargo is reaped as it ends, as for a run.
-    let cargo = cargo.map(Checking::start);
+    // Cargo starts once the first runner is built, and is reaped as it
+    // ends, as for a run.
+    let mut cargo = cargo.map(Companion::Deferred);
     let mut origin = Origin::graph(Some(graph));
     let mut kept = crate::Kept::with_cargo(answers);
     let cells = cells(target, profile, &mut kept);
@@ -477,6 +519,7 @@ pub fn run_tests(
             None,
             &cells,
             &mut kept,
+            &mut cargo,
         ) {
             Ok(Ended::Restart(_, prepared)) => {
                 origin = Origin {
@@ -488,7 +531,7 @@ pub fn run_tests(
             Err(unchecked) => break Err(unchecked),
         }
     };
-    let checked = cargo.map(|checking| checking.finish().status);
+    let checked = cargo.map(Companion::finish);
     let checked = match (&ran, checked) {
         (Err(unchecked), None) if unchecked.is_copy() => {
             checked_now(&location(target), kept.cargo())
@@ -602,7 +645,9 @@ impl Origin {
 /// `reload`'s connections hear it restarted. Each save reads the program's
 /// unchanged sources from their parses in `cells`, and parses only those
 /// whose text changed (#1604). Each save shares the API graph `kept`, which
-/// outlasts the session (#1822).
+/// outlasts the session (#1822). The project's `cargo` check starts once
+/// the session's first runner build ends, so the runner never waits behind
+/// it for the build directory's lock (#2655).
 #[allow(clippy::too_many_arguments)]
 fn session(
     target: &rawr::project::Target,
@@ -613,6 +658,7 @@ fn session(
     reload: Option<&rawr_cli::events::reload::Stream>,
     cells: &rawr::package::Cells,
     kept: &mut crate::Kept,
+    cargo: &mut Option<Companion>,
 ) -> Result<Ended, Unchecked> {
     same_build(target, kept.versions())?;
     // Each save that changes Rawr source reads the same API fragments.
@@ -651,6 +697,7 @@ fn session(
         program,
         Some(&mut *kept),
     );
+    *cargo = cargo.take().map(Companion::started);
     rawr_import::progress::finish(initial.is_ok());
     start.tell();
     let Some((mut lane, mut adapter, mut manifests, mut native_baseline)) = initial? else {

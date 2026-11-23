@@ -212,12 +212,19 @@ pub enum Status {
 }
 
 /// Bring `Cargo.lock` up to date with `Cargo.toml` before `cargo check`
-/// starts, when it is missing or older. Rawr reads the same lock to build
-/// the crate's native part at the same time, and a lock that changes under
+/// starts, when it is missing or older, unless `manifest` is a script's
+/// file, whose check package has a lock of its own. Rawr reads the same
+/// lock to build the crate's native part, and a lock that changes under
 /// it fails that build. `cargo update --workspace` adds what the manifest
 /// added and leaves every other locked version as it is. Best effort:
 /// `cargo check` reports any problem.
 fn settle_lock(program: &OsString, manifest: &Path) {
+    if manifest
+        .extension()
+        .is_some_and(|extension| extension == "rs")
+    {
+        return;
+    }
     // A workspace member's lock is the workspace root's.
     let lock = manifest.parent().map_or_else(
         || manifest.with_file_name("Cargo.lock"),
@@ -269,7 +276,8 @@ impl Running {
     /// options select one, with the command's feature flags, in the
     /// `profile` it checks with (`check`, or `test` for `cfg(test)`), or
     /// say why it didn't start: cargo is unavailable, or a script's
-    /// manifest failed as cargo's would.
+    /// manifest failed as cargo's would. The caller settles the lock
+    /// first ([`settle_lock`]).
     fn start(
         program: &OsString,
         manifest: &Path,
@@ -305,7 +313,6 @@ impl Running {
                 command.current_dir(directory);
             }
         } else {
-            settle_lock(program, manifest);
             command
                 .arg("check")
                 .args(format())
@@ -389,6 +396,7 @@ impl Pending {
     /// [`Pending::start`] with an explicit cargo command.
     #[must_use]
     pub fn start_with(program: &OsString, manifest: &Path) -> Self {
+        settle_lock(program, manifest);
         Self(Running::start(program, manifest, &[], Profile::Check))
     }
 
@@ -437,8 +445,57 @@ pub fn begin_tests(graph: &rawr::package::Graph) -> Option<Pending> {
 }
 
 fn begin_in(graph: &rawr::package::Graph, profile: Profile) -> Option<Pending> {
-    let target = selection(graph);
-    manifest(graph).map(|manifest| Pending(Running::start(&program(), &manifest, &target, profile)))
+    defer_in(graph, profile).map(Deferred::start)
+}
+
+/// A `cargo check` whose lock is settled now and which starts later, for
+/// `rawr run` and `rawr test`: it starts once the runner is built, so the
+/// runner's build never waits behind it for the build directory's lock,
+/// and a cold start doesn't build the dependency graph twice at once.
+#[must_use = "a deferred check runs only once it is started"]
+pub struct Deferred {
+    program: OsString,
+    manifest: PathBuf,
+    target: Vec<OsString>,
+    profile: Profile,
+}
+
+impl Deferred {
+    /// Start `cargo check` now.
+    #[must_use]
+    pub fn start(self) -> Pending {
+        Pending(Running::start(
+            &self.program,
+            &self.manifest,
+            &self.target,
+            self.profile,
+        ))
+    }
+}
+
+/// [`begin`], started later: the lock is settled now, so the program's
+/// own load and build read the same lock the check does.
+#[must_use]
+pub fn defer(graph: &rawr::package::Graph) -> Option<Deferred> {
+    defer_in(graph, Profile::Check)
+}
+
+/// [`begin_tests`], started later, as [`defer`] is.
+#[must_use]
+pub fn defer_tests(graph: &rawr::package::Graph) -> Option<Deferred> {
+    defer_in(graph, Profile::Test)
+}
+
+fn defer_in(graph: &rawr::package::Graph, profile: Profile) -> Option<Deferred> {
+    let manifest = manifest(graph)?;
+    let program = program();
+    settle_lock(&program, &manifest);
+    Some(Deferred {
+        program,
+        manifest,
+        target: selection(graph),
+        profile,
+    })
 }
 
 /// The profile a `cargo check` builds with.
@@ -580,6 +637,7 @@ impl Background {
                     }
                     if due.is_some_and(|due| Instant::now() >= due) {
                         due = None;
+                        settle_lock(&program, &manifest);
                         match Running::start(&program, &manifest, &[], Profile::Check) {
                             Ok(started) => running = Some(started),
                             Err(status) => {
