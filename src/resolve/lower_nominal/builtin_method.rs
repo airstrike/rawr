@@ -779,7 +779,7 @@ impl<'a> Parser<'a> {
         member: &str,
     ) -> Result<ParsedExpr, Error> {
         let open = self.expect(Token::LeftParen, "'(' after the method")?;
-        let bounds = self.parse_range_or_expr()?;
+        let (bounds, first) = self.parse_range_argument(&value)?;
         let replacement = if member == "replace_range" {
             self.expect(Token::Comma, "',' after `replace_range`'s range")?;
             let mut with = self.parse_expr()?;
@@ -817,6 +817,7 @@ impl<'a> Parser<'a> {
         ];
         let helper = self.push_op(Op::Prelude(PreludeOp::StrChange));
         let source = self.mutation_call(&value, &helper, operands)?;
+        let source = Self::after_statement(first, source);
         let ty = match replacement {
             Some(_) => Ty::Unit,
             None => Ty::iter(Ty::Char),

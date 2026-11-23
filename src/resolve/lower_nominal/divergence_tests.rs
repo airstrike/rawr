@@ -3268,6 +3268,49 @@ main();
 }
 
 #[test]
+fn a_declared_std_io_trait_keeps_a_std_receivers_own_method() {
+    // The program's `impl Read` and `impl Write`, and `dyn` of each, put
+    // std's traits in its trait table; a `Cursor`'s `read_to_string` and
+    // `Stdout`'s `write_all` and `flush` are still std's own (#1286).
+    let output = printed(
+        r#"
+use std::io::{Cursor, Read, Write};
+struct Z(u8);
+impl Read for Z {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.0 == 0 { return Ok(0); }
+        buf[0] = b'a' + self.0;
+        self.0 -= 1;
+        Ok(1)
+    }
+}
+struct Sink(Vec<u8>);
+impl Write for Sink {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { self.0.extend_from_slice(b); Ok(b.len()) }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+fn all(r: &mut dyn Read) -> String { let mut s = String::new(); r.read_to_string(&mut s).unwrap(); s }
+fn put(w: &mut dyn Write) { w.write_all(b"w").unwrap(); }
+fn main() {
+    let mut c = Cursor::new(b"xy".to_vec());
+    let mut s = String::new();
+    let n = c.read_to_string(&mut s).unwrap();
+    let mut z = Z(3);
+    let mut sink = Sink(Vec::new());
+    put(&mut sink);
+    sink.write_all(b"!").unwrap();
+    let mut out = std::io::stdout();
+    out.write_all(b"out\n").unwrap();
+    out.flush().unwrap();
+    println!("{} {:?} {:?} {:?}", n, s, all(&mut z), sink.0);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "out\n2 \"xy\" \"dcb\" [119, 33]\n");
+}
+
+#[test]
 fn a_generic_over_a_std_writer_runs_stds_impl() {
     // std's `impl fmt::Write for String` and `impl io::Write for Vec<u8>`
     // are what a generic bounded by the trait runs, and `write!` is the
@@ -7225,6 +7268,31 @@ main();
         "[\"abc\", \"abc\", \"abc\"] [(0, \"abc\"), (5, \"abc\"), (10, \"abc\")]\n\
          -XX-YYabc abcXabcYYabc 2\n[1, 3, 4] a,b,,c\n"
     );
+}
+
+#[test]
+fn drain_takes_a_range_value_no_place_holds() {
+    // A range a call gives is std's `RangeBounds<usize>` too: `drain` and
+    // `replace_range` read its bounds once, after the call runs (#2522).
+    let output = printed(
+        r#"
+fn make() -> std::ops::Range<usize> { println!("make"); 1..3 }
+fn upto() -> std::ops::RangeToInclusive<usize> { ..=1 }
+fn main() {
+    let mut v = vec![1, 2, 3, 4, 5];
+    let d: Vec<i32> = v.drain(make()).collect();
+    println!("{:?} {:?}", d, v);
+    let e: Vec<i32> = v.drain(upto()).collect();
+    println!("{:?} {:?}", e, v);
+    let mut s = String::from("hello");
+    let t: String = s.drain(make()).collect();
+    s.replace_range(upto(), "J");
+    println!("{} {}", t, s);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "make\n[2, 3] [1, 4, 5]\n[1, 4] [5]\nmake\nel Jo\n");
 }
 
 #[test]
