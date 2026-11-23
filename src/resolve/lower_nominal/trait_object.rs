@@ -182,8 +182,7 @@ impl Parser<'_> {
         mutable: bool,
         value: &mut ParsedExpr,
     ) {
-        let concrete = self.unreferenced(concrete);
-        let Some(owner) = owner_id(&concrete) else {
+        let Some(owner) = owner_id(&self.unreferenced(concrete)) else {
             return;
         };
         let keyed = self
@@ -227,7 +226,7 @@ impl Parser<'_> {
         }
         self.pending_objects.push(Pending {
             placeholder,
-            ty: concrete,
+            ty: concrete.clone(),
             trait_name: trait_name.clone(),
             arguments: arguments.into(),
             span: value.span,
@@ -253,7 +252,7 @@ impl Parser<'_> {
             .collect::<Vec<_>>();
         for (ty, trait_name, arguments) in pending {
             let ty = self.inference.resolve(&ty);
-            let Some(owner) = owner_id(&ty) else {
+            let Some(owner) = owner_id(&self.unreferenced(&ty)) else {
                 continue;
             };
             let reached = self.object_traits(&trait_name, &arguments);
@@ -261,6 +260,7 @@ impl Parser<'_> {
                 continue;
             };
             let definitions = self.object_impls(owner, reached);
+            let ty = self.impl_self_of(&definitions, &ty);
             if let Some(definition) = self.fitting_impl(definitions, &ty) {
                 self.impl_at(&definition, &ty, &arguments);
             }
@@ -383,11 +383,12 @@ impl Parser<'_> {
     /// keyed `key`, reaches: the impl rustc's vtable for `ty` holds, at
     /// `ty`'s arguments.
     fn object_arm(&mut self, ty: &Ty, reached: Reached, key: Key, span: Span) -> Result<(), Error> {
-        let owner = owner_id(ty).expect("a keyed object's type has an owner");
+        let owner = owner_id(&self.unreferenced(ty)).expect("a keyed object's type has an owner");
         let definitions = self.object_impls(owner, &reached);
         if !needs_key(&definitions.iter().collect::<Vec<_>>(), &self.models) {
             return Ok(());
         }
+        let ty = &self.impl_self_of(&definitions, ty);
         let Some(definition) = self.fitting_impl(definitions, ty) else {
             return Ok(());
         };

@@ -3744,11 +3744,30 @@ fn resolve_methods(
                         if matches!(path.target, type_ref::Target::Script { .. })
                 )
             });
+            // `impl Describe for &Point` is an impl of `Point`'s, for its
+            // own Self type `&Point`. A std trait's is one only where rawr
+            // calls the trait's impls as a program trait's.
+            let referent = referent(&item.owner);
+            if matches!(item.owner, type_ref::Type::Reference { .. })
+                && declared.name.span == Span::NONE
+                && !declared.std.is_some_and(std_trait::runs_impls)
+            {
+                return Err(LocatedError::primary(
+                    shell.source,
+                    Error::UnsupportedNominalSyntax {
+                        construct: crate::resolve::Unsupported::said(format!(
+                            "an impl of `{}` for a reference is not supported in Rawr yet",
+                            name.text
+                        )),
+                        source: type_span(&item.owner),
+                    },
+                ));
+            }
             // A facade type (`impl From<Shade> for iced::Color`) owns impls
             // under the same rule.
-            let outside = builtin_owner(&item.owner)
+            let outside = builtin_owner(referent)
                 .map(|(code, name)| (Some(code), name))
-                .or_else(|| foreign_owner(&item.owner).map(|path| (None, path)));
+                .or_else(|| foreign_owner(referent).map(|path| (None, path)));
             let builtin = outside
                 .map(|(code, owner_name)| {
                     if declared.name.span == Span::NONE && !local_argument && item.std.is_none() {
@@ -3780,7 +3799,7 @@ fn resolve_methods(
             let (owner_id, owner_name, owner) = match &builtin {
                 Some(owner) => (owner.id(), ImmutableString::from(owner.name()), owner),
                 None => {
-                    let (owner_id, owner_name) = impl_owner(&item.owner)
+                    let (owner_id, owner_name) = impl_owner(referent)
                         .map_err(|error| LocatedError::primary(shell.source, error))?;
                     let owner = definitions
                         .get(&owner_id)
@@ -3918,13 +3937,12 @@ fn resolve_methods(
                 };
                 let key = crate::item::Key::associated(owner.key(), member, kind);
                 let mut definition = method::Definition::new(id, key, owner, &function, source)
-                    .in_generic_impl(
-                        &item.generics,
-                        owner_arguments(&item.owner),
-                        item.owner.span(),
-                    )
+                    .in_generic_impl(&item.generics, owner_arguments(referent), item.owner.span())
                     .with_trait(name.text.clone())
                     .with_trait_arguments(arguments.clone());
+                if matches!(item.owner, type_ref::Type::Reference { .. }) {
+                    definition = definition.for_reference(item.owner.clone());
+                }
                 if from_trait {
                     definition = definition.into_trait_default();
                     if let Some(text) = &declared.declaration {
@@ -6477,6 +6495,15 @@ fn owner_arguments(ty: &type_ref::Type) -> Box<[type_ref::Type]> {
             type_ref::Argument::Lifetime(_) => None,
         })
         .collect()
+}
+
+/// The type whose impls an impl for `ty` is among: `Point` of `impl
+/// Describe for &Point`, which is `Point`'s impl for the Self type `&Point`.
+fn referent(ty: &type_ref::Type) -> &type_ref::Type {
+    match ty {
+        type_ref::Type::Reference { target, .. } => target,
+        ty => ty,
+    }
 }
 
 /// The impls of one owner that declare one member, by their Self types

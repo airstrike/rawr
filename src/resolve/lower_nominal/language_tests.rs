@@ -13108,9 +13108,9 @@ main();
 /// `impl<T: Shape + Copy> Shape for &T` whose every item forwards to `T`'s
 /// impl gives `&T` the trait, as in rustc: a generic function bounded by
 /// it takes a `&Square`, reads `<&Square as Shape>::Unit` as `Square`'s,
-/// and calls `S::name()` through the referent's witness. An impl for a
-/// reference that does anything else is refused, as Rawr runs a reference
-/// as its referent's value.
+/// and calls `S::name()` through the referent's witness. An impl for `&T`
+/// that does anything else is refused, as Rawr runs a reference as its
+/// referent's value.
 #[test]
 fn language_forwarding_impls_for_references() {
     // What the program built by rustc prints.
@@ -13179,11 +13179,6 @@ main();
             "impl<T: Shape + Copy> Shape for &T { fn area(&self) -> i64 { self.area() } \
              fn take(self) -> i64 { T::take(*self) } }",
             "whose `area` does not forward",
-        ),
-        (
-            "struct Square; impl Shape for &Square { fn area(&self) -> i64 { 1 } \
-             fn take(self) -> i64 { 1 } }",
-            "other than the impl's parameter",
         ),
         (
             "impl<T: Copy> Shape for &T { fn area(&self) -> i64 { 1 } \

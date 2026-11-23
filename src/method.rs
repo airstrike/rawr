@@ -88,6 +88,9 @@ pub(crate) struct Definition {
     /// The owner type of an impl for a builtin type (`i64`, `Vec<T>`);
     /// `owner` is then `type_def::Id::builtin`.
     builtin_owner: Option<type_ref::Type>,
+    /// The impl's Self type where it is a reference to the owner: `&Point`
+    /// of `impl Describe for &Point`, an impl of `Point`'s.
+    reference_self: Option<type_ref::Type>,
     /// The text `body` spans when it is not its source's: the declaration
     /// of a facade trait (iced's `canvas::Program`) whose default body this is.
     body_text: Option<ImmutableString>,
@@ -172,6 +175,7 @@ impl Definition {
             owner_arguments: Box::default(),
             owner_span: Span::NONE,
             builtin_owner: None,
+            reference_self: None,
             body_text: None,
             lifetimes: function.lifetimes.clone(),
         }
@@ -197,6 +201,18 @@ impl Definition {
     /// The owner type of an impl for a builtin type.
     pub(crate) const fn builtin_owner(&self) -> Option<&type_ref::Type> {
         self.builtin_owner.as_ref()
+    }
+
+    /// This function of an impl whose Self type `self_ty` is a reference to
+    /// the owner (`impl Describe for &Point`).
+    pub(crate) fn for_reference(mut self, self_ty: type_ref::Type) -> Self {
+        self.reference_self = Some(self_ty);
+        self
+    }
+
+    /// The impl's Self type where it is a reference to the owner.
+    pub(crate) const fn reference_self(&self) -> Option<&type_ref::Type> {
+        self.reference_self.as_ref()
     }
 
     /// This method in `impl<generics> Owner<owner_arguments>`, the self

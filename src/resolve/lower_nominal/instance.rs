@@ -649,7 +649,16 @@ impl Parser<'_> {
                         .methods
                         .contains_key(&(owner, name.as_str().into()))
                 });
-            if !inherent {
+            // A `T` of `&Point`, whose referent's impl a probe on the
+            // instance's receiver would reach before `&Point`'s own.
+            let referent_impl = matches!(ty, Ty::Reference { .. })
+                && super::owner_id(&self.unreferenced(ty)).is_some_and(|owner| {
+                    self.models
+                        .trait_methods
+                        .get(&(owner, name.as_str().into()))
+                        .is_some_and(|definitions| super::traits::for_references(definitions))
+                });
+            if !inherent && !referent_impl {
                 continue;
             }
             let Some(declaring) = self.declaring_bound(generic, name, text) else {
