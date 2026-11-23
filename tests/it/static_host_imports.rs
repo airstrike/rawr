@@ -44,14 +44,17 @@ fn static_import_failures_are_positioned_resolution_errors() {
     assert!(invalid_group.to_string().contains("expected type, found constant `Center` in `iced`"), "{invalid_group}");
     assert_eq!(invalid_group.primary_span().start().position(), Some(11));
 
+    // rustc's E0255 marks the item that redefines the imported name, and
+    // labels the import.
     let duplicate = engine.compile("use iced::Result;\nstruct Result;").unwrap_err();
     assert!(matches!(
         duplicate.err_type(),
-        ParseErrorType::Resolution(resolve::Error::DuplicateItem { name, .. })
+        ParseErrorType::Resolution(resolve::Error::Redefined { name, .. })
             if name == "Result"
     ));
-    assert_eq!(duplicate.primary_span().start().line(), Some(1));
-    assert_eq!(duplicate.secondary_span().unwrap().start().line(), Some(2));
+    assert!(duplicate.to_string().starts_with("error[E0255]: the name `Result` is defined multiple times"), "{duplicate}");
+    assert_eq!(duplicate.primary_span().start().line(), Some(2));
+    assert_eq!(duplicate.secondary_span().unwrap().start().line(), Some(1));
 }
 
 #[test]
