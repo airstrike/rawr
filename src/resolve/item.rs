@@ -227,6 +227,10 @@ pub(crate) struct Generic {
     /// bound" marks it: `Display` of `T: Display`.
     pub written: Box<[(crate::capability::Kind, crate::Span)]>,
     pub traits: Box<[crate::item::Name]>,
+    /// Where each of `traits` the program writes is written, its path
+    /// whole, as rustc's "required by this bound" marks it: `io::Write`
+    /// of `W: io::Write`. A trait's name in `traits` is its last segment.
+    pub written_traits: Box<[(crate::ImmutableString, Span)]>,
     /// Associated type equalities of the bounds: `Output = i64` of
     /// `T: Shape<Output = i64>`.
     /// Each is `(trait, name, type)`: `(Shape, Output, i64)`.
@@ -257,6 +261,16 @@ pub(crate) struct Generic {
     /// lifted parameter is: a call checks the bounds of the type, and the
     /// body assumes them.
     pub fixed: Option<type_ref::Type>,
+}
+
+impl Generic {
+    /// Where the bound `name` of `traits` is written, its path whole.
+    pub(crate) fn trait_bound(&self, name: &item::Name) -> Span {
+        self.written_traits
+            .iter()
+            .find(|(written, _)| *written == name.text)
+            .map_or(name.span, |(_, bound)| *bound)
+    }
 }
 
 /// A trait declaration. `Self` in its signatures is the generic parameter

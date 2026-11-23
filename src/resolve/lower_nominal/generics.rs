@@ -349,6 +349,7 @@ impl<'a> Parser<'a> {
                 bound,
                 callee: Some(callee),
                 argument: this.whole_expression(argument.span),
+                similar: None,
             };
             Some(crate::resolve::Required {
                 item: function.name.text.clone(),
@@ -373,10 +374,41 @@ impl<'a> Parser<'a> {
                     .traits
                     .iter()
                     .find(|name| name.text == *trait_name)?;
-                Some(name.span)
+                Some(generic.trait_bound(name))
             });
             self.pending_traits[index].4 = site;
         }
+    }
+
+    /// A trait `ty` implements whose last segment is the unmet trait
+    /// `trait_name`'s, as rustc's E0277 notes it: "`A` implements
+    /// similarly named trait `std::fmt::Write`, but not `std::io::Write`".
+    fn similar_trait(&self, ty: &Ty, trait_name: &str) -> Option<ImmutableString> {
+        let last = trait_name.rsplit("::").next()?;
+        let std = crate::std_table::traits_named(last)
+            .iter()
+            .filter_map(|definition| {
+                let name = crate::resolve::std_trait::known(definition);
+                let holds = || {
+                    std_impl::holds(&mut std_impl::Probe(self), definition, ty, &[], true, 0)
+                        .is_ok()
+                };
+                (name != trait_name && holds()).then_some(name)
+            });
+        let program = self
+            .models
+            .traits
+            .iter()
+            .filter(|(name, (_, declared))| {
+                declared.std.is_none()
+                    && name.rsplit("::").next() == Some(last)
+                    && *name != trait_name
+                    && self.type_implements(ty, name)
+            })
+            .map(|(name, _)| name.as_str());
+        std.chain(program)
+            .next()
+            .map(|name| trimmed::trait_name(name.into(), &self.models))
     }
 
     /// The parameter a `where` clause in scope bounds `ty` as (`Vec<T>` of
@@ -547,8 +579,12 @@ impl<'a> Parser<'a> {
                     .traits
                     .get(&trait_name)
                     .map_or(0, |(_, declared)| declared.lifetimes);
+                let mut site = site;
+                if let Some(place) = site.as_mut().and_then(|site| site.place.as_mut()) {
+                    place.similar = self.similar_trait(&ty, &trait_name);
+                }
                 let capability = if arguments.is_empty() && lifetimes == 0 {
-                    trait_name
+                    trimmed::trait_name(trait_name, &self.models)
                 } else {
                     let written = std::iter::repeat_n(ImmutableString::from("'_"), lifetimes)
                         .chain(arguments.iter().map(|argument| {
@@ -1350,7 +1386,7 @@ impl<'a> Parser<'a> {
                     .any(|(bound, _)| *bound == name.text)
             }) {
                 if !self.type_implements(&ty, &name.text) {
-                    bounds.push(unmet(name.text.clone(), name.span));
+                    bounds.push(unmet(name.text.clone(), generic.trait_bound(name)));
                 }
             }
         }

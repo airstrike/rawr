@@ -1,30 +1,82 @@
-//! std's `thread::Builder` for Rawr code: Rust's own builder, whose name
+//! std's `thread` types for Rawr code: Rust's own `Builder`, whose name
 //! and stack size the thread its `spawn` starts has
-//! (`resolve::lower_nominal::thread`).
+//! (`resolve::lower_nominal::thread`), and Rust's own `AccessError`, which
+//! a key's `try_with` gives once the thread's values are ending
+//! (`eval::thread_local`).
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::thread::AccessError;
 
 use super::held::{self, Held};
 use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
 
 /// The types the module holds.
-pub(super) const HELD: [Held; 1] = [Held::Value(held::Value {
-    std: "std::thread::Builder",
-    parameters: &[],
-    lent: &[],
-    also: &[],
-    register: |builder, path, parameters, capabilities| {
-        builder
-            .type_::<Builder>(path, parameters, capabilities)
-            .map(drop)
-    },
-    crosses: false,
-    runs: &[
-        capability::Kind::Debug,
-        capability::Kind::Send,
-        capability::Kind::Static,
-    ],
-})];
+pub(super) const HELD: [Held; 2] = [
+    Held::Value(held::Value {
+        std: "std::thread::Builder",
+        parameters: &[],
+        lent: &[],
+        also: &[],
+        register: |builder, path, parameters, capabilities| {
+            builder
+                .type_::<Builder>(path, parameters, capabilities)
+                .map(drop)
+        },
+        crosses: false,
+        runs: &[
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    }),
+    Held::Value(held::Value {
+        std: "std::thread::AccessError",
+        parameters: &[],
+        lent: &[],
+        also: &[],
+        register: |builder, path, parameters, capabilities| {
+            builder
+                .value_type::<AccessError>(path, parameters, capabilities)
+                .map(drop)
+        },
+        crosses: true,
+        runs: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+            capability::Kind::Error,
+        ],
+    }),
+];
+
+/// std's `AccessError`, which no code outside std makes: std's own, as
+/// the access of a key during its own value's drop gives it, made once
+/// on a thread of its own.
+pub(crate) fn access_error() -> Result<Dynamic, Box<EvalAltResult>> {
+    static MADE: OnceLock<AccessError> = OnceLock::new();
+    struct Ending;
+    impl Drop for Ending {
+        fn drop(&mut self) {
+            if let Err(made) = ENDING.try_with(|_| ()) {
+                let _ = MADE.set(made);
+            }
+        }
+    }
+    std::thread_local! {
+        static ENDING: Ending = const { Ending };
+    }
+    if MADE.get().is_none() {
+        let _ = std::thread::spawn(|| ENDING.with(|_| ())).join();
+    }
+    MADE.get()
+        .copied()
+        .map(Dynamic::from)
+        .ok_or_else(|| error("std's thread-local destructors did not run"))
+}
 
 /// Rust's `std::thread::Builder`, which is not `Clone`: a Rawr value is a
 /// handle to the builder's one place, which each method that takes the
@@ -89,9 +141,11 @@ fn error(message: &str) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into()
 }
 
-/// Register `Debug` for the type.
+/// Register `Debug` for each type, and `Display` for `AccessError`.
 pub(crate) fn register_debug() {
     crate::host::debug::register::<Builder>();
+    crate::host::debug::register::<AccessError>();
+    crate::host::display::register::<AccessError>();
 }
 
 /// Bind the type's items.
@@ -114,6 +168,12 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
             builder: builder.name(name.clone()),
             name: Some(name),
         })))
+    });
+    bind("thread::AccessError::to_string", |args| {
+        args[0]
+            .read_lock::<AccessError>()
+            .map(|made| Dynamic::from(ImmutableString::from(made.to_string())))
+            .ok_or_else(|| error("an `AccessError` is not std's at runtime"))
     });
     bind("thread::Builder::stack_size", |args| {
         let (builder, name) = Builder::take(args[0])?;

@@ -796,6 +796,12 @@ pub(crate) fn trait_functions(name: &str) -> &'static [Item] {
         .map_or(&[], Vec::as_slice)
 }
 
+/// The names of the stable functions of std's stable traits, which
+/// rustc's E0599 weighs against a missing method's name.
+pub(crate) fn trait_function_names() -> impl Iterator<Item = &'static str> {
+    Table::get().trait_functions().keys().copied()
+}
+
 /// The definitions of std's stable traits whose last segment is `name`:
 /// one for most names, two for `Write` (`fmt`'s and `io`'s).
 pub(crate) fn traits_named(name: &str) -> &'static [&'static str] {

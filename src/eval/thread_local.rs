@@ -13,8 +13,14 @@
 //! by the program's glue as the thread ends (`end`): a spawned thread's as
 //! its closure returns (`eval::threads`), and the main thread's as `main`
 //! returns, as std's exit runs them.
+//!
+//! As std's storage does, a key whose type has drop glue in Rust is
+//! destroyed as its thread ends, and its key is then refused: `try_with`
+//! gives std's `AccessError`, and each other access panics as std's
+//! `with` does. A key of another type keeps its value to the thread's end.
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use crate::func::NativeCallContext;
 use crate::{Dynamic, FnPtr, ImmutableString, RawrResult, RawrResultOf};
@@ -27,6 +33,18 @@ pub(crate) struct LocalKey {
     initializer: FnPtr,
     /// Drops a value of a type with drop glue as its thread ends.
     glue: Option<FnPtr>,
+    end: End,
+}
+
+/// What a thread's end does to a key's value, as std's storage for the
+/// key's type does.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum End {
+    /// A type with drop glue in Rust: the value is destroyed, the last
+    /// made first, and the key is refused after.
+    Destroyed,
+    /// Any other type: the value is kept to the thread's end.
+    Kept,
 }
 
 /// One key's value on a thread.
@@ -34,25 +52,48 @@ struct Slot {
     key: ImmutableString,
     value: Dynamic,
     glue: Option<FnPtr>,
+    end: End,
 }
 
 std::thread_local! {
     /// This thread's values, in the order made.
     static SLOTS: RefCell<Vec<Slot>> = const { RefCell::new(Vec::new()) };
+    /// The keys whose values this thread's end destroyed, or is destroying.
+    static ENDED: RefCell<BTreeSet<ImmutableString>> = const { RefCell::new(BTreeSet::new()) };
 }
 
+/// std's panic of an access to a key its thread's end destroyed.
+const ENDED_ACCESS: &str =
+    "cannot access a Thread Local Storage value during or after destruction: AccessError";
+
 impl LocalKey {
-    pub(crate) fn new(key: ImmutableString, initializer: FnPtr, glue: Option<FnPtr>) -> Self {
+    pub(crate) fn new(
+        key: ImmutableString,
+        initializer: FnPtr,
+        glue: Option<FnPtr>,
+        end: End,
+    ) -> Self {
         Self {
             key,
             initializer,
             glue,
+            end,
         }
     }
 
+    /// Whether this thread's end destroyed the key's value, or is
+    /// destroying it: what `try_with` refuses.
+    pub(crate) fn ended(&self) -> bool {
+        ENDED.with_borrow(|ended| ended.contains(&self.key))
+    }
+
     /// The key's value on this thread, which its initializer makes, through
-    /// `context`, at its first access here.
+    /// `context`, at its first access here; std's panic once the thread's
+    /// end destroyed it.
     pub(crate) fn value(&self, context: &NativeCallContext<'_>) -> RawrResult {
+        if self.ended() {
+            return Err(ended_access());
+        }
         if let Some(value) = self.find() {
             return Ok(value);
         }
@@ -66,9 +107,13 @@ impl LocalKey {
         Ok(value)
     }
 
-    /// Whether the key has no value on this thread yet.
-    pub(crate) fn vacant(&self) -> bool {
-        self.find().is_none()
+    /// Whether the key has no value on this thread yet; std's panic of
+    /// `set` once the thread's end destroyed it.
+    pub(crate) fn vacant(&self) -> RawrResultOf<bool> {
+        if self.ended() {
+            return Err(ended_access());
+        }
+        Ok(self.find().is_none())
     }
 
     /// Give the key `value` on this thread, where it has none yet, without
@@ -79,6 +124,7 @@ impl LocalKey {
                 key: self.key.clone(),
                 value,
                 glue: self.glue.clone(),
+                end: self.end,
             });
         });
     }
@@ -107,15 +153,27 @@ impl LocalKey {
     }
 }
 
-/// End this thread's values, the last made first, each of a type with drop
-/// glue dropped through `context`, as std runs a thread's destructors when
-/// it ends. A destructor that accesses a key makes its value again, which
-/// drops in turn.
+/// End this thread's values: each a thread's end destroys, the last made
+/// first, its key refused from before its drop, and each of a type with
+/// drop glue dropped through `context`, as std runs a thread's destructors
+/// when it ends. A destructor that accesses a key not made yet makes its
+/// value, which is destroyed in turn. Then the thread holds nothing, so a
+/// later run on it starts anew.
 pub(crate) fn end(context: &NativeCallContext<'_>) -> RawrResultOf<()> {
-    while let Some(slot) = SLOTS.with_borrow_mut(Vec::pop) {
+    while let Some(slot) = SLOTS.with_borrow_mut(|slots| {
+        let last = slots.iter().rposition(|slot| slot.end == End::Destroyed)?;
+        Some(slots.remove(last))
+    }) {
+        ENDED.with_borrow_mut(|ended| ended.insert(slot.key));
         if let Some(glue) = slot.glue {
             let _ = glue.call_raw(context, None, [slot.value])?;
         }
     }
+    SLOTS.with_borrow_mut(Vec::clear);
+    ENDED.with_borrow_mut(BTreeSet::clear);
     Ok(())
+}
+
+fn ended_access() -> Box<crate::EvalAltResult> {
+    crate::EvalAltResult::ErrorRuntime(ENDED_ACCESS.into(), crate::Position::NONE).into()
 }

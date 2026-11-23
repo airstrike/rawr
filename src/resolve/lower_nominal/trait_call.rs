@@ -614,25 +614,9 @@ impl<'a> Parser<'a> {
             _ => match self.std_receiver(trait_name, member) {
                 Some(Some(receiver)) => {
                     let (first, rest) = split_first_argument(arguments);
-                    let first = if receiver == "self" {
-                        first
-                    } else {
-                        without_borrow(first)
-                    };
-                    tokens.extend(first);
-                    tokens.extend([
-                        (Token::RightParen, close),
-                        (Token::Period, close),
-                        (identifier(member), close),
-                    ]);
-                    tokens.extend(turbofish.take().into_iter().flatten());
-                    if rest.is_empty() {
-                        tokens.push((Token::Unit, close));
-                    } else {
-                        tokens.push((Token::LeftParen, close));
-                        tokens.extend(rest);
-                        tokens.push((Token::RightParen, close));
-                    }
+                    let receiver = self.path_receiver(first, receiver);
+                    let method = method_call_tokens(member, turbofish.take(), rest, close);
+                    return self.parse_path_method_call(receiver, method, None, call);
                 }
                 // An associated function rawr has no lookup for yet.
                 Some(None) => {
@@ -681,16 +665,19 @@ impl<'a> Parser<'a> {
                 call: span(start, close),
             });
         }
+        // A `&mut self` method changes the place its receiver borrows:
+        // `<C as Iterator>::next(&mut c)` is `c.next()` on a `C`.
+        if let Some(Some("&mut self")) = self.std_receiver(trait_name, member) {
+            let receiver = self.path_receiver(receiver, "&mut self");
+            let method = method_call_tokens(member, None, rest, close);
+            let call = span(start, close);
+            return self.parse_path_method_call(receiver, method, Some(&self_ty), call);
+        }
         let mut tokens = vec![(Token::LeftParen, start)];
         tokens.extend(receiver);
         tokens.push((Token::RightParen, close));
         self.splice_tokens(tokens);
-        let value = self.parse_primary()?;
-        let mut actual = self.inference.resolve(&value.ty);
-        while let Ty::Reference { target, .. } = actual {
-            actual = self.inference.resolve(&target);
-        }
-        self.require_type(&self_ty, &actual, value.span)?;
+        let (value, actual) = self.parse_self_typed_receiver(&self_ty)?;
         // References are the value at runtime; the call reads it as `Self`.
         let name = self.temporary("self");
         self.bindings.insert(
@@ -722,6 +709,62 @@ impl<'a> Parser<'a> {
         source.push(call.rendered_source());
         source.push_text(" }");
         Ok(self.operator_expr(source.surrounded("(", ")"), call.ty, span(start, close)))
+    }
+
+    /// The first argument `tokens` of a path call, as a method that takes
+    /// its receiver as `mode` says (`&mut self`) is called on it.
+    fn path_receiver(&self, tokens: Vec<(Token, Position)>, mode: &str) -> PathReceiver {
+        let written = match (tokens.first(), tokens.last()) {
+            (Some((_, first)), Some((_, last))) => self.expression_span(span(*first, *last)),
+            _ => Span::NONE,
+        };
+        let tokens = if mode == "self" {
+            tokens
+        } else {
+            without_borrow(tokens)
+        };
+        PathReceiver { tokens, written }
+    }
+
+    /// The path call `call` as the method call on its receiver that the
+    /// tokens `method` write (`Iterator::next(&mut c)` is `c.next()`), the
+    /// receiver's type the written `Self` through its references when
+    /// `self_ty` is one. The receiver is where it is written, so its
+    /// borrow is what rustc's E0596 marks.
+    fn parse_path_method_call(
+        &mut self,
+        receiver: PathReceiver,
+        method: Vec<(Token, Position)>,
+        self_ty: Option<&Ty>,
+        call: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let mut tokens = vec![(Token::LeftParen, receiver.written.start())];
+        tokens.extend(receiver.tokens);
+        tokens.push((Token::RightParen, receiver.written.end()));
+        tokens.extend(method);
+        // The `;` ends the postfix the call is, before what follows it.
+        tokens.push((Token::SemiColon, call.end()));
+        self.splice_tokens(tokens);
+        let value = match self_ty {
+            Some(self_ty) => self.parse_self_typed_receiver(self_ty)?.0,
+            None => self.parse_primary()?,
+        };
+        let mut value = self.parse_postfix_of(value)?;
+        self.expect(Token::SemiColon, "the end of a path's method call")?;
+        value.span = call;
+        Ok(value)
+    }
+
+    /// The receiver of a `<T as Trait>::f(..)` call the next tokens write,
+    /// which has type `T` through its references, and that type.
+    fn parse_self_typed_receiver(&mut self, self_ty: &Ty) -> Result<(ParsedExpr, Ty), Error> {
+        let value = self.parse_primary()?;
+        let mut actual = self.inference.resolve(&value.ty);
+        while let Ty::Reference { target, .. } = actual {
+            actual = self.inference.resolve(&target);
+        }
+        self.require_type(self_ty, &actual, value.span)?;
+        Ok((value, actual))
     }
 
     /// `<T as Default>::default()`, `<T as From<S>>::from(x)`,
@@ -1936,4 +1979,35 @@ impl Parser<'_> {
         self.inference.commit(checkpoint);
         Some(self_ty)
     }
+}
+
+/// `.member::<..>(arguments)` of a method call, its turbofish and
+/// arguments the tokens given, written at `at`.
+fn method_call_tokens(
+    member: &str,
+    turbofish: Option<Vec<(Token, Position)>>,
+    arguments: Vec<(Token, Position)>,
+    at: Position,
+) -> Vec<(Token, Position)> {
+    let mut tokens = vec![
+        (Token::Period, at),
+        (Token::Identifier(Box::new(member.into())), at),
+    ];
+    tokens.extend(turbofish.into_iter().flatten());
+    if arguments.is_empty() {
+        tokens.push((Token::Unit, at));
+    } else {
+        tokens.push((Token::LeftParen, at));
+        tokens.extend(arguments);
+        tokens.push((Token::RightParen, at));
+    }
+    tokens
+}
+
+/// A path call's first argument as the receiver of the method call it is:
+/// its tokens, less the borrow a `&self` or `&mut self` method makes, and
+/// where it is written, borrow and all.
+struct PathReceiver {
+    tokens: Vec<(Token, Position)>,
+    written: Span,
 }

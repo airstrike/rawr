@@ -1576,6 +1576,7 @@ impl Parser<'_> {
                 declared: super::trimmed::declared(std, &self.models).into(),
                 found: None,
                 definition: None,
+                found_for: Box::default(),
             }),
             similar: None,
             unsatisfied: None,

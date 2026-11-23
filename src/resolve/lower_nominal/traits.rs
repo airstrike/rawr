@@ -1012,6 +1012,7 @@ impl<'a> Parser<'a> {
                 declared: found.clone(),
                 found: Some(found),
                 definition: None,
+                found_for: Box::default(),
             };
         }
         // Lifetimes first, as declared: `R<'a, T>`.
@@ -1035,6 +1036,7 @@ impl<'a> Parser<'a> {
             declared,
             found: Some(found),
             definition: self.models.name_declared_here(model),
+            found_for: Box::default(),
         }
     }
 
@@ -1797,6 +1799,7 @@ impl<'a> Parser<'a> {
                     bound,
                     callee: None,
                     argument: header,
+                    similar: None,
                 };
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),

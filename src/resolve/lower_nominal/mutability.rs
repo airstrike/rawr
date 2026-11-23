@@ -512,22 +512,14 @@ impl<'a> Parser<'a> {
             BindingKind::Local | BindingKind::Invocation
                 if matches!(writeback, Writeback::Direct) =>
             {
-                Error::BorrowConflict {
-                    code: "E0596",
-                    message: format!(
-                        "cannot borrow `{name}` as mutable, as it is not declared as mutable"
-                    )
-                    .into(),
-                    access: value.span,
-                    borrow: Span::NONE,
-                }
+                Error::immutable_borrow(&name, &name, value.span, binding.declaration)
             }
             BindingKind::Local | BindingKind::Invocation => {
                 let place = match &value.lvalue {
                     Some(Lvalue::Field(field)) => format!("{}.{}", field.binding, field.member),
                     _ => self.written(value.span).unwrap_or_else(|| name.to_string()),
                 };
-                Error::borrow_immutable_place(&place, &name, value.span)
+                Error::immutable_borrow(&place, &name, value.span, binding.declaration)
             }
         })
     }

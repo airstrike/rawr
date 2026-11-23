@@ -445,6 +445,7 @@ impl<'a> Parser<'a> {
                     declared: name.clone(),
                     found: Some(name),
                     definition: None,
+                    found_for: Box::default(),
                 }),
                 similar: None,
                 unsatisfied: None,

@@ -310,15 +310,12 @@ impl<'a> Parser<'a> {
             && !binding.mutable
             && matches!(binding.kind, BindingKind::Local | BindingKind::Invocation)
         {
-            return Err(Error::BorrowConflict {
-                code: "E0596",
-                message: format!(
-                    "cannot borrow `{name}` as mutable, as it is not declared as mutable"
-                )
-                .into(),
-                access: value.span,
-                borrow: Span::NONE,
-            });
+            return Err(Error::immutable_borrow(
+                name,
+                name,
+                value.span,
+                binding.declaration,
+            ));
         }
         let identifier = |name: &str| Token::Identifier(Box::new(name.into()));
         let mut tokens = vec![(Token::LeftParen, member_span.start())];
