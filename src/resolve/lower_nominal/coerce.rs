@@ -731,10 +731,6 @@ impl<'a> Parser<'a> {
                     chain: crate::resolve::Chain::default(),
                 });
             }
-            if let Some(error) = self.untold_impls(&concrete, &trait_name, &positional, value.span)
-            {
-                return Err(error);
-            }
             // `dyn Shape<Output = i64>`: the type's `Output` is `i64`.
             for (name, bound) in bindings
                 .iter()
@@ -744,12 +740,15 @@ impl<'a> Parser<'a> {
                     Ty::Projection(Box::new(concrete.clone()), trait_name.clone(), name.clone());
                 self.require_type(bound, &projected, value.span)?;
             }
-            // `Box<dyn Debug>` of a tuple writes it as one: a box is its
-            // value at runtime.
-            if matches!(target, Ty::Boxed(_)) {
-                value.ty = concrete;
+            // `Box<dyn Debug>` or `&dyn Debug` of a tuple writes it as one,
+            // and of an `f32` as one: a box or a shared borrow is its value
+            // at runtime.
+            if matches!(target, Ty::Boxed(_) | Ty::Reference { mutable: false, .. }) {
+                value.ty = concrete.clone();
                 self.tag_shape(value);
             }
+            let mutable = matches!(target, Ty::Reference { mutable: true, .. });
+            self.key_object(&concrete, (&trait_name, &positional), mutable, value);
             value.ty = target;
             return Ok(None);
         }

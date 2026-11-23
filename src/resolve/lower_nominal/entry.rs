@@ -1108,8 +1108,16 @@ pub(super) fn lower_with_context(
         )?;
     }
 
+    // The arms of the dispatchers the bodies' trait objects reach
+    // (D1115.3). The root's statements come after the dispatchers, and a
+    // Rust program's run them only to call `main`.
+    let arms = assembly
+        .instances
+        .iter()
+        .flat_map(|(_, uses)| uses.objects.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let mut dispatch_ops = Vec::new();
-    write_trait_dispatchers(&mut assembly.generated, &models, &mut dispatch_ops);
+    write_trait_dispatchers(&mut assembly.generated, &models, &mut dispatch_ops, &arms);
     write_default_dispatcher(&mut assembly.generated, program, &models, &mut dispatch_ops);
     let witnesses = write_hidden_dispatcher(&mut assembly.generated, &assembly.hidden, &models);
     #[cfg(feature = "rust-import")]

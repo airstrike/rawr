@@ -138,17 +138,18 @@ pub(super) fn definition(
     instance
 }
 
-/// The parameters of the inherent method `definition`, its impl's and its
-/// own, that its instances give types, when it is a template: each of its
-/// type parameters, when one is bounded by a trait that directs its body
-/// and none is a const, callable or crate parameter, which an instance's
-/// signature can't name (`method::Definition::instance`).
+/// The parameters of the method `definition`, its impl's and its own,
+/// that its instances give types, when it is a template: each of its type
+/// parameters, when one is bounded by a trait that directs its body and
+/// none is a const, callable or crate parameter, which an instance's
+/// signature can't name (`method::Definition::instance`). A trait impl's
+/// method is reached through a trait object by its instance too, which the
+/// object's key selects (D1115.3).
 pub(super) fn method_template_parameters(
     definition: &crate::method::Definition,
 ) -> Option<Box<[ImmutableString]>> {
     let generics = definition.generics();
-    if definition.trait_name().is_some()
-        || definition.builtin_owner().is_some()
+    if definition.builtin_owner().is_some()
         || !generics.iter().any(directs)
         || generics.iter().any(|generic| {
             generic.constant.is_some()
@@ -278,6 +279,8 @@ pub(super) struct Uses {
     /// Each method a template's generic read calls on a value of one of
     /// its parameters' types, through that parameter's bound.
     pub(super) bound: Vec<Bound>,
+    /// The dispatcher arms the body's trait objects reach (D1115.3).
+    pub(super) objects: Vec<super::trait_object::Arm>,
 }
 
 /// A method call the generic read of a template resolves through a bound
@@ -334,7 +337,7 @@ pub(super) struct Pending {
 
 /// Whether `ty` names one type at run time: no parameter, projection or
 /// type inference left open.
-fn concrete(ty: &Ty) -> bool {
+pub(super) fn concrete(ty: &Ty) -> bool {
     !contains(ty, &|ty| {
         matches!(
             ty,
@@ -414,11 +417,51 @@ impl Parser<'_> {
     pub(super) fn binds_instance(&self, call: Span) -> bool {
         self.pending_template_calls.iter().any(|pending| {
             pending.call == call
-                && pending.types.iter().all(|ty| {
-                    let ty = self.inference.resolve(ty);
-                    concrete(&ty) && named_type(&ty, &self.models, Span::NONE).is_some()
-                })
+                && pending
+                    .types
+                    .iter()
+                    .all(|ty| self.names_instance_type(&self.inference.resolve(ty)))
         })
+    }
+
+    /// Whether an instance can be at `ty`: one type its signature names.
+    fn names_instance_type(&self, ty: &Ty) -> bool {
+        concrete(ty) && named_type(ty, &self.models, Span::NONE).is_some()
+    }
+
+    /// The name of the instance of the template method `template` at the
+    /// types `substitution` gives its parameters, which `call` binds:
+    /// `None` when it is no template, or a type holds a parameter of this
+    /// body's, where its erased body runs.
+    pub(super) fn instance_name(
+        &mut self,
+        template: &crate::item::Key,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        call: Span,
+    ) -> Option<String> {
+        let types = self
+            .models
+            .templates
+            .get(template)?
+            .iter()
+            .map(|name| {
+                substitution
+                    .get(name)
+                    .map_or(Ty::Unknown, |ty| self.inference.resolve(ty))
+            })
+            .collect::<Box<[_]>>();
+        if !types.iter().all(|ty| self.names_instance_type(ty)) {
+            return None;
+        }
+        let demand = Demand {
+            template: template.clone(),
+            types,
+            call,
+            method: true,
+        };
+        let name = demand.name(&self.models);
+        self.instance_uses.demands.push(demand);
+        Some(name)
     }
 
     /// Write each template call's instance over its placeholder, now that
@@ -431,9 +474,7 @@ impl Parser<'_> {
                 .iter()
                 .map(|ty| self.inference.resolve(ty))
                 .collect::<Box<[_]>>();
-            let named = types
-                .iter()
-                .all(|ty| concrete(ty) && named_type(ty, &self.models, Span::NONE).is_some());
+            let named = types.iter().all(|ty| self.names_instance_type(ty));
             let name = if named {
                 let demand = Demand {
                     template: pending.template,

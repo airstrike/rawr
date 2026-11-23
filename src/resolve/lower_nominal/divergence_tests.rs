@@ -11529,27 +11529,205 @@ fn main() {
 }
 
 #[test]
-fn impls_for_two_instances_reached_by_a_trait_object_are_refused() {
-    // A trait object's value reaches its impl by its runtime type, which
-    // holds no type arguments: rawr refuses where two impls' Self types
-    // are one runtime type, rather than run the wrong one (#1178, #2212).
-    let report = refused(
+fn impls_for_two_instances_reached_by_a_trait_object_run_their_own() {
+    // A trait object's value keeps its concrete type's key, which tells
+    // `Foo<i32>`'s impl from `Foo<i64>`'s where the runtime type can't
+    // (D1115.3, #1178, #2212).
+    let output = printed(
         r#"
 trait Describe { fn describe(&self) -> String; }
 struct Foo<T> { value: T }
 impl Describe for Foo<i32> { fn describe(&self) -> String { format!("i32 {}", self.value) } }
 impl Describe for Foo<i64> { fn describe(&self) -> String { format!("i64 {}", self.value) } }
-fn main() { let a = Foo { value: 1i32 }; let d: &dyn Describe = &a; println!("{}", d.describe()); }
+fn main() {
+    let a = Foo { value: 1i32 };
+    let b = Foo { value: 2i64 };
+    let d: Vec<&dyn Describe> = vec![&a, &b];
+    let boxed: Box<dyn Describe> = Box::new(Foo { value: 3i64 });
+    println!("{} {} {}", d[0].describe(), d[1].describe(), boxed.describe());
+    println!("{}", Describe::describe(&b));
+}
 main();
 "#,
     );
-    assert!(
-        report.contains(
-            "telling `Foo<i32>`'s impl of `Describe` from `Foo<i64>`'s through a generic \
-             parameter or a trait object is not supported"
-        ),
-        "{report}"
+    assert_eq!(output, "i32 1 i64 2 i64 3\ni64 2\n");
+}
+
+#[test]
+fn a_generic_impls_trait_method_runs_its_instance_through_a_trait_object() {
+    // A generic impl's trait method is lowered per instance, and a trait
+    // object runs the instance its key selects: through `&dyn`, `&mut dyn`,
+    // a supertrait's object, a box made in a generic body and a closure,
+    // as rustc's vtable does. A static call, a path call, a generic call
+    // and `{}` run the instance at their types (D1115, #2622).
+    let output = printed(
+        r#"
+use std::fmt;
+trait Half { fn half(&self) -> String; }
+impl Half for f32 { fn half(&self) -> String { format!("f32 {}", self / 2.0) } }
+impl Half for f64 { fn half(&self) -> String { format!("f64 {}", self / 2.0) } }
+trait Show { fn show(&self) -> String; fn bump(&mut self); }
+trait Named: Show { fn name(&self) -> String; }
+struct Wr<T>(T, u32);
+impl<T: Half> Show for Wr<T> {
+    fn show(&self) -> String { format!("{} #{}", self.0.half(), self.1) }
+    fn bump(&mut self) { self.1 += 1; }
+}
+impl<T: Half> Named for Wr<T> { fn name(&self) -> String { format!("wr {}", self.0.half()) } }
+impl<T: Half> fmt::Display for Wr<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "<{}>", self.0.half()) }
+}
+fn boxed<T: Half + 'static>(x: T) -> Box<dyn Show> { Box::new(Wr(x, 0)) }
+fn via<S: Show>(s: &S) -> String { s.show() }
+fn main() {
+    let mut a = Wr(1.0f32, 0);
+    let b = Wr(1.0f64, 0);
+    let shown: Vec<&dyn Show> = vec![&a, &b];
+    println!("{} | {}", shown[0].show(), shown[1].show());
+    {
+        let m: &mut dyn Show = &mut a;
+        m.bump();
+        println!("{}", m.show());
+    }
+    let n: &dyn Named = &a;
+    println!("{} / {}", n.name(), n.show());
+    let v: Vec<Box<dyn Show>> = vec![boxed(3.0f32), boxed(3.0f64)];
+    let all: Vec<String> = v.iter().map(|s| s.show()).collect();
+    println!("{:?}", all);
+    println!("{} | {} | {}", a.show(), Show::show(&b), via(&a));
+    let d: &dyn fmt::Display = &a;
+    println!("{} {} {}", a, b, d);
+}
+main();
+"#,
     );
+    assert_eq!(
+        output,
+        "f32 0.5 #0 | f64 0.5 #0\nf32 0.5 #1\nwr f32 0.5 / f32 0.5 #1\n\
+         [\"f32 1.5 #0\", \"f64 1.5 #0\"]\nf32 0.5 #1 | f64 0.5 #0 | f32 0.5 #1\n\
+         <f32 0.5> <f64 0.5> <f32 0.5>\n"
+    );
+    // A `&mut dyn` argument and a field's borrow change the place itself.
+    let output = printed(
+        r#"
+use std::fmt;
+trait Half { fn half(&self) -> String; }
+impl Half for f32 { fn half(&self) -> String { format!("f32 {}", self / 2.0) } }
+impl Half for f64 { fn half(&self) -> String { format!("f64 {}", self / 2.0) } }
+trait Show { fn show(&self) -> String; fn bump(&mut self); }
+trait Named: Show { fn name(&self) -> String; }
+struct Wr<T>(T, u32);
+impl<T: Half> Show for Wr<T> {
+    fn show(&self) -> String { format!("{} #{}", self.0.half(), self.1) }
+    fn bump(&mut self) { self.1 += 1; }
+}
+fn poke(s: &mut dyn Show) { s.bump(); }
+struct Holder { w: Wr<f32> }
+fn main() {
+    let mut a = Wr(1.0f32, 0);
+    poke(&mut a);
+    poke(&mut a);
+    let mut h = Holder { w: Wr(2.0f32, 5) };
+    poke(&mut h.w);
+    let r: &mut dyn Show = &mut h.w;
+    r.bump();
+    println!("{} {}", a.show(), h.w.show());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "f32 0.5 #2 f32 1 #7\n");
+}
+
+#[test]
+fn a_witnessed_impl_method_runs_through_a_trait_object() {
+    // An impl method whose generics take a witness (`M: Make`, `const N`)
+    // gets its witnesses from the trait object's key, and `{}` of a value
+    // passes them too (#2212).
+    let output = printed(
+        r#"
+use std::fmt;
+use std::marker::PhantomData;
+trait Make { fn make() -> Self; fn name(&self) -> String; }
+struct A;
+struct B(u8);
+impl Make for A { fn make() -> Self { A } fn name(&self) -> String { "A".into() } }
+impl Make for B { fn make() -> Self { B(7) } fn name(&self) -> String { format!("B{}", self.0) } }
+trait Run { fn run(&self) -> String; }
+struct Wrap<M>(PhantomData<M>);
+impl<M: Make> Run for Wrap<M> { fn run(&self) -> String { M::make().name() } }
+struct Buf<const N: usize>;
+impl<const N: usize> fmt::Display for Buf<N> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "buf{}", N) }
+}
+fn main() {
+    let runs: Vec<Box<dyn Run>> = vec![Box::new(Wrap::<A>(PhantomData)), Box::new(Wrap::<B>(PhantomData))];
+    for r in &runs { println!("{}", r.run()); }
+    let shown: Vec<Box<dyn fmt::Display>> = vec![Box::new(Buf::<5>), Box::new(Buf::<8>)];
+    println!("{} {} {}", Buf::<3>, shown[0], shown[1]);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "A\nB7\nbuf3 buf5 buf8\n");
+}
+
+#[test]
+fn a_generic_traits_object_runs_its_types_impl() {
+    // `dyn Conv<i64>` keys its value too: `Foo<i32>`'s impl beside
+    // `Foo<i64>`'s, a const parameter's witness and a generic impl's
+    // instance, each at the trait's arguments (D1115.3, #2212, #2622).
+    let output = printed(
+        r#"
+trait Half { fn half(&self) -> String; }
+impl Half for f32 { fn half(&self) -> String { format!("f32 {}", self / 2.0) } }
+impl Half for f64 { fn half(&self) -> String { format!("f64 {}", self / 2.0) } }
+trait Conv<U> { fn conv(&self, by: U) -> String; }
+struct Foo<T> { value: T }
+impl Conv<i64> for Foo<i32> { fn conv(&self, by: i64) -> String { format!("i32 {} {}", self.value, by) } }
+impl Conv<i64> for Foo<i64> { fn conv(&self, by: i64) -> String { format!("i64 {} {}", self.value, by) } }
+impl Conv<String> for Foo<i64> { fn conv(&self, by: String) -> String { format!("s {} {}", self.value, by) } }
+struct Buf<const N: usize>;
+impl<const N: usize> Conv<i64> for Buf<N> { fn conv(&self, by: i64) -> String { format!("buf {}", N as i64 * by) } }
+struct Wr<T>(T);
+impl<T: Half> Conv<i64> for Wr<T> { fn conv(&self, by: i64) -> String { format!("{} {}", self.0.half(), by) } }
+fn main() {
+    let a = Foo { value: 1i32 };
+    let b = Foo { value: 2i64 };
+    let all: Vec<&dyn Conv<i64>> = vec![&a, &b, &Buf::<4>, &Wr(1.0f32), &Wr(1.0f64)];
+    for c in &all { println!("{}", c.conv(10)); }
+    let s: &dyn Conv<String> = &b;
+    println!("{}", s.conv("x".to_string()));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "i32 1 10\ni64 2 10\nbuf 40\nf32 0.5 10\nf64 0.5 10\ns 2 x\n"
+    );
+}
+
+#[test]
+fn a_borrowed_f32_trait_object_writes_f32_digits() {
+    // `&dyn Debug` of an `f32` writes it as one, as a box of it does
+    // (#2622).
+    let output = printed(
+        r#"
+use std::fmt::{Debug, Display};
+fn main() {
+    let f = 0.1f32;
+    let g: &dyn Debug = &f;
+    let h: &dyn Display = &f;
+    let t = (1.5f32, u64::MAX);
+    let u: &dyn Debug = &t;
+    let b: Box<dyn Debug> = Box::new(0.1f32);
+    println!("{:?} {} {:?} {:?}", g, h, u, b);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "0.1 0.1 (1.5, 18446744073709551615) 0.1\n");
 }
 
 #[test]

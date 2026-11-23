@@ -614,7 +614,8 @@ impl<'a> Parser<'a> {
                 if let Some(annotation) = &annotation {
                     self.coerce_expr(annotation, &mut value)?;
                 }
-                let rendered = origin::Fragment::plain(format!("let {name} = {source};"));
+                let mut rendered = std::mem::take(&mut value.prelude);
+                rendered.push_text(format!("let {name} = {source};"));
                 let rendered = self.with_field_entries(pending, rendered);
                 self.write_output(rendered, span(start, value.span.end()));
                 self.entry_aliases.remove(&name);
@@ -653,7 +654,7 @@ impl<'a> Parser<'a> {
                         .consume_binding_terminator(start, let_keyword)
                         .map(|_| ());
                 }
-                let mut indexes = origin::Fragment::default();
+                let mut indexes = std::mem::take(&mut value.prelude);
                 let lvalue = self.hoist_indexes(lvalue, &mut indexes);
                 if let Lvalue::Nested(nested) = &lvalue
                     && let Some(chain) = lvalue::chain_of(nested)
@@ -723,8 +724,9 @@ impl<'a> Parser<'a> {
                 None => target,
             };
             // `let r = &mut v[i];`: the index is read once, where the
-            // borrow is made, into a local the place then names (T392).
-            let mut indexes = origin::Fragment::default();
+            // borrow is made, into a local the place then names (T392). A
+            // trait object's place is keyed there too (`trait_object.rs`).
+            let mut indexes = std::mem::take(&mut value.prelude);
             let place = self.hoist_chain(place, &mut indexes);
             if borrowing && let Some(borrowed) = borrowed {
                 let written = span(borrowed, value.span.end());
