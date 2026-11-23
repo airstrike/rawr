@@ -58,17 +58,18 @@ const OPERATOR_TRAITS: [&str; 24] = [
     "ShrAssign",
 ];
 const TOP_LEVEL_SOURCE: &[u8] = include_bytes!("generate/top_level.rs");
-const BUILD_SCRIPT: &[u8] = b"use std::{env, fs, path::PathBuf};\n\
-fn main() {\n\
-    let root = PathBuf::from(env::var_os(\"CARGO_MANIFEST_DIR\").expect(\"manifest directory\"));\n\
-    let source = root.join(\"rawr-generated-manifest.carrier\");\n\
-    let bytes = fs::read(&source).expect(\"generated manifest carrier\");\n\
-    assert!(bytes.starts_with(b\"RAWRGM01\"), \"generated manifest carrier magic\");\n\
-    assert!(bytes.len() <= 16 * 1024 * 1024, \"generated manifest carrier bound\");\n\
-    let output = PathBuf::from(env::var_os(\"OUT_DIR\").expect(\"OUT_DIR\"));\n\
-    fs::write(output.join(\"rawr-generated-manifest.bin\"), bytes).expect(\"copy generated manifest carrier\");\n\
-    println!(\"cargo:rerun-if-changed={}\", source.display());\n\
-}\n";
+/// The runner's build script. It names only itself as its input: the
+/// manifest carrier is included by the source ([`MANIFEST_CARRIER`]), whose
+/// file rustc tracks, so a change of demand reruns no build script.
+const BUILD_SCRIPT: &[u8] = b"fn main() {\n    println!(\"cargo:rerun-if-changed=build.rs\");\n}\n";
+/// The runner's generated manifest, embedded from its carrier, whose magic
+/// and bound are checked as the runner compiles.
+const MANIFEST_CARRIER: &[u8] = b"static GENERATED_MANIFEST: &[u8] = {\n\
+    const CARRIER: &[u8] = include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/rawr-generated-manifest.carrier\"));\n\
+    assert!(matches!(CARRIER, [b'R', b'A', b'W', b'R', b'G', b'M', b'0', b'1', ..]), \"the generated manifest carrier starts with its magic\");\n\
+    assert!(CARRIER.len() <= 16 * 1024 * 1024, \"the generated manifest carrier is within its bound\");\n\
+    CARRIER\n\
+};\n";
 const RUNTIME_SOURCE: &[u8] = br#"
 pub use std::any::Any;
 pub use std::cell::RefCell;
@@ -8847,9 +8848,7 @@ fn render_source(
         .write_all(TRAIT_IMPORTS)
         .map_err(request::unwritable)?;
     output
-        .write_all(
-            b"static GENERATED_MANIFEST: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rawr-generated-manifest.bin\"));\n",
-        )
+        .write_all(MANIFEST_CARRIER)
         .map_err(request::unwritable)?;
     // The per-generation stamps change with every demand change; their own
     // module keeps the runner's other sources byte-identical across such

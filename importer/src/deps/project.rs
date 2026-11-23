@@ -181,8 +181,11 @@ pub(crate) fn prune(
         .map(|(_, unit)| unit.krate())
         .collect();
     for (hash, unit) in named.iter() {
-        if made.contains(hash) && unit.rebuilt() {
-            prune_objects(&profiles, unit, hash);
+        if made.contains(hash)
+            && unit.rebuilt()
+            && let Some(on_disk) = present.get(hash)
+        {
+            prune_objects(&profiles, unit, hash, on_disk);
         }
     }
     super::prune_incremental(
@@ -370,24 +373,31 @@ fn fingerprint_dependencies(path: &Path) -> Vec<String> {
 /// output no longer holds: each incremental compile leaves a new set beside
 /// it (macOS keeps debug info in them), and the earlier sets stay. The
 /// current set is the one its rlib holds or its binary's debug map names;
-/// without either every object stays.
-fn prune_objects(profiles: &[PathBuf], unit: &super::named::Unit, hash: &str) {
+/// without either every object stays. The objects are the unit's entries
+/// `on_disk`, so a profile with none reads no output.
+fn prune_objects(profiles: &[PathBuf], unit: &super::named::Unit, hash: &str, on_disk: &Present) {
     let krate = unit.krate();
+    let unit = format!("{krate}-{hash}");
+    let prefix = format!("{unit}.");
     for profile in profiles {
         let deps = profile.join("deps");
-        let unit = format!("{krate}-{hash}");
+        let objects: Vec<(&PathBuf, &str)> = on_disk
+            .entries
+            .iter()
+            .filter(|path| path.parent() == Some(deps.as_path()))
+            .filter_map(|path| Some((path, path.file_name()?.to_str()?)))
+            .filter(|(_, file)| file.starts_with(&prefix) && file.ends_with(".rcgu.o"))
+            .collect();
+        if objects.is_empty() {
+            continue;
+        }
         let current = super::archive_members(&deps.join(format!("lib{unit}.rlib"))).or_else(|| {
             super::debug_map_objects(&deps.join(format!("{unit}{}", std::env::consts::EXE_SUFFIX)))
         });
         let Some(current) = current else { continue };
-        for entry in fs::read_dir(&deps).into_iter().flatten().flatten() {
-            let file = entry.file_name();
-            let Some(file) = file.to_str() else { continue };
-            if file.starts_with(&format!("{unit}."))
-                && file.ends_with(".rcgu.o")
-                && !current.contains(file)
-            {
-                let _ = fs::remove_file(entry.path());
+        for (path, file) in objects {
+            if !current.contains(file) {
+                let _ = fs::remove_file(path);
             }
         }
     }
