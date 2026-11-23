@@ -480,12 +480,9 @@ impl<'a> Parser<'a> {
         let mut open = Vec::new();
         for projection in projections {
             let ty = self.inference.resolve(&projection.ty);
-            if contains_inference(&ty) {
-                open.push(projection);
-                continue;
-            }
             // An opaque type gives the associated type from its own bound,
-            // as `impl SomeTrait<Out = u32>` gives `Out`.
+            // as `impl SomeTrait<Out = u32>` gives `Out`, whatever of its
+            // arguments is still open.
             if let Some((identity, name)) = &projection.associated
                 && let Ty::Host { proof, arguments } = &ty
                 && let Some(given) = proof
@@ -496,6 +493,10 @@ impl<'a> Parser<'a> {
                 if !self.unify_type(given, &projection.value) {
                     return None;
                 }
+                continue;
+            }
+            if contains_inference(&ty) {
+                open.push(projection);
                 continue;
             }
             let ImplProjection { value, cases, .. } = projection;

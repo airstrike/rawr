@@ -2388,11 +2388,13 @@ impl<'a> Parser<'a> {
                     .as_deref()
                     .or(Some(definition.output())),
                 &substitution,
+                definition.key(),
             );
             #[cfg(feature = "rust-import")]
             self.note_opaque_bound(
                 definition.lifetimes().written_output.as_deref(),
                 span(value.span.start(), end),
+                &output,
             );
             // A `&mut self` method borrows its receiver for the call.
             if matches!(mode, receiver::Mode::Mutable) {

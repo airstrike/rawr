@@ -1180,6 +1180,63 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The associated type `name` of the crate trait at `trait_path`, whose
+    /// identity is `identity`, for `ty`, as the crate's impls give it: read
+    /// through a member of the trait over its `Self` (`surface::member`)
+    /// whose signature relates the associated type to `Self`, as the
+    /// forwarding `impl<P: Staged> Staged for Play<P>` gives `P`'s. `None`
+    /// when no member the program reaches relates it.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn bound_associated(
+        &mut self,
+        ty: &Ty,
+        trait_path: &str,
+        identity: [u8; 32],
+        name: &str,
+        span: Span,
+    ) -> Option<Ty> {
+        use crate::host::signature::Pattern;
+        let module = format!("{trait_path}::__rawr_self");
+        for member in self.models.host.children(&module) {
+            let path = rawr_import::surface::member::path(trait_path, &member);
+            let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+                continue;
+            };
+            for item in items {
+                let Some((this, parameter)) =
+                    item.signature().relations().iter().find_map(|relation| {
+                        match (relation.associated(), relation.arguments()) {
+                            (
+                                Some((trait_identity, associated)),
+                                [Pattern::Parameter(parameter)],
+                            ) if *trait_identity == identity && associated.as_str() == name => {
+                                Some((
+                                    ImmutableString::from(relation.parameter()),
+                                    parameter.clone(),
+                                ))
+                            }
+                            _ => None,
+                        }
+                    })
+                else {
+                    continue;
+                };
+                let checkpoint = self.inference.checkpoint();
+                let mut parameters = BTreeMap::from([(this, ty.clone())]);
+                if self
+                    .apply_relations(&item, &[], &mut parameters, span)
+                    .is_err()
+                {
+                    self.inference.rollback(checkpoint);
+                    continue;
+                }
+                self.inference.commit(checkpoint);
+                return parameters.get(&parameter).cloned();
+            }
+        }
+        None
+    }
+
     pub(super) fn apply_relations(
         &mut self,
         item: &crate::host::item::Definition,
@@ -1742,12 +1799,27 @@ impl<'a> Parser<'a> {
         value: Ty,
         written: Option<&type_ref::Type>,
         substitution: &BTreeMap<ImmutableString, Ty>,
+        function: &crate::item::Key,
     ) -> Ty {
-        let Some(written) = written.filter(|written| written.opaque_trait().is_some()) else {
+        let Some((written, bound)) = written.and_then(|written| {
+            written
+                .opaque_trait()
+                .map(|bound| (written, ImmutableString::from(bound)))
+        }) else {
             return value;
         };
         let value = match self.inference.resolve(&value) {
             Ty::Unknown if self.collecting_instances => self.inference.fresh(),
+            // The revealed hidden type, which the value is known by the
+            // bound as (D1117).
+            Ty::Host { proof, arguments } => Ty::Host {
+                proof: proof.tagged(super::ty::OpaqueTag {
+                    function: function.clone(),
+                    bound,
+                    arguments: substitution.values().cloned().collect(),
+                }),
+                arguments,
+            },
             _ => value,
         };
         self.opaque_values.push(OpaqueValue {
@@ -1858,15 +1930,10 @@ impl<'a> Parser<'a> {
             return;
         }
         let owner = self.models.host.type_owner(&trait_name).cloned();
-        let written = opaque
-            .arguments
-            .iter()
-            .filter_map(|argument| match argument {
-                type_ref::Argument::Type(ty) => {
-                    Some(instantiate(&Ty::from_resolved(ty), substitution))
-                }
-                type_ref::Argument::Lifetime(_) => None,
-            })
+        let written = type_ref::Type::Path(opaque)
+            .opaque_arguments()
+            .into_iter()
+            .map(|ty| instantiate(&Ty::from_resolved(ty), substitution))
             .collect::<Vec<_>>();
         let mut parameters = BTreeMap::new();
         for (index, (name, argument)) in header.parameters.iter().zip(arguments).enumerate() {

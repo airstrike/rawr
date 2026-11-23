@@ -15,6 +15,21 @@ impl<'a> Parser<'a> {
     pub(super) fn unify_type(&mut self, expected: &Ty, actual: &Ty) -> bool {
         let expected = self.inference.resolve(expected);
         let actual = self.inference.resolve(actual);
+        // Two functions' opaque outputs of a crate trait are two types,
+        // whatever hidden types they reveal, and one function's is one type
+        // at each of its type arguments (D1117).
+        if let (Ty::Host { proof: want, .. }, Ty::Host { proof: have, .. }) = (&expected, &actual)
+            && let (Some(want), Some(have)) = (&want.opaque, &have.opaque)
+            && (want.function != have.function
+                || want.arguments.len() != have.arguments.len()
+                || !want
+                    .arguments
+                    .iter()
+                    .zip(have.arguments.iter())
+                    .all(|(want, have)| self.unify_type(want, have)))
+        {
+            return false;
+        }
         if expected == actual {
             return true;
         }

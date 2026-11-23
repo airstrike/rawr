@@ -2937,14 +2937,17 @@ fn a_method_of_an_opaque_result_of_a_program_type_is_its_bound_s() {
 /// clone and hold the program's own `Board`, and an element `find` gives
 /// crosses back as `Option<&Stage<..>>`.
 /// In a macro's body, whose tokens share one position, only the member of
-/// the `impl Staged` value is the trait's. The output is `cargo run`'s.
+/// the `impl Staged` value is the trait's. A bound naming the associated
+/// types, `impl Staged<State = u32, Note = String>`, fixes the hidden
+/// type's literal and notes (#2106). The output is `cargo run`'s.
 #[test]
 fn a_trait_method_lends_a_slice_of_its_associated_types_in_place() {
     let (rawr, cargo) = both_printed("staged.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "stages 2\nfound Some(\"full\")\nstarted (2, 2)\nmissing (1, 2)\ncounted (2, 1)"
+        "stages 2\nfound Some(\"full\")\nstarted (2, 2)\nmissing (1, 2)\ncounted (2, 1)\n\
+         start 4294967295 []"
     );
 }
 

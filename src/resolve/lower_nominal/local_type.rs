@@ -1597,7 +1597,10 @@ impl<'a> Parser<'a> {
         }
         let (expected_name, found) = (expected.name(&self.models), actual.name(&self.models));
         // A function's opaque output, which rustc's label describes.
-        let opaque = match (expected.is_opaque(), actual.is_opaque()) {
+        let opaque_or_tagged = |ty: &Ty| {
+            ty.is_opaque() || matches!(ty, Ty::Host { proof, .. } if proof.opaque.is_some())
+        };
+        let opaque = match (opaque_or_tagged(&expected), opaque_or_tagged(&actual)) {
             (true, true) => Some(crate::resolve::Opaqueness::Both),
             (true, false) => Some(crate::resolve::Opaqueness::Expected),
             (false, true) => Some(crate::resolve::Opaqueness::Found),
