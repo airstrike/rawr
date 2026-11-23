@@ -5,7 +5,37 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+
+## 0.5.21 (2026-11-22)
+
 - `thread_local!` runs as std's: keys where an item goes and in bodies are `LocalKey<T>`, each thread makes its own value at its first access, `with`, `with_borrow`, `with_borrow_mut`, `get`, `set`, `take`, `replace` and `update` run as std defines them, a reload keeps each thread's value while its initializer is unchanged, and a thread's values drop as it ends, the last made first. (#1765)
+- std's atomics (`AtomicBool`, `AtomicUsize` and the other integer atomics) and `Ordering` run as std's, in statics, borrows and across threads, and messages name them as rustc does (`Atomic<usize>`). (#1549)
+- `Command::args` takes any iterable of arguments, and `Command::output` gives std's `Output` with its `status`, `stdout` and `stderr`. (#2082)
+- `std::path::Path::new` and `std::ffi::OsStr::new` run by their full paths, and `OsStr::new(s)` holds `s`. (#836, #837)
+- An early `?`, `return`, `break` or `continue` inside a nested block drops the temporaries of every statement it leaves, as rustc does, before edition 2024 too. (#2625)
+- A `RefCell`, `Cell` or `Mutex` holding a value whose type implements `Drop` now runs: it drops the value with the cell, and drops the value `set` or a thread-local key's `set` replaces. (#2659)
+- A `&mut` binding of a slice pattern's rest (`[first, rest @ ..] = &mut v[..]`), or of a whole range of elements, is a `&mut [T]` view that writes through to the place. (#163)
+- `&req.comparators[0]` on a crate struct's field borrows the field, so a later method call on the struct runs as cargo's build does. (#2225)
+- A `&mut` local in an async body can be given new borrows (`r = &mut b`), across awaits. (#123)
+- Traits are keyed by their definition. `io::Write` and `fmt::Write` are two traits, so a type can implement both and a bound by one refuses a type that only implements the other (E0277, naming `std::io::Write`). A bare std trait name in a signature must be in scope in its own module (E0405). Two bodies' `trait Shape` are two traits, each named by its body's path (`first::Shape`) as rustc prints it. (#758)
+- A failed native build keeps the causes Cargo gave, so a dependency that can't be fetched says why. (#1818)
+- A native build's error in code rawr generated for a marked type's crossing impls, or for a generic marked function's instance, names the marked declaration. (#1540)
+- A runner build's error in a generated adapter names the program's call that needed it, with the adapter in a note. (#1905)
+- A `use` of a dependency path the crate lacks reads as rustc's E0432, with its label and the closest name as help. (#1400)
+- Notes about a program's native module items name the program's own file instead of rawr's copy. (#690)
+- A use after a crate method took the value as `self` gets rustc's E0382 note at the method's `self` in the crate's source. (#695)
+- Text `.into()` converts into `Box<str>`, `Rc<str>` and `Arc<str>` from a let, a field, an argument or a return, and `Box<str>` in a signature or field is a pointer to `str`, so `fn g() -> Box<str>` compiles. `Rc::<str>::from` and `Arc::<[T]>::from(vec)` run, and a `Box<str>` prints with `{}` and `{:?}`. (#732, #820)
+- A crate call's type argument nothing fixes is rustc's E0283 when the crate item bounds it, as `Rgb { .., ..Rgb::default() }` with no annotation is, and E0282 otherwise. (#611)
+- `Vec::from(value)` of a crate type calls the crate's `From` impl for `Vec`, as iced's `Vec::from(bytes)` does. (#460)
+- An array or iterator of Elements widens to a slice only at a crate call's argument, so `let v: Vec<Element> = [a, b];` is E0308, as in rustc. (#737)
+- In a generic compiled per caller type, `.into()` of a value of an `Into<PathBuf>`-bounded parameter's type takes the bound's target however the value reaches it, such as through another binding or a tuple. (#1720)
+- `rawr run` and `rawr test` start the project's `cargo check` after the runner is built, so the runner no longer waits behind it, and they no longer hash build-script outputs they don't read. (#2655, #2651)
+- The generated runner embeds its manifest with `include_bytes!` and checks it at compile time, so a change of demand runs no build script. (#2648)
+- Pruning after a runner build reads a unit's output only when loose object files of that unit exist. (#2652)
+- A trait's `&mut self` method called by its path, such as `Iterator::next(&mut c)` or `fmt::Write::write_str(&mut a, "hi")`, changes the place it borrows, as rustc does. A local not declared `mut` gets rustc's E0596 at the borrow, with its label and `mut` help, as every `&mut self` receiver's E0596 now does. (#2671)
+- E0277 for an unmet bound marks the bound's whole path, puts rustc's help at the type's definition, adds the 'implements similarly named trait' note, and names std traits by rustc's paths (`std::io::Write`, `std::error::Error`). (#2672)
+- `LocalKey::try_with` runs, with std's own `AccessError` once the thread's end destroyed the value. A destroyed key's other accesses panic as std's do. (#2645)
+- E0599 on a std type notes the impls that have the method ('the method was found for `LocalKey<Cell<T>>`') or suggests a std method of a similar name. A `LocalKey` method's `where` bound is rustc's E0277 at the method, required by a bound in `LocalKey::<Cell<T>>::take`. (#2644)
 
 ## 0.5.20 (2026-11-22)
 
