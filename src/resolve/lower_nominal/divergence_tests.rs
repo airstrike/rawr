@@ -13328,3 +13328,72 @@ fn a_local_key_method_of_another_impl_is_rustcs_e0599_with_its_notes() {
         );
     }
 }
+
+#[test]
+fn a_generic_impl_for_a_std_type_runs_per_instance() {
+    // `impl<T: Tag> Tag for Vec<T>` reached through a generic runs at its
+    // element type, so `T::tag_all` is `u8`'s own, `u32`'s default or
+    // `Option<u8>`'s instance, and a builtin's trait method takes a `&mut`
+    // argument, as rustc's monomorphised calls do.
+    let output = printed(
+        r#"
+trait Tag {
+    fn tag(&self, out: &mut Vec<String>);
+    fn tag_all(data: &[Self], out: &mut Vec<String>)
+    where
+        Self: Sized,
+    {
+        for piece in data {
+            piece.tag(out)
+        }
+    }
+}
+impl Tag for u8 {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("u8 {}", self)) }
+    fn tag_all(data: &[u8], out: &mut Vec<String>) { out.push(format!("u8s {:?}", data)) }
+}
+impl Tag for u32 {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("u32 {}", self)) }
+}
+struct P(u8);
+impl Tag for P {
+    fn tag(&self, out: &mut Vec<String>) { out.push(format!("P {}", self.0)) }
+}
+impl<T: Tag> Tag for Option<T> {
+    fn tag(&self, out: &mut Vec<String>) {
+        match self {
+            None => out.push("none".to_string()),
+            Some(v) => v.tag(out),
+        }
+    }
+}
+impl<T: Tag> Tag for Vec<T> {
+    fn tag(&self, out: &mut Vec<String>) {
+        out.push(format!("len {}", self.len()));
+        T::tag_all(self, out)
+    }
+}
+fn show<T: Tag>(x: &T) -> Vec<String> {
+    let mut out = Vec::new();
+    x.tag(&mut out);
+    out
+}
+fn main() {
+    let mut out = Vec::new();
+    7u8.tag(&mut out);
+    println!("{:?}", out);
+    println!("{:?}", show(&Some(3u32)));
+    println!("{:?}", show(&vec![1u8, 2]));
+    println!("{:?}", show(&vec![1u32, 2]));
+    println!("{:?}", show(&vec![P(1), P(2)]));
+    println!("{:?}", show(&vec![Some(1u8), None]));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"u8 7\"]\n[\"u32 3\"]\n[\"len 2\", \"u8s [1, 2]\"]\n[\"len 2\", \"u32 1\", \"u32 \
+         2\"]\n[\"len 2\", \"P 1\", \"P 2\"]\n[\"len 2\", \"u8 1\", \"none\"]\n"
+    );
+}

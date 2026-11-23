@@ -18,6 +18,10 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
+        if let Some(definition) = self.concrete_impl_function(&self_ty, trait_name, function) {
+            let written = self.inference.resolve(&self_ty);
+            return self.call_associated(definition, arguments, call, Some(written));
+        }
         let mut substitution = self.fresh_generics(&function.generics, call);
         self.apply_trait_turbofish(&function.generics, &substitution, call)?;
         substitution.insert("Self".into(), self_ty.clone());
@@ -112,11 +116,55 @@ impl<'a> Parser<'a> {
             ));
             placeholder
         };
+        // Every impl copies the `&mut` parameters the trait's signature
+        // has, so the dispatcher gives back what the one it runs does.
+        let copied = copied_parameters(
+            &function.parameters,
+            None,
+            function.formatter.as_ref(),
+            function.body.asynchronous,
+        );
+        let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
+        self.move_copied_in(&mut arguments, &copied);
         let source = origin::Fragment::call(
             &dispatcher,
             std::iter::once(witness).chain(arguments.iter().map(ParsedExpr::rendered_source)),
         );
+        let source = self.copied_call(source, &places)?;
         Ok(self.operator_expr(source, output, call))
+    }
+
+    /// The impl of the trait function `function` (one without `self`) whose
+    /// Self type is `self_ty`, when `self_ty` is one type and the trait has
+    /// no parameters of its own: `T::hash_slice(..)` in an instance whose
+    /// `T` is `Option<u8>` runs `Option<T>`'s impl at `u8`, as rustc's
+    /// monomorphised call does.
+    fn concrete_impl_function(
+        &mut self,
+        self_ty: &Ty,
+        trait_name: &ImmutableString,
+        function: &item::Function,
+    ) -> Option<method::Definition> {
+        let resolved = self.inference.resolve(self_ty);
+        if !super::instance::concrete(&resolved)
+            || self
+                .models
+                .traits
+                .get(trait_name)
+                .is_none_or(|(_, declared)| !declared.generics.is_empty())
+        {
+            return None;
+        }
+        let owner = owner_id(&resolved)?;
+        let definitions = self
+            .models
+            .trait_methods
+            .get(&(owner, function.name.text.clone()))?
+            .iter()
+            .filter(|definition| definition.trait_name() == Some(trait_name))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.fitting_impl(definitions, &resolved)
     }
 
     /// Whether `name` is a crate trait a qualified call can name: one the

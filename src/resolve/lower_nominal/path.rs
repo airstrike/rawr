@@ -1800,7 +1800,7 @@ impl<'a> Parser<'a> {
             });
         }
         // `Type::NAME`: an associated const is its value.
-        let (mut arguments, end) = if definition.constant() {
+        let (arguments, end) = if definition.constant() {
             (Vec::new(), text_end(member_span.start(), &member))
         } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
             let expression = span(owner_span.start(), member_span.end());
@@ -1826,31 +1826,40 @@ impl<'a> Parser<'a> {
             }
             self.parse_borrowing_arguments("associated function arguments")?
         };
-        let substitution =
-            self.method_substitution(&definition, None, span(owner_span.start(), end))?;
-        if let Some(written) = self.written_owners.remove(&owner_span.start())
+        let written = self.written_owners.remove(&owner_span.start());
+        self.call_associated(
+            definition,
+            arguments,
+            span(owner_span.start(), end),
+            written,
+        )
+    }
+
+    /// The call `call` of the associated function `definition` with its
+    /// `arguments` read: its generics inferred, `written`, the Self type a
+    /// path writes, fixing its impl's, and its `&mut` arguments copied,
+    /// lent or kept as its signature says.
+    pub(super) fn call_associated(
+        &mut self,
+        definition: method::Definition,
+        mut arguments: Vec<ParsedExpr>,
+        call: Span,
+        written: Option<Ty>,
+    ) -> Result<ParsedExpr, Error> {
+        let substitution = self.method_substitution(&definition, None, call)?;
+        if let Some(written) = written
             && !definition.owner_arguments().is_empty()
         {
             let owner = impl_self_ty(&definition, &substitution);
-            self.require_type(&written, &owner, span(owner_span.start(), end))?;
+            self.require_type(&written, &owner, call)?;
         }
-        self.require_arguments(
-            &definition,
-            &mut arguments,
-            span(owner_span.start(), end),
-            &substitution,
-        )?;
+        self.require_arguments(&definition, &mut arguments, call, &substitution)?;
         self.lend_arguments(&definition, &mut arguments, &substitution, None);
         // A generic associated function compiled per instantiation is
         // its instance for the types this call gives it (D629).
         #[cfg(feature = "rust-import")]
-        let definition =
-            self.bind_method_instance(definition, &substitution, span(owner_span.start(), end))?;
-        let witnesses = self.witness_arguments(
-            definition.generics(),
-            &substitution,
-            span(owner_span.start(), end),
-        );
+        let definition = self.bind_method_instance(definition, &substitution, call)?;
+        let witnesses = self.witness_arguments(definition.generics(), &substitution, call);
         let copied = method_copied(&definition, &self.models);
         let lent = method_lent(&definition);
         let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
@@ -1860,7 +1869,7 @@ impl<'a> Parser<'a> {
         let kept = method_kept(&definition);
         self.mutable_arguments(&arguments, kept.iter().copied())?;
         self.lend_kept(&mut arguments, &kept)?;
-        let name = self.method_call_name(&definition, &substitution, span(owner_span.start(), end));
+        let name = self.method_call_name(&definition, &substitution, call);
         let source = origin::Fragment::call(
             name.as_str(),
             arguments
@@ -1885,16 +1894,16 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         self.note_opaque_bound(
             definition.lifetimes().written_output.as_deref(),
-            span(owner_span.start(), end),
+            call,
             &kept,
         );
         let kept = self.inference.resolve(&kept);
-        self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
+        self.kept_by_call(call, &kept, None, &summary);
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
             source,
             ty: kept,
-            span: span(owner_span.start(), end),
+            span: call,
             lvalue: None,
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,

@@ -1125,18 +1125,24 @@ impl Models {
                     }
                     Some((key.clone(), super::instance::template_parameters(function)?))
                 })
-                .chain(program.methods.iter().filter_map(|definition| {
-                    let key = definition.key();
-                    if program.instances.templates.contains_key(key)
-                        || program.instances.types.contains_key(key)
-                    {
-                        return None;
-                    }
-                    Some((
-                        key.clone(),
-                        super::instance::method_template_parameters(definition)?,
-                    ))
-                }))
+                .chain(
+                    program
+                        .methods
+                        .iter()
+                        .chain(&program.builtin_methods)
+                        .filter_map(|definition| {
+                            let key = definition.key();
+                            if program.instances.templates.contains_key(key)
+                                || program.instances.types.contains_key(key)
+                            {
+                                return None;
+                            }
+                            Some((
+                                key.clone(),
+                                super::instance::method_template_parameters(definition)?,
+                            ))
+                        }),
+                )
                 .collect(),
             macros: program.macros.clone(),
             laid_out: laid_out(program, engine),
