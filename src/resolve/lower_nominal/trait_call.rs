@@ -1443,19 +1443,40 @@ impl<'a> Parser<'a> {
             .map(|argument| self.inference.resolve(argument))
             .collect::<Vec<_>>();
         // `Describe::describe(&b)` of a `Foo<i64>`, whose impl is one of
-        // `Foo<i32>`'s and `Foo<i64>`'s: the one rustc selects by the full
-        // Self type, which the runtime type can't tell.
-        let resolved = self.inference.resolve(&self_ty);
+        // `Foo<i32>`'s and `Foo<i64>`'s, or `Show::show(&w)` of a generic
+        // impl's: the impl rustc selects by the full Self type, at its
+        // arguments, which the runtime type can't tell.
+        let resolved = self.unreferenced(&self_ty);
         let selected = owner_id(&resolved)
-            .and_then(|owner| self.self_typed_function(owner, &function.name.text, &resolved))
-            .filter(|definition| {
-                definition.trait_name() == Some(trait_name)
-                    && witness_generics(definition.generics(), &self.models)
-                        .next()
-                        .is_none()
+            .filter(|owner| {
+                owner.builtin_code() != Some(crate::resolve::BLANKET_OWNER)
+                    && trait_arguments.is_empty()
+            })
+            .and_then(|owner| {
+                let definitions = self
+                    .models
+                    .trait_methods
+                    .get(&(owner, function.name.text.clone()))?
+                    .iter()
+                    .filter(|definition| definition.trait_name() == Some(trait_name))
+                    .cloned()
+                    .collect();
+                self.fitting_impl(definitions, &resolved)
             });
         let dispatcher = if let Some(definition) = selected {
-            method_name(&definition)
+            let substitution = definition
+                .generics()
+                .iter()
+                .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+                .collect::<BTreeMap<_, _>>();
+            let fits = self.unify_type(&impl_self_ty(&definition, &substitution), &resolved);
+            debug_assert!(fits, "the impl selected for a Self type is for it");
+            arguments.extend(
+                self.witness_arguments(definition.generics(), &substitution, call)
+                    .into_iter()
+                    .map(|witness| self.operator_expr(witness, Ty::Unknown, call)),
+            );
+            self.method_call_name(&definition, &substitution, call)
         } else if trait_arguments.is_empty() {
             trait_dispatcher_name(trait_name, &function.name.text)
         } else {

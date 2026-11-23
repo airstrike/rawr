@@ -748,6 +748,16 @@ impl<'a> Parser<'a> {
         if selves.len() < 2 {
             return None;
         }
+        self.fitting_impl(definitions, self_ty)
+    }
+
+    /// The one of `definitions` whose impl's Self type is `self_ty`'s
+    /// (through its references), as rustc selects it.
+    pub(super) fn fitting_impl(
+        &mut self,
+        definitions: Vec<method::Definition>,
+        self_ty: &Ty,
+    ) -> Option<method::Definition> {
         let self_ty = self.unreferenced(self_ty);
         let fitting = self.fitting_impls(definitions, &self_ty);
         if let [definition] = &fitting[..] {
@@ -836,13 +846,12 @@ impl<'a> Parser<'a> {
 
     /// rawr's refusal where a value of `ty` reaches the impls of
     /// `trait_name<arguments>` by its runtime type, as a generic
-    /// parameter's or a trait object's does, and two of them are for Self
-    /// types the runtime type doesn't tell apart: `Foo<i32>`'s and
-    /// `Foo<i64>`'s, or `f32`'s and `f64`'s of a generic trait. A call
-    /// where the type is known selects its impl (`self_typed_function`),
-    /// and a kind trait's call through a parameter selects it by the
-    /// parameter's witness (`Models::kind_traits`), which a trait object
-    /// doesn't hold.
+    /// parameter's does in a body no instance lowers, and two of them are
+    /// for Self types the runtime type doesn't tell apart: `Foo<i32>`'s and
+    /// `Foo<i64>`'s, or `f32`'s and `f64`'s. A call where the type is known
+    /// selects its impl (`self_typed_function`), an instance's call reads
+    /// its types (D1115), and a trait object's value carries its type's key
+    /// (`trait_object.rs`).
     pub(super) fn untold_impls(
         &mut self,
         ty: &Ty,
@@ -1626,6 +1635,37 @@ impl<'a> Parser<'a> {
         let mut call = value.surrounded("(", ")");
         call.push_text(format!(".{}(", method_name(definition)));
         call.push(origin::Fragment::join(arguments.iter().cloned(), ", "));
+        call.push_text(")");
+        call
+    }
+
+    /// `value.f(arguments)` for the hand-written std trait impl function
+    /// `definition` on a value of `self_ty`: its instance at `self_ty`'s
+    /// arguments where it is a template (D1115), given the witnesses its
+    /// generics take (`impl<const N: usize> Display for Buf<N>`).
+    pub(super) fn std_impl_call(
+        &mut self,
+        definition: &method::Definition,
+        self_ty: &Ty,
+        value: origin::Fragment,
+        arguments: &[origin::Fragment],
+    ) -> origin::Fragment {
+        let substitution = definition
+            .generics()
+            .iter()
+            .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+            .collect::<BTreeMap<_, _>>();
+        let self_ty = self.unreferenced(self_ty);
+        let fits = self.unify_type(&impl_self_ty(definition, &substitution), &self_ty);
+        debug_assert!(fits, "a std impl's caller selected it for the value's type");
+        let witnesses = self.witness_arguments(definition.generics(), &substitution, Span::NONE);
+        let name = self.method_call_name(definition, &substitution, Span::NONE);
+        let mut call = value.surrounded("(", ")");
+        call.push_text(format!(".{name}("));
+        call.push(origin::Fragment::join(
+            arguments.iter().cloned().chain(witnesses),
+            ", ",
+        ));
         call.push_text(")");
         call
     }

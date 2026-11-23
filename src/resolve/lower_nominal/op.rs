@@ -15,8 +15,8 @@ use super::without_references;
 use super::{
     any_object, cast_value, cell, char_method, collect_try, compare, counted, cow, drops,
     error_object, instantiate, int_method, keyed_query, origin, parse_text, places, sequence,
-    slice_value, str_change, str_method, str_pieces, thread, time_method, vec_method, Models,
-    Nominal, ParsedExpr, CHAR_METHODS, COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX,
+    slice_value, str_change, str_method, str_pieces, thread, time_method, trait_object, vec_method,
+    Models, Nominal, ParsedExpr, CHAR_METHODS, COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX,
     SLICE_CHUNKS,
 };
 use crate::func::{FnCallArgs, NativeCallContext, RawrFunc};
@@ -291,6 +291,10 @@ pub(super) enum PreludeOp {
     /// or a `dyn Error` (`any_object.rs`).
     AnyNew,
     Downcast,
+    /// A program trait's object of a value, keyed by its type, and the key
+    /// a trait dispatcher reads of one (`trait_object.rs`).
+    ObjectNew,
+    ObjectKey,
     /// A `parse` error, whose kind its target's kind code gives, boxed as
     /// `dyn Error` by `?`.
     ErrorParse,
@@ -545,6 +549,8 @@ impl PreludeOp {
             Self::ErrorSource => "error.source",
             Self::AnyNew => "any.new",
             Self::Downcast => "any.downcast",
+            Self::ObjectNew => "object.new",
+            Self::ObjectKey => "object.key",
             Self::ErrorParse => "error.parse",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
@@ -650,6 +656,7 @@ impl PreludeOp {
             | Self::PathGet
             | Self::GenericDebug
             | Self::ValueClone
+            | Self::ObjectKey
             | Self::SequenceContains
             | Self::CountedGet
             | Self::CountedStrong
@@ -682,6 +689,7 @@ impl PreludeOp {
             | Self::GenericDebug
             | Self::ValueClone
             | Self::TypeIndex
+            | Self::ObjectKey
             | Self::Discriminant
             | Self::ReverseWrap
             | Self::CowBorrowed
@@ -717,6 +725,7 @@ impl PreludeOp {
             | Self::CellReplace
             | Self::ErrorText
             | Self::AnyNew
+            | Self::ObjectNew
             | Self::ReferentStore => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
@@ -1451,6 +1460,7 @@ impl PreludeOp {
                 return error_object::invoke(self, args);
             }
             Self::AnyNew | Self::Downcast => return any_object::invoke(self, args),
+            Self::ObjectNew | Self::ObjectKey => return trait_object::invoke(self, args),
             Self::ErrorParse => {
                 return Ok(error_object::parsed(
                     &args[0].clone_cast::<ImmutableString>(),

@@ -12,8 +12,8 @@ use super::{
     closure, default_value, drops, instance_dispatcher_name, instance_text, item_generics,
     kind_code, location, mentions_parameter, method_name, origin, retain_locations,
     static_dispatcher_name, static_instance_dispatcher_name, std_impl, trait_dispatcher_name,
-    witness_generics, witness_variable, Lowered, ParsedExpr, Parser, CLOSURE_SENTINEL,
-    DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL, UNKNOWN_WITNESS,
+    trait_object, witness_generics, witness_variable, Lowered, ParsedExpr, Parser,
+    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL, UNKNOWN_WITNESS,
 };
 use crate::resolve::{item, type_ref, Error, Program};
 use crate::type_def;
@@ -87,11 +87,13 @@ pub(super) fn write_closures(
 
 /// One function per trait method with a receiver, running the impl of the
 /// receiver's runtime type: how a call on a value of a generic type bounded
-/// by the trait reaches its implementation.
+/// by the trait reaches its implementation. A trait object's value keyed by
+/// its concrete type runs the impl `arms` give that type (D1115.3).
 pub(super) fn write_trait_dispatchers(
     output: &mut location::Generated,
     models: &Models,
     ops: &mut Vec<ExecutableOp>,
+    arms: &BTreeSet<trait_object::Arm>,
 ) {
     // A trait without methods, such as std's `Error`, which every program
     // knows, needs no dispatcher and so no type index.
@@ -106,6 +108,8 @@ pub(super) fn write_trait_dispatchers(
     }
     let type_index = format!("{SENTINEL}{}", ops.len());
     ops.push(ExecutableOp::Prelude(PreludeOp::TypeIndex));
+    let object_key = format!("{SENTINEL}{}", ops.len());
+    ops.push(ExecutableOp::Prelude(PreludeOp::ObjectKey));
     for (trait_name, (source, declared)) in &models.traits {
         // `Drop` is run by the drop glue where Rust drops a value.
         if trait_name == "Drop" && models.std_traits.contains(trait_name) {
@@ -149,12 +153,10 @@ pub(super) fn write_trait_dispatchers(
                 write_instance_dispatchers(
                     output,
                     models,
-                    trait_name,
-                    *source,
-                    declared,
+                    (trait_name, *source, declared),
                     function,
                     &parameters,
-                    &type_index,
+                    (&type_index, &object_key, arms),
                     ops,
                 );
                 continue;
@@ -179,6 +181,13 @@ pub(super) fn write_trait_dispatchers(
                     .iter()
                     .filter(|definition| definition.trait_name() == Some(trait_name))
                     .collect::<Vec<_>>();
+                let owner_arms = arms
+                    .iter()
+                    .filter(|arm| arm.of(trait_name, &function.name.text, None, &owner_key(*owner)))
+                    .collect::<Vec<_>>();
+                if !owner_arms.is_empty() {
+                    write_keyed(&mut text, *owner, &object_key, &owner_arms, &parameters);
+                }
                 if self_types(models, implemented.iter().copied()) > 1
                     && owner.builtin_code() != Some(crate::resolve::BLANKET_OWNER)
                 {
@@ -265,11 +274,32 @@ pub(super) fn write_trait_dispatchers(
     }
 }
 
+/// The arms of a dispatcher by runtime type for `owner`'s values keyed as
+/// trait objects (`trait_object.rs`), which `object_key` reads the key of.
+fn write_keyed(
+    text: &mut String,
+    owner: type_def::Id,
+    object_key: &str,
+    arms: &[&trait_object::Arm],
+    parameters: &str,
+) {
+    let _ = writeln!(
+        text,
+        "if __rawr_type == {} {{\nlet __rawr_key = {object_key}(self);",
+        owner_key(owner)
+    );
+    for arm in arms {
+        text.push_str(&arm.text(parameters));
+    }
+    text.push_str("}\n");
+}
+
 /// The arm of a dispatcher by runtime type for `owner`, whose impls of
 /// `trait_name` for two of its Self types each give `function`
-/// (`Foo<i32>`'s and `Foo<i64>`'s, or `f32`'s and `f64`'s): a value holds
-/// no type arguments, so the runtime type can't tell which is its impl,
-/// and rawr refuses rather than run the wrong one.
+/// (`Foo<i32>`'s and `Foo<i64>`'s, or `f32`'s and `f64`'s): a value no
+/// trait object's coercion keyed holds no type arguments, so the runtime
+/// type can't tell which is its impl, and rawr refuses rather than run the
+/// wrong one.
 fn write_untold(text: &mut String, owner: type_def::Id, trait_name: &str, function: &str) {
     let _ = writeln!(
         text,
@@ -293,8 +323,9 @@ fn self_types<'a>(
 
 /// The arguments a dispatcher by runtime type passes the impl method
 /// `definition`: `parameters`, then `UNKNOWN_WITNESS` for each witness its
-/// generics take, which no runtime value names (`impl<T: Half> Show for
-/// W<T>` called through `dyn Show`).
+/// generics take, which a value no trait object's coercion keyed doesn't
+/// name (`impl<const N: usize> Display for Buf<N>` of a `Buf` a body whose
+/// types hold a parameter boxed as `dyn Display`).
 fn unknown_witnesses(parameters: &str, definition: &method::Definition, models: &Models) -> String {
     let witnesses = witness_generics(definition.generics(), models).count();
     std::iter::once(parameters)
@@ -364,12 +395,10 @@ pub(super) fn native_borrow(
 pub(super) fn write_instance_dispatchers(
     output: &mut location::Generated,
     models: &Models,
-    trait_name: &ImmutableString,
-    source: crate::program::source::Id,
-    declared: &item::Trait,
+    (trait_name, source, declared): (&ImmutableString, crate::program::source::Id, &item::Trait),
     function: &item::Function,
     parameters: &str,
-    type_index: &str,
+    (type_index, object_key, arms): (&str, &str, &BTreeSet<trait_object::Arm>),
     ops: &mut Vec<ExecutableOp>,
 ) {
     let instances = models
@@ -404,6 +433,7 @@ pub(super) fn write_instance_dispatchers(
             instance_dispatcher_name(trait_name, &function.name.text, index)
         );
         let mut blanket = None;
+        let mut keyed = BTreeSet::new();
         let mut told = BTreeMap::<type_def::Id, Vec<&method::Definition>>::new();
         for (owner, definition) in &definitions {
             let arguments = definition.trait_arguments();
@@ -426,6 +456,23 @@ pub(super) fn write_instance_dispatchers(
             })
             .map(|(owner, _)| owner)
             .collect::<BTreeSet<_>>();
+        for (owner, _) in &definitions {
+            let owner_arms = arms
+                .iter()
+                .filter(|arm| {
+                    arm.of(
+                        trait_name,
+                        &function.name.text,
+                        instance.as_deref(),
+                        &owner_key(*owner),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if instance.is_none() || owner_arms.is_empty() || !keyed.insert(*owner) {
+                continue;
+            }
+            write_keyed(&mut text, *owner, object_key, &owner_arms, parameters);
+        }
         for owner in &untold {
             write_untold(&mut text, *owner, trait_name, &function.name.text);
         }

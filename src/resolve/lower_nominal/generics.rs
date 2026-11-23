@@ -760,6 +760,7 @@ impl<'a> Parser<'a> {
     /// source locations stay exact).
     pub(super) fn finish_witnesses(&mut self) -> Result<(), Error> {
         self.settle_instance_literals();
+        self.settle_objects();
         // Rust's fallback: an unconstrained literal is an `i32` or `f64`.
         for (id, integer) in std::mem::take(&mut self.literal_kinds) {
             let (kind, default) = if integer {
@@ -771,6 +772,7 @@ impl<'a> Parser<'a> {
                 self.inference.bind(id, default);
             }
         }
+        self.finish_objects()?;
         self.finish_template_calls();
         for (id, value, at) in std::mem::take(&mut self.literal_values) {
             let value = Wide::Signed(value.into());

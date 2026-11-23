@@ -102,6 +102,7 @@ mod thread_local;
 mod time;
 mod tokens;
 mod trait_call;
+mod trait_object;
 mod traits;
 mod trimmed;
 mod ty;
@@ -883,6 +884,9 @@ struct Parser<'a> {
     /// The instances this body's calls bind, and the templates it calls by
     /// their erased bodies.
     instance_uses: instance::Uses,
+    /// Each coercion to a trait object whose key waits for the body's
+    /// types (D1115.3).
+    pending_objects: Vec<trait_object::Pending>,
     /// Whether this body is a template's generic read, which its instances
     /// lower again at their types (D1115).
     template_read: bool,
@@ -1258,6 +1262,7 @@ impl<'a> Parser<'a> {
             collecting_instances: false,
             pending_template_calls: Vec::new(),
             instance_uses: instance::Uses::default(),
+            pending_objects: Vec::new(),
             template_read: false,
             reaches_host: false,
             impl_uses: Vec::new(),

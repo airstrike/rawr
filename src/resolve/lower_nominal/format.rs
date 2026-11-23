@@ -2316,7 +2316,8 @@ impl<'a> Parser<'a> {
                 .models
                 .std_impl_at(*id, arguments, "Display", "fmt")
                 .filter(|_| self.impl_holds("Display", *id, arguments))
-                .map(|definition| Self::std_call(definition, value, &["\"\"".into()])),
+                .cloned()
+                .map(|definition| self.std_impl_call(&definition, ty, value, &["\"\"".into()])),
             Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..)
                 if self.type_implements(ty, "Display") =>
             {
@@ -2371,11 +2372,13 @@ impl<'a> Parser<'a> {
     ) -> Option<origin::Fragment> {
         if self.display_takes_spec(ty) {
             return Some(match ty {
-                Ty::Script(id, arguments) => Self::std_call(
-                    self.models.std_impl_at(*id, arguments, "Display", "fmt")?,
-                    value,
-                    &[spec.into()],
-                ),
+                Ty::Script(id, arguments) => {
+                    let definition = self
+                        .models
+                        .std_impl_at(*id, arguments, "Display", "fmt")?
+                        .clone();
+                    self.std_impl_call(&definition, ty, value, &[spec.into()])
+                }
                 _ => Self::std_dispatch("Display", "fmt", value, &[spec.into()]),
             });
         }
@@ -3048,8 +3051,9 @@ impl<'a> Parser<'a> {
                 let definition = self
                     .models
                     .std_impl_at(*id, arguments, "Debug", "fmt")
-                    .expect("guarded by the match arm");
-                Self::std_call(definition, value, &["\"\"".into()])
+                    .expect("guarded by the match arm")
+                    .clone();
+                self.std_impl_call(&definition, &ty, value, &["\"\"".into()])
             }
             Ty::Reverse(inner) => {
                 let unwrapped = self.prelude_op(PreludeOp::ReverseInner, [value]);
