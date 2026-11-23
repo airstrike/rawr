@@ -3727,23 +3727,26 @@ fn each_workspace_members_runner_builds_its_own_units() {
         assert_eq!(run_ok(&root.join(name), &home), format!("{name}: 6\n"));
     }
 
-    // Each runner's build script ran in a directory of its own, so each
-    // output names its own runner's carrier.
-    let outputs = fs::read_dir(root.join("target/debug/build"))
+    // Each runner is a unit of its own, so each runner binary's dep-info
+    // names its own runner's carrier, which it embeds, and no other's.
+    let units = fs::read_dir(root.join("target/debug/deps"))
         .unwrap()
         .filter_map(|entry| {
             let path = entry.ok()?.path();
             let name = path.file_name()?.to_str()?;
-            name.starts_with("rawr-generated-runner-")
-                .then(|| fs::read_to_string(path.join("output")).ok())
+            (name.starts_with("rawr_generated_runner-") && name.ends_with(".d"))
+                .then(|| fs::read_to_string(&path).ok())
                 .flatten()
         })
         .collect::<Vec<_>>();
-    for name in ["left", "right"] {
-        let carrier = format!("members/{name}/runner/rawr-generated-manifest.carrier");
+    let carrier = |name: &str| format!("members/{name}/runner/rawr-generated-manifest.carrier");
+    for (name, other) in [("left", "right"), ("right", "left")] {
+        let (own, other) = (carrier(name), carrier(other));
         assert!(
-            outputs.iter().any(|output| output.contains(&carrier)),
-            "no build script output names {carrier}: {outputs:#?}"
+            units
+                .iter()
+                .any(|unit| unit.contains(&own) && !unit.contains(&other)),
+            "no runner unit names {own} alone: {units:#?}"
         );
     }
 }
