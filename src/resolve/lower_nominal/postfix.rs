@@ -1376,7 +1376,12 @@ impl<'a> Parser<'a> {
             // the builtin's own method of that name comes first, as
             // Rust's inherent methods do.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
+                // A shared `str` is rawr's `&str`, the `str` Self type an
+                // impl's header reads.
+                let shared_str = matches!(&builtin, Ty::Reference { mutable: false, target }
+                    if **target == Ty::UnsizedStr);
                 let receiver = match &builtin {
+                    _ if shared_str => Ty::Str,
                     Ty::Reference { target, .. } => (**target).clone(),
                     ty => ty.clone(),
                 };
@@ -1430,8 +1435,11 @@ impl<'a> Parser<'a> {
                     if let Some(error) = unscoped {
                         return Err(error);
                     }
-                    let (args, end) = self.parse_call_arguments("method arguments")?;
+                    let (args, end) = self.parse_borrowing_arguments("method arguments")?;
                     let owner_name = receiver.name(&self.models);
+                    if shared_str {
+                        value.ty = Ty::Str;
+                    }
                     value = match self.call_owner_method(
                         value,
                         owner,

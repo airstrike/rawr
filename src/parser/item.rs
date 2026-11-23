@@ -3166,18 +3166,7 @@ fn parse_impl(
         },
         generics: generics.into_boxed_slice(),
         lifetimes,
-        // `impl Hash for T { fn hash<H: Hasher>(..) }`: Rawr hashes a value
-        // by its contents, so the impl only marks `T` as `Hash`.
-        functions: if trait_
-            .as_ref()
-            .and_then(|path| path.segments.last())
-            .is_some_and(|last| last.name.text == "Hash")
-            && hashes_as_rust(&functions)
-        {
-            Box::default()
-        } else {
-            functions.into_boxed_slice()
-        },
+        functions: functions.into_boxed_slice(),
         trait_,
         owner,
         associated: associated.into_boxed_slice(),
@@ -5448,29 +5437,6 @@ fn bound_fn_type(path: &mut type_ref::Path, lifetime: type_ref::Lifetime) {
         arguments.push(type_ref::Argument::Lifetime(lifetime));
         segment.arguments = arguments.into_boxed_slice();
     }
-}
-
-/// Whether an `impl Hash` declares Rust's one method,
-/// `fn hash<H: Hasher>(&self, state: &mut H)`.
-fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
-    let [function] = functions else {
-        return false;
-    };
-    let [generic] = &*function.generics else {
-        return false;
-    };
-    let [parameter] = &*function.parameters else {
-        return false;
-    };
-    function.name.text == "hash"
-        && matches!(function.receiver, Some(crate::item::Receiver::Shared(_)))
-        && function.output.is_none()
-        && matches!(
-            &parameter.ty,
-            type_ref::Type::Reference { mutable: true, target, .. }
-                if matches!(&**target, type_ref::Type::Path(path)
-                    if matches!(&path.segments[..], [segment] if segment.name.text == generic.name.text))
-        )
 }
 
 /// What a type starting with `fn` or `impl` is.
