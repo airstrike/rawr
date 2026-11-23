@@ -22,7 +22,6 @@ extern crate rustc_hir;
 extern crate rustc_infer;
 extern crate rustc_interface;
 extern crate rustc_log;
-extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
@@ -83,7 +82,7 @@ mod attempt_protocol;
 const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
-const PROTOCOL_SCHEMA: u32 = 104;
+const PROTOCOL_SCHEMA: u32 = 103;
 /// The commit of the nightly this driver was built with, which it reads
 /// metadata of and names in its version.
 const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");
@@ -515,21 +514,10 @@ fn expand(arguments: &[String]) -> Result<ExitCode, String> {
         compiler_arguments.push("--extern".to_owned());
         compiler_arguments.push(format!("{}={}", crate_.alias, crate_.path));
     }
-    // A crate named by its name alone is found among the dependencies.
-    if !request.crates.is_empty() {
-        for directory in &request.dependency_directories {
-            compiler_arguments.push(format!("-Lcrate={directory}"));
-        }
-    }
-    for name in &request.crates {
-        compiler_arguments.push("--extern".to_owned());
-        compiler_arguments.push(name.clone());
-    }
     compiler_arguments.push(request.source.clone());
     let mut callbacks = compiler::expand::Expand {
         out: PathBuf::from(out),
         protocol: PROTOCOL_SCHEMA,
-        source: request.source.clone(),
         result: None,
     };
     let exit = rustc_driver::catch_with_exit_code(|| {

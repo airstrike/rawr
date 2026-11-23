@@ -98,7 +98,7 @@ impl super::Graph {
                             .find_map(host::item::Definition::macro_rules_source)
                     });
                 #[cfg(feature = "rust-import")]
-                let kept: (String, Vec<Option<u32>>);
+                let kept: String;
                 let expansion = match rules {
                     Some(rules) => {
                         let Ok(parsed_rules) = rules.rules() else {
@@ -135,10 +135,7 @@ impl super::Graph {
                                 continue;
                             }
                         }
-                        Expansion::Text {
-                            text: &kept.0,
-                            locations: &kept.1,
-                        }
+                        Expansion::Text(&kept)
                     }
                     None => continue,
                 };
@@ -288,9 +285,7 @@ fn crate_path(
 /// the project at `project` keeps it (`rawr_import::expand::call`), in the
 /// place a block's statement or a module's item is: rustc expands both as
 /// a body's statements, whose items are items, named in `named` as it is
-/// read, with where each location call in it reads
-/// (`rawr_import::expand::call::Location`). The error that asks rustc for
-/// it when it has none yet.
+/// read. The error that asks rustc for it when it has none yet.
 #[cfg(feature = "rust-import")]
 fn expansion_kept(
     parsed: &crate::parse::Unit,
@@ -298,7 +293,7 @@ fn expansion_kept(
     path: &str,
     project: &std::path::Path,
     named: &mut rawr_import::expand::kept::Named,
-) -> Result<(String, Vec<Option<u32>>), crate::resolve::Error> {
+) -> Result<String, crate::resolve::Error> {
     use rawr_import::expand::call as expand;
     let tokens = crate::resolve::lower_nominal::lex_rust(
         &crate::Engine::new_raw(),
@@ -322,20 +317,17 @@ fn expansion_kept(
         .map(|token| (*token).clone())
         .collect::<Vec<_>>();
     let call_of = expand::Call {
-        path: path.to_owned(),
+        path: host::path::visible(path),
         delimiter,
         input: crate::resolve::lower_nominal::token_text(&inner),
         place: expand::Place::Statements,
     };
     let source = call_of.source_path(project);
     let text = std::fs::read_to_string(&source).ok();
-    let kept = text
-        .as_deref()
-        .and_then(|text| Some((expand::kept(text)?, expand::locations(text)?)));
-    match kept {
-        Some((expansion, locations)) => {
+    match text.as_deref().and_then(expand::kept) {
+        Some(expansion) => {
             named.name(&source);
-            Ok((expansion.to_owned(), locations))
+            Ok(expansion.to_owned())
         }
         None => Err(crate::resolve::Error::MacroExpansionRequired {
             path: path.into(),

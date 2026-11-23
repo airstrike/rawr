@@ -308,9 +308,9 @@ struct Request {
     /// Each crate derive whose expansion isn't loaded: as written, the
     /// macro it names, and where it is written.
     unexpanded: Vec<(ImmutableString, ImmutableString, Span)>,
-    /// The helper attributes the item's loaded crate derives declare,
-    /// which the item and its members may carry.
-    helpers: Vec<ImmutableString>,
+    /// Whether a crate's derive is among the item's, whose helper
+    /// attributes the item and its members may carry.
+    helpers: bool,
 }
 
 /// What a `#[derive(..)]` path names, resolved as rustc resolves it in the
@@ -323,9 +323,8 @@ enum Derive {
     /// names it by (`serde::Serialize`).
     Crate(ImmutableString),
     /// A crate's derive macro whose expansion is loaded beside the item:
-    /// its items are the program's own, and its helper attributes the
-    /// item's.
-    Expanded(Box<[ImmutableString]>),
+    /// its items are the program's own.
+    Expanded,
     /// Nothing in scope.
     Unknown,
 }
@@ -404,18 +403,9 @@ fn derive_target(
     }
 }
 
-/// A crate derive whose expansion a program loaded: the macro the expansion
-/// came from (`serde::Serialize`) and the helper attributes it declares
-/// (`serde`), as its kept source names them.
-#[derive(Clone, Debug)]
-pub(crate) struct Loaded {
-    pub(crate) resolved: ImmutableString,
-    pub(crate) helpers: Box<[ImmutableString]>,
-}
-
 /// Each crate derive whose expansion a program loaded, by the source and
-/// span of the derive as written.
-pub(crate) type Expanded = BTreeMap<(program::source::Id, Span), Loaded>;
+/// span of the derive as written: the macro the expansion came from.
+pub(crate) type Expanded = BTreeMap<(program::source::Id, Span), ImmutableString>;
 
 pub(crate) fn resolve(
     items: &[item::Shell],
@@ -435,12 +425,9 @@ pub(crate) fn resolve(
             uses.get(&source).map_or(&[][..], Vec::as_slice),
             host,
         ) {
-            Derive::Crate(resolved) => match expanded.get(&(source, path.span)) {
-                Some(loaded) if loaded.resolved == resolved => {
-                    Derive::Expanded(loaded.helpers.clone())
-                }
-                _ => Derive::Crate(resolved),
-            },
+            Derive::Crate(resolved) if expanded.get(&(source, path.span)) == Some(&resolved) => {
+                Derive::Expanded
+            }
             target => target,
         };
     let mut unexpanded = Vec::new();
@@ -501,14 +488,12 @@ pub(crate) fn resolve(
             })
             .map_err(|error| LocatedError::primary(shell.source, error))?,
             item::Kind::Function(item) => {
-                attributes_in_scope(shell, &item.header.attributes, &uses, &[])?;
+                attributes_in_scope(shell, &item.header.attributes, &uses)?;
                 continue;
             }
             item::Kind::Use(_) | item::Kind::Impl(_) | item::Kind::Trait(_) => continue,
         };
-        // An item whose crate derive isn't expanded yet is rustc's to
-        // expand first, and its attributes are checked once it is.
-        if request.unexpanded.is_empty() {
+        if !request.helpers {
             let members: Vec<&crate::item::Attribute> = match &shell.kind {
                 item::Kind::Struct(item) => item
                     .fields
@@ -532,12 +517,7 @@ pub(crate) fn resolve(
                 item::Kind::Enum(item) => &item.header,
                 _ => unreachable!("only nominal items create capability requests"),
             };
-            attributes_in_scope(
-                shell,
-                header.attributes.iter().chain(members),
-                &uses,
-                &request.helpers,
-            )?;
+            attributes_in_scope(shell, header.attributes.iter().chain(members), &uses)?;
         }
         if let Some(&(_, _, attribute)) = request.unexpanded.first() {
             let header = match &shell.kind {
@@ -722,17 +702,15 @@ pub(crate) fn resolve(
 }
 
 /// rustc's error for an attribute among `attributes`, on `shell`'s item
-/// or its members, that names nothing in scope, where `helpers` are the
-/// helper attributes its crate derives declare
+/// or its members, that names nothing in scope
 /// ([`crate::resolve::attribute::unknown`]).
 fn attributes_in_scope<'a>(
     shell: &item::Shell,
     attributes: impl IntoIterator<Item = &'a crate::item::Attribute>,
     uses: &BTreeMap<program::source::Id, Vec<&item::Use>>,
-    helpers: &[ImmutableString],
 ) -> Result<(), LocatedError> {
     let uses = uses.get(&shell.source).map_or(&[][..], Vec::as_slice);
-    match crate::resolve::attribute::unknown(attributes, uses, helpers) {
+    match crate::resolve::attribute::unknown(attributes, uses) {
         Some(error) => Err(LocatedError::primary(shell.source, error)),
         None => Ok(()),
     }
@@ -751,7 +729,7 @@ impl Request {
         let mut requested = Set::default();
         let mut spans = BTreeMap::new();
         let mut unexpanded = Vec::new();
-        let mut helpers = Vec::new();
+        let mut helpers = false;
 
         for attribute in &header.attributes {
             if attribute.path.segments.len() != 1
@@ -772,6 +750,7 @@ impl Request {
                     // rustc expands it, and its items are the program's
                     // (D740).
                     Derive::Crate(path) => {
+                        helpers = true;
                         unexpanded.push((
                             crate::item::written_path(argument).into(),
                             path,
@@ -779,8 +758,8 @@ impl Request {
                         ));
                         continue;
                     }
-                    Derive::Expanded(declared) => {
-                        helpers.extend(declared);
+                    Derive::Expanded => {
+                        helpers = true;
                         continue;
                     }
                     Derive::Unknown => {

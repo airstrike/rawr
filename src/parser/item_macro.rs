@@ -9,7 +9,6 @@
 //! loads as any inline module does. Every position on those lines is
 //! reported at the call ([`Expansion`]).
 
-use crate::resolve::lower_nominal::location_calls;
 use std::cell::RefCell;
 
 use crate::diagnostic::source::Expansion;
@@ -189,21 +188,10 @@ pub(super) fn lay_out(
 /// pair up in turn. A body's own call is at the macro's call, and one a
 /// caller passed in is where the caller wrote it.
 fn locate(expansion: &[(Token, Position)], text: &str) {
-    let origins = location_calls(expansion)
-        .map(|index| Some(expansion[index].1))
-        .collect::<Vec<_>>();
-    locate_at(text, &origins);
-}
-
-/// Record where each location call of `text`, an expansion just laid out,
-/// came from, in turn: at each of `origins`, or, for `None`, at the call
-/// laid out, which [`crate::resolve::macros::Table::written`] reads it at
-/// with no record.
-pub(super) fn locate_at(text: &str, origins: &[Option<Position>]) {
     let laid = crate::resolve::lower_nominal::lex_rust(&crate::Engine::new_raw(), text);
-    let locations = location_calls(&laid)
-        .zip(origins)
-        .filter_map(|(index, origin)| Some((laid[index].1, (*origin)?)))
+    let locations = location_calls(expansion)
+        .zip(location_calls(&laid))
+        .map(|(origin, laid)| (laid, origin))
         .collect::<Vec<_>>();
     if locations.is_empty() {
         return;
@@ -213,6 +201,29 @@ pub(super) fn locate_at(text: &str, origins: &[Option<Position>]) {
             last.locations = locations.into();
         }
     });
+}
+
+/// Where each call of `line!` or `column!` among `tokens` starts: its
+/// name, or the first segment of its path (`core::line!()`).
+fn location_calls(tokens: &[(Token, Position)]) -> impl Iterator<Item = Position> + '_ {
+    tokens.iter().enumerate().filter_map(|(index, (token, _))| {
+        let Token::Identifier(name) = token else {
+            return None;
+        };
+        if !matches!(name.as_str(), "line" | "column")
+            || !matches!(tokens.get(index + 1), Some((Token::Bang, _)))
+        {
+            return None;
+        }
+        let mut start = index;
+        while start >= 2
+            && matches!(tokens[start - 1].0, Token::DoubleColon)
+            && matches!(tokens[start - 2].0, Token::Identifier(_))
+        {
+            start -= 2;
+        }
+        Some(tokens[start].1)
+    })
 }
 
 /// Lay out `text`, what the call at `call_span` of the macro `name`

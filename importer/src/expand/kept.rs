@@ -222,7 +222,7 @@ mod tests {
         fs::write(&call, format!("// call a1 {header}\n((3) * 2)\n")).unwrap();
         fs::write(
             &derive,
-            super::super::source_text("serde::Serialize", "struct A;", "s1", None),
+            super::super::source_text("serde::Serialize", "struct A;", "s1", &[]),
         )
         .unwrap();
         let retired = super::retire(&project, &basis("a1")).unwrap();

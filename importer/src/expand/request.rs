@@ -18,9 +18,6 @@ pub struct Request {
     pub dependency_directories: Vec<String>,
     /// Each crate the source names, by the alias the program uses.
     pub externs: Vec<Extern>,
-    /// Each crate the source names that the program doesn't depend on,
-    /// by its name, which rustc finds among the dependencies.
-    pub crates: Vec<String>,
     /// The source file to expand.
     pub source: String,
 }
@@ -46,9 +43,6 @@ pub struct Expansion {
     pub at: u32,
     /// Each produced item, as rustc prints it.
     pub items: Vec<String>,
-    /// The helper attributes the derive declares (`serde`), which the
-    /// item and its members may carry.
-    pub helpers: Vec<String>,
 }
 
 /// What one function-like macro call expanded to, at the module the
@@ -59,12 +53,8 @@ pub struct Called {
     /// The byte offset in the source of the call's module.
     pub at: u32,
     /// The expansion as rustc prints it: one expression, or each
-    /// statement of a call in statement position. A value `line!()`,
-    /// `column!()` or `file!()` gave is that macro's call again.
+    /// statement of a call in statement position.
     pub items: Vec<String>,
-    /// The byte offset in the source of the place each of those calls
-    /// read, in the order they print (#2291).
-    pub locations: Vec<u32>,
 }
 
 /// What `--expand` writes.
