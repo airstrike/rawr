@@ -157,7 +157,7 @@ export const MAX_PREVIEW = 1024 * 1024;
 /** How long a preview that failed for a passing reason (busy, unreachable) is not retried. */
 export const RETRY_MS = 10 * 60_000;
 /** Shares not visited for longer than this many days are purged. */
-export const KEEP_DAYS = 30;
+export const KEEP_DAYS = 90;
 
 /** The first non-blank line of the code, trimmed, at most 150 characters. */
 export function firstLine(code: string): string {

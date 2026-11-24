@@ -213,8 +213,8 @@ test("days and the purge selection", () => {
   const today = 20_000;
   const { remove, stamp } = purgeSelection(
     new Map<string, number | undefined>([
-      ["old", today - 31],
-      ["young", today - 29],
+      ["old", today - KEEP_DAYS - 1],
+      ["young", today - KEEP_DAYS + 1],
       ["edge", today - KEEP_DAYS],
       ["today", today],
       ["unstamped", undefined],

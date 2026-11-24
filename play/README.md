@@ -452,7 +452,7 @@ same id).
 A shared link unfurls with its first line of output as the description and
 the site's card (`site/public/og/card.png`) as the image. A busy or
 unreachable server is retried after ten minutes. Shares not
-visited for 30 days are purged by the cron once a day, with their previews.
+visited for 90 days are purged by the cron once a day, with their previews.
 The editor keeps the latest snippet in the browser (`localStorage`): bare
 `/play` restores it; a share shows the share until it is edited; Examples →
 Reset brings back the first example.
