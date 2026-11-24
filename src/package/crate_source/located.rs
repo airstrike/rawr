@@ -144,12 +144,7 @@ struct Import {
 /// can't describe the graph offline or the path names no module.
 pub(crate) fn locate(manifest: &Path, path: &[ImmutableString]) -> Option<Located> {
     let graph = Graph::read(manifest)?;
-    let (first, rest) = path.split_first()?;
-    let root = graph.index(&graph.root)?;
-    let mut module = graph.root_module(graph.dependency(root, first)?)?;
-    for segment in rest {
-        module = graph.child(&module, segment, HOPS)?;
-    }
+    let module = graph.module(path)?;
     if module.path.is_empty() {
         return None;
     }
@@ -167,6 +162,47 @@ pub(crate) fn locate(manifest: &Path, path: &[ImmutableString]) -> Option<Locate
         module: module.path.into_boxed_slice(),
         siblings,
     })
+}
+
+/// The types the crate module at `path` (as [`locate`] takes it) brings
+/// into scope by its `use` declarations, each by the name it binds and
+/// with the traits its definition derives, wherever that definition is:
+/// `iced_widget`'s `container` names `iced_core`'s `Border` through
+/// `use crate::core::border::{self, Border}`, which derives `Default`.
+/// The crate compiles those derives once, so the runner binds them as it
+/// binds the module's own concrete items (`bound`). Empty when Cargo can't
+/// describe the graph offline.
+pub(crate) fn imported(manifest: &Path, path: &[ImmutableString]) -> Vec<super::bound::Derived> {
+    let Some(graph) = Graph::read(manifest) else {
+        return Vec::new();
+    };
+    let Some(module) = graph.module(path) else {
+        return Vec::new();
+    };
+    let tokens = polyglot::placed(&module.text);
+    let items = polyglot::module_items(&module.text, &tokens);
+    let mut found = Vec::new();
+    for import in imports(&tokens, &items) {
+        let Bound::Name(name) = &import.bound else {
+            continue;
+        };
+        let Some((last, parent)) = import.path.split_last() else {
+            continue;
+        };
+        if parent.is_empty() {
+            continue;
+        }
+        let Some(defined) = graph
+            .resolve(&module, parent, HOPS)
+            .and_then(|parent| graph.definition(&parent, last, HOPS))
+        else {
+            continue;
+        };
+        if let Some(derived) = super::bound::derived(&defined.text, last, name) {
+            found.push(derived);
+        }
+    }
+    found
 }
 
 impl Located {
@@ -417,6 +453,47 @@ impl Graph {
             };
         }
         Some(current)
+    }
+
+    /// The module at `path`, the program's path to it from a dependency's
+    /// name ([`locate`]).
+    fn module(&self, path: &[ImmutableString]) -> Option<Module> {
+        let (first, rest) = path.split_first()?;
+        let root = self.index(&self.root)?;
+        let mut module = self.root_module(self.dependency(root, first)?)?;
+        for segment in rest {
+            module = self.child(&module, segment, HOPS)?;
+        }
+        Some(module)
+    }
+
+    /// The module that defines the type `name` names in `module`: itself,
+    /// or the one a `use` of `module` binding `name`, or one of its globs,
+    /// reaches.
+    fn definition(&self, module: &Module, name: &str, hops: usize) -> Option<Module> {
+        let hops = hops.checked_sub(1)?;
+        let tokens = polyglot::placed(&module.text);
+        let items = polyglot::module_items(&module.text, &tokens);
+        if items
+            .iter()
+            .any(|item| matches!(item.keyword, "struct" | "enum") && item.name == Some(name))
+        {
+            return Some(module.clone());
+        }
+        let imports = imports(&tokens, &items);
+        let named = imports
+            .iter()
+            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == name));
+        if let Some(import) = named {
+            let (last, parent) = import.path.split_last()?;
+            let parent = self.resolve(module, parent, hops)?;
+            return self.definition(&parent, last, hops);
+        }
+        imports
+            .iter()
+            .filter(|import| matches!(import.bound, Bound::Glob))
+            .filter_map(|import| self.resolve(module, &import.path, hops))
+            .find_map(|globbed| self.definition(&globbed, name, hops))
     }
 
     /// The module that declares `module`.

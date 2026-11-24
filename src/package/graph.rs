@@ -94,6 +94,9 @@ struct CrateModule {
     /// The program's hidden dependency on that crate, which `root` names,
     /// when the program names it by no dependency of its own.
     dependency: Option<manifest::rust::Dependency>,
+    /// The derives of the types the module names from elsewhere
+    /// (`crate_source::located::imported`).
+    imported: Vec<super::crate_source::bound::Derived>,
 }
 
 /// Where a program module of a crate module's generic items
@@ -1449,7 +1452,8 @@ impl<'a> Builder<'a> {
             } else {
                 super::crate_source::generic::Bindings::Written
             };
-            let generic = super::crate_source::generic::text(&text, &path, bindings);
+            let generic =
+                super::crate_source::generic::text(&text, &path, bindings, &found.imported);
             self.packages[package.0]
                 .crate_sources
                 .push((file.clone(), text));
@@ -1508,6 +1512,7 @@ impl<'a> Builder<'a> {
                     root: Box::new([alias]),
                     module: located.module,
                     features: Some(located.features),
+                    imported: super::crate_source::located::imported(&manifest, path),
                 });
             }
             #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
@@ -1515,12 +1520,21 @@ impl<'a> Builder<'a> {
         };
         let mut file = directory.join("src");
         file.extend(modules.iter().map(ImmutableString::as_str));
+        #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+        let imported = self.packages[package.0]
+            .cargo
+            .as_ref()
+            .map(|cargo| super::crate_source::located::imported(&cargo.path, path))
+            .unwrap_or_default();
+        #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
+        let imported = Vec::new();
         let found = |file| CrateModule {
             file,
             root: Box::new([alias.clone()]),
             module: modules.into(),
             features: None,
             dependency: None,
+            imported: imported.clone(),
         };
         let flat = file.with_extension("rs");
         if self.is_file(&flat) {

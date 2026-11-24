@@ -2402,6 +2402,33 @@ impl<'a> Parser<'a> {
             .and_then(|path| self.models.host.type_(&path).cloned())
     }
 
+    /// `path`, the member `member` of the imported type `definition` at
+    /// the path the program writes, or the same member at another of the
+    /// type's paths when only that one has it: a type is one type at every
+    /// path that reaches it (`host::defined`), so `iced::Border::default` is
+    /// the `default` a crate-source module bound at
+    /// `__rawr_source_iced_widget::core::Border`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn imported_member_path(
+        &self,
+        definition: &crate::host::type_def::Definition,
+        path: String,
+        member: &str,
+    ) -> String {
+        if self.models.host_items(&path).is_some() {
+            return path;
+        }
+        let Some(identity) = definition.identity().imported() else {
+            return path;
+        };
+        self.models
+            .host
+            .imported_type_paths_anywhere(identity)
+            .map(|owner| format!("{owner}::{member}"))
+            .find(|other| self.models.host_items(other).is_some())
+            .unwrap_or(path)
+    }
+
     /// The imported type `ty` as another crate's facade names it, when only
     /// that facade has `member`: a trait of that crate gives it by an impl
     /// for this crate's type, as ratzilla's `impl<B> WebRenderer for

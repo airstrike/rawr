@@ -27,7 +27,7 @@
 
 use crate::ImmutableString;
 
-mod bound;
+pub(crate) mod bound;
 pub(crate) mod generic;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod located;

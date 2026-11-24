@@ -1150,7 +1150,8 @@ impl<'a> Parser<'a> {
                     member_span,
                 );
             }
-            let path = format!("{owner}::{member}");
+            let path =
+                self.imported_member_path(&definition, format!("{owner}::{member}"), &member);
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 if let Some(error) = self.pending_family_call(&path, &member, member_span) {
                     return Err(error);

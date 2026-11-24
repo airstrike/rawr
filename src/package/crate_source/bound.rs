@@ -13,8 +13,80 @@ use crate::package::polyglot::{self, ModuleItem, Token};
 /// The prefix of each function that binds a concrete item.
 pub(super) const BINDING: &str = "__rawr_bind_";
 
-/// The functions that bind `text`'s concrete items, one per item.
-pub(crate) fn functions(text: &str) -> String {
+/// The traits whose derives the runner binds, each with how its method is
+/// called: what it takes and gives, `{}` standing for the type.
+const DERIVES: [(&str, &str, &str); 3] = [
+    ("Default", "() -> {}", "<{} as Default>::default()"),
+    ("Clone", "(__a0: &{}) -> {}", "<{} as Clone>::clone(__a0)"),
+    (
+        "PartialEq",
+        "(__a0: &{}, __a1: &{}) -> bool",
+        "<{} as PartialEq>::eq(__a0, __a1)",
+    ),
+];
+
+/// A concrete type a crate-source module names, by the name it is in
+/// scope by there, and the traits of [`DERIVES`] its definition derives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Derived {
+    name: String,
+    derives: Vec<&'static str>,
+}
+
+/// The derives of the concrete type `defined` that `text` defines, which
+/// a crate-source module names `name` (`located::imported`). `None` when
+/// `text` defines no such type, it is generic, or it derives none of
+/// [`DERIVES`].
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+pub(crate) fn derived(text: &str, defined: &str, name: &str) -> Option<Derived> {
+    let tokens = polyglot::placed(text);
+    let item = polyglot::module_items(text, &tokens)
+        .into_iter()
+        .find(|item| matches!(item.keyword, "struct" | "enum") && item.name == Some(defined))?;
+    derives_of(&tokens, &item).map(|derives| Derived {
+        name: name.to_owned(),
+        derives,
+    })
+}
+
+/// The traits of [`DERIVES`] the concrete struct or enum `item` derives.
+fn derives_of(tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) -> Option<Vec<&'static str>> {
+    let lifetimes = tokens[item.header.clone()]
+        .first()
+        .is_some_and(|(token, _)| *token == Token::Punct(b'<'));
+    if item.generic || lifetimes {
+        return None;
+    }
+    let attributes = tokens
+        .iter()
+        .filter(|(_, at)| item.bytes.contains(at))
+        .take_while(|(token, _)| !matches!(token, Token::Ident("struct" | "enum", _)))
+        .map(|(token, _)| *token)
+        .collect::<Vec<_>>();
+    let mut derives = Vec::new();
+    let mut inside = false;
+    for (index, token) in attributes.iter().enumerate() {
+        match token {
+            Token::Ident("derive", _) => inside = true,
+            Token::Punct(b']') => inside = false,
+            // The path's last segment names the trait: `std::default::Default`.
+            Token::Ident(name, _)
+                if inside && attributes.get(index + 1) != Some(&Token::Punct(b':')) =>
+            {
+                if let Some((derive, ..)) = DERIVES.iter().find(|(derive, ..)| derive == name) {
+                    derives.push(*derive);
+                }
+            }
+            _ => {}
+        }
+    }
+    (!derives.is_empty()).then_some(derives)
+}
+
+/// The functions that bind `text`'s concrete items, one per item, and the
+/// derives of its concrete types and of those it names from elsewhere,
+/// `imported`.
+pub(crate) fn functions(text: &str, imported: &[Derived]) -> String {
     let tokens = polyglot::placed(text);
     let mut bound = Bound {
         text,
@@ -32,6 +104,17 @@ pub(crate) fn functions(text: &str) -> String {
             "impl" => bound.methods(&tokens, &item),
             _ => {}
         }
+        if let (Some(name), "struct" | "enum") = (item.name, item.keyword)
+            && let Some(derives) = derives_of(&tokens, &item)
+        {
+            bound.derives(&Derived {
+                name: name.to_owned(),
+                derives,
+            });
+        }
+    }
+    for derived in imported {
+        bound.derives(derived);
     }
     bound.written
 }
@@ -62,6 +145,23 @@ impl Bound<'_> {
         written
             .replace("Self::", &format!("{associated}::"))
             .replace("Self", &owner.ty)
+    }
+
+    /// A call of each derived method of `derived`.
+    fn derives(&mut self, derived: &Derived) {
+        for derive in &derived.derives {
+            let Some((_, signature, call)) = DERIVES.iter().find(|(name, ..)| name == derive)
+            else {
+                continue;
+            };
+            let binding = self.next_name();
+            let signature = signature.replace("{}", &derived.name);
+            let call = call.replace("{}", &derived.name);
+            let _ = writeln!(
+                self.written,
+                "\n#[allow(dead_code)]\nfn {binding}{signature} {{\n    {call}\n}}"
+            );
+        }
     }
 
     fn next_name(&mut self) -> String {
@@ -354,21 +454,34 @@ fn top_colon(written: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     /// A module's static, struct, function, inherent method and trait
-    /// impl's method each get a function that names it.
+    /// impl's method each get a function that names it, and so does each
+    /// derive of its concrete types and of a type it names from elsewhere.
     #[test]
     fn each_concrete_item_is_named_by_a_function() {
         let text = "static SHADED: Counter = Counter { count: 0 };\n\
+                    #[derive(Debug, Clone, Default)]\n\
                     struct Style { tint: Tint, order: usize }\n\
                     fn darken(tint: Tint) -> Tint { tint }\n\
                     impl Style { pub fn order(&self) -> usize { self.order } }\n\
                     impl From<[u8; 3]> for Tint { fn from([r, g, b]: [u8; 3]) -> Self { Tint { r, g, b } } }\n";
-        let bound = super::functions(text);
+        let border = "#[derive(Debug, Clone, Copy, PartialEq, Default)]\n\
+                      pub struct Border { pub width: f32 }\n\
+                      #[derive(Default)]\n\
+                      pub struct Wrap<T>(T);\n";
+        let imported = super::derived(border, "Border", "Edge").unwrap();
+        assert!(super::derived(border, "Wrap", "Wrap").is_none());
+        let bound = super::functions(text, &[imported]);
         for expected in [
-            "fn __rawr_bind_1() -> &'static Counter {\n    &SHADED\n}",
-            "fn __rawr_bind_2(__a0: Tint, __a1: usize) -> Style {\n    Style { tint: __a0, order: __a1 }\n}",
-            "fn __rawr_bind_3(__a0: Tint) -> Tint {\n    darken(__a0)\n}",
-            "fn __rawr_bind_4(__a0: &Style) -> usize {\n    Style::order(__a0)\n}",
-            "fn __rawr_bind_5(__a0: [u8; 3]) -> Tint {\n    <Tint as From<[u8; 3]>>::from(__a0)\n}",
+            "() -> &'static Counter {\n    &SHADED\n}",
+            "(__a0: Tint, __a1: usize) -> Style {\n    Style { tint: __a0, order: __a1 }\n}",
+            "(__a0: Tint) -> Tint {\n    darken(__a0)\n}",
+            "(__a0: &Style) -> usize {\n    Style::order(__a0)\n}",
+            "(__a0: &Style) -> Style {\n    <Style as Clone>::clone(__a0)\n}",
+            "() -> Style {\n    <Style as Default>::default()\n}",
+            "(__a0: [u8; 3]) -> Tint {\n    <Tint as From<[u8; 3]>>::from(__a0)\n}",
+            "() -> Edge {\n    <Edge as Default>::default()\n}",
+            "(__a0: &Edge) -> Edge {\n    <Edge as Clone>::clone(__a0)\n}",
+            "(__a0: &Edge, __a1: &Edge) -> bool {\n    <Edge as PartialEq>::eq(__a0, __a1)\n}",
         ] {
             assert!(bound.contains(expected), "{expected}\nin\n{bound}");
         }

@@ -9,9 +9,16 @@
 /// methods of the crate's concrete types are their trait's, which is
 /// declared after the module's text (`crate_source::inherent`). Rawr
 /// reads the concrete items only as far as their bounds, so a concrete
-/// item it can't parse is no error. A runner's program, whose runner is
-/// built, takes no binding functions ([`Bindings::Left`]).
-pub(crate) fn text<S: AsRef<str>>(text: &str, path: &[S], bindings: Bindings) -> String {
+/// item it can't parse is no error. The binding functions bind the
+/// derives of the types the module names from elsewhere too, `imported`.
+/// A runner's program, whose runner is built, takes no binding functions
+/// ([`Bindings::Left`]).
+pub(crate) fn text<S: AsRef<str>>(
+    text: &str,
+    path: &[S],
+    bindings: Bindings,
+    imported: &[super::bound::Derived],
+) -> String {
     let items = super::super::polyglot::generic_items(text);
     let mut generic = String::with_capacity(text.len());
     for (at, character) in text.char_indices() {
@@ -30,7 +37,7 @@ pub(crate) fn text<S: AsRef<str>>(text: &str, path: &[S], bindings: Bindings) ->
     generic.push_str(&items.declared);
     generic.push_str(&glob(path));
     if bindings == Bindings::Written {
-        generic.push_str(&super::bound::functions(text));
+        generic.push_str(&super::bound::functions(text, imported));
     }
     generic
 }
@@ -76,7 +83,7 @@ mod tests {
                     impl<M: Debug> Panel<M> { pub fn len(&self) -> usize { self.items.len() } }\n\
                     impl From<[u8; 1]> for Tint { fn from([red]: [u8; 1]) -> Self { Tint { red } } }\n\
                     impl Panel<u8> { pub fn first(&self) -> u8 { self.items[0] } }\n";
-        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written);
+        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written, &[]);
         let (kept, bound) = generic
             .split_once("\n#[allow(dead_code)]")
             .unwrap_or((&generic, ""));
@@ -110,7 +117,7 @@ mod tests {
                     pub fn tint(&self) -> Tint { self.tint }\n\
                     pub fn retinted(self, tint: impl Into<Tint>) -> Self { Self { tint: tint.into(), ..self } }\n\
                     }\n";
-        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written);
+        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written, &[]);
         let (kept, bound) = generic
             .split_once("\n#[allow(dead_code)]")
             .unwrap_or((&generic, ""));
