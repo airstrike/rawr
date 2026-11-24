@@ -26,6 +26,7 @@ pub mod matched;
 pub mod named;
 pub mod nested;
 pub mod ordered;
+pub mod outline;
 pub mod paired;
 pub mod piped;
 pub mod pixels;
@@ -43,6 +44,7 @@ pub mod spans;
 pub mod staged;
 pub mod stock;
 pub mod styled;
+pub mod tint;
 pub mod tuned;
 pub mod viewed;
 
@@ -528,6 +530,10 @@ pub use std::convert::Infallible as Never;
 /// `Framed` at the root too, as iced re-exports
 /// `iced_widget::Widget` as `iced::Widget`.
 pub use widgets::Framed;
+
+/// `Tint` at the root, as iced re-exports `Color` from its `color`
+/// module.
+pub use tint::Tint;
 
 /// iced's `advanced`: iced_graphics's modules, which another crate defines.
 pub mod advanced {

@@ -1011,7 +1011,7 @@ impl<'a> Parser<'a> {
             return self.expand_macro_rules(rules, name_span);
         }
         if item.kind() != crate::host::item::Kind::IntrinsicMacro {
-            return Err(Error::InvalidHostOperation {
+            let error = Error::InvalidHostOperation {
                 item: item.path().into(),
                 reason: if matches!(
                     item.kind(),
@@ -1028,7 +1028,10 @@ impl<'a> Parser<'a> {
                 }
                 .into(),
                 operation: name_span,
-            });
+            };
+            #[cfg(feature = "rust-import")]
+            let error = self.macro_miss(&item.path(), error);
+            return Err(error);
         }
         self.expect(Token::Bang, "'!' after an intrinsic macro name")?;
         // A macro taking one string reads `format!`'s arguments: iced's
