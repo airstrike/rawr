@@ -917,6 +917,12 @@ impl<'a> Parser<'a> {
         let Some(trait_name) = definition.trait_name() else {
             return true;
         };
+        // The inherent methods a crate module whose generic code rawr runs
+        // gives one of its crate's own types are inherent: in scope
+        // wherever the type is (`crate_source`).
+        if crate::package::crate_source::is_inherent(trait_name) {
+            return true;
+        }
         // A dependency's trait the program implements (`impl
         // canvas::Program<Message> for Grid`) has no declaration here: a
         // `use` that binds it puts it in scope, or the impl the call is in.

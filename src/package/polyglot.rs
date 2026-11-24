@@ -505,7 +505,44 @@ pub(crate) fn module_items_public(text: &str) -> String {
     for (range, width) in restricted_visibilities(&opened).into_iter().rev() {
         opened.replace_range(range, &format!("{:width$}", "pub"));
     }
+    // A generic inherent method of a concrete type runs as the program's
+    // (`generic_items`): the runner's copy hides the native one from other
+    // crates, so a call finds the program's.
+    for at in generic_inherent_methods(&opened).into_iter().rev() {
+        opened.insert_str(at, "(crate)");
+    }
     opened
+}
+
+/// Where `(crate)` goes after the `pub` of each generic method of an
+/// inherent impl of a concrete type in `text`.
+fn generic_inherent_methods(text: &str) -> Vec<usize> {
+    let tokens = placed(text);
+    let mut found = Vec::new();
+    for item in module_items(text, &tokens) {
+        let header = &tokens[item.header.clone()];
+        let concrete = !header.iter().any(|(token, _)| {
+            matches!(token, Token::Ident("for", _)) || *token == Token::Punct(b'<')
+        });
+        if item.keyword != "impl" || item.generic || !concrete || item.header.end >= item.end {
+            continue;
+        }
+        let body = &tokens[item.header.end + 1..item.end];
+        for method in module_items(text, body) {
+            if method.keyword != "fn" || !method.generic {
+                continue;
+            }
+            let public = body.iter().enumerate().find_map(|(index, (token, at))| {
+                (matches!(token, Token::Ident("pub", _))
+                    && method.bytes.contains(at)
+                    && body.get(index + 1).map(|(next, _)| *next) != Some(Token::Punct(b'(')))
+                .then_some(at + 3)
+            });
+            found.extend(public);
+        }
+    }
+    found.sort_unstable();
+    found
 }
 
 /// The byte ranges of `text`'s module-level items that a crate's program
@@ -517,7 +554,7 @@ pub(crate) fn module_items_public(text: &str) -> String {
 /// type, it keeps the methods with a type or const parameter, inside the
 /// impl's header and closing brace. Everything else is concrete code,
 /// which this reads only as far as its bounds.
-pub(crate) fn generic_items(text: &str) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn generic_items(text: &str) -> Generic {
     let tokens = placed(text);
     let items = module_items(text, &tokens);
     let generic_types = items
@@ -527,7 +564,7 @@ pub(crate) fn generic_items(text: &str) -> Vec<std::ops::Range<usize>> {
             _ => None,
         })
         .collect::<Vec<_>>();
-    let mut kept = Vec::new();
+    let mut generic = Generic::default();
     for item in &items {
         let header = &tokens[item.header.clone()];
         let whole = match item.keyword {
@@ -542,7 +579,7 @@ pub(crate) fn generic_items(text: &str) -> Vec<std::ops::Range<usize>> {
             _ => false,
         };
         if whole {
-            kept.push(item.bytes.clone());
+            generic.kept.push(item.bytes.clone());
             continue;
         }
         let inherent = !header
@@ -551,18 +588,101 @@ pub(crate) fn generic_items(text: &str) -> Vec<std::ops::Range<usize>> {
         if item.keyword != "impl" || !inherent || item.header.end >= item.end {
             continue;
         }
-        let methods = module_items(text, &tokens[item.header.end + 1..item.end])
+        let body = &tokens[item.header.end + 1..item.end];
+        let methods = module_items(text, body)
             .into_iter()
             .filter(|method| method.keyword == "fn" && method.generic)
-            .map(|method| method.bytes)
             .collect::<Vec<_>>();
-        if !methods.is_empty() {
-            kept.push(item.bytes.start..tokens[item.header.end].1 + 1);
-            kept.extend(methods);
-            kept.push(tokens[item.end].1..tokens[item.end].1 + 1);
+        // The owner's name: the last word of its path, before its
+        // arguments. An impl with lifetime parameters stays native.
+        if methods.is_empty()
+            || header
+                .first()
+                .is_some_and(|(token, _)| *token == Token::Punct(b'<'))
+        {
+            continue;
         }
+        let Some(owner) = header
+            .iter()
+            .take_while(|(token, _)| *token != Token::Punct(b'<'))
+            .filter_map(|(token, _)| match token {
+                Token::Ident(name, _) => Some(*name),
+                _ => None,
+            })
+            .last()
+        else {
+            continue;
+        };
+        // `impl Style {` is `impl __rawr_inherent__Style for Style {`, and
+        // the trait declares each method's signature.
+        let trait_name = super::crate_source::inherent(owner);
+        let header_bytes = item.bytes.start..tokens[item.header.end].1 + 1;
+        let owner_text = text[tokens[item.header.start].1..tokens[item.header.end].1].trim();
+        generic.replaced.push((
+            header_bytes.clone(),
+            format!("impl {trait_name} for {owner_text} {{"),
+        ));
+        generic.kept.push(header_bytes);
+        let mut signatures = String::new();
+        for method in &methods {
+            // A trait's function takes no visibility.
+            let visibility = body.iter().find_map(|(token, at)| match token {
+                Token::Ident("pub", _) if method.bytes.contains(at) => Some(*at),
+                _ => None,
+            });
+            let signature_end = body[method.header.end].1;
+            let signature = match visibility {
+                Some(at) => {
+                    let end = restricted_end(text, at);
+                    generic.replaced.push((at..end, " ".repeat(end - at)));
+                    format!(
+                        "{}{}",
+                        &text[method.bytes.start..at],
+                        &text[end..signature_end]
+                    )
+                }
+                None => text[method.bytes.start..signature_end].to_owned(),
+            };
+            signatures.push_str("    ");
+            signatures.push_str(signature.trim());
+            signatures.push_str(";\n");
+            generic.kept.push(method.bytes.clone());
+        }
+        generic
+            .kept
+            .push(tokens[item.end].1..tokens[item.end].1 + 1);
+        generic
+            .declared
+            .push_str(&format!("\npub trait {trait_name} {{\n{signatures}}}\n"));
     }
-    kept
+    generic
+}
+
+/// What a crate's program module keeps of a crate module's text
+/// ([`generic_items`]).
+#[derive(Default)]
+pub(crate) struct Generic {
+    /// The byte ranges kept at their places.
+    pub(crate) kept: Vec<std::ops::Range<usize>>,
+    /// Kept ranges written otherwise: the header of an inherent impl of a
+    /// concrete type, and its methods' visibilities.
+    pub(crate) replaced: Vec<(std::ops::Range<usize>, String)>,
+    /// The traits that hold inherent methods of the crate's concrete
+    /// types, declared after the module's text.
+    pub(crate) declared: String,
+}
+
+/// Where the visibility `pub` or `pub(..)` at `at` of `text` ends.
+fn restricted_end(text: &str, at: usize) -> usize {
+    let after = at + 3;
+    let rest = &text[after..];
+    let trimmed = rest.trim_start();
+    if trimmed.starts_with('(')
+        && let Some(close) = trimmed.find(')')
+    {
+        return after + (rest.len() - trimmed.len()) + close + 1;
+    }
+    after
 }
 
 /// One module-level item as [`generic_items`] reads it.

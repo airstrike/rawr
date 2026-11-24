@@ -963,6 +963,22 @@ impl<'a> Parser<'a> {
             #[cfg(not(feature = "rust-import"))]
             let _ = owner;
         }
+        // `Self { .. }` in a method a crate-source module gives a crate's
+        // own struct (`crate_source::inherent`): that struct's literal.
+        #[cfg(feature = "rust-import")]
+        if name == "Self"
+            && let Some(Ty::Host { proof, arguments }) = self.self_ty.clone()
+        {
+            let definition = proof.definition.clone();
+            let path = definition.path().as_str().into();
+            return self.parse_imported_struct(
+                path,
+                definition,
+                proof.owner.clone(),
+                &arguments,
+                name_span,
+            );
+        }
         let model = self.named_model(&name);
         self.parse_struct_fields(name, model, name_span)
     }

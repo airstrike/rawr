@@ -48,4 +48,5 @@ fn main() {
         println!("{cell}");
     }
     println!("shaded {}", tinted::shaded());
+    println!("{:?}", calm.retinted(Mood::Dusk).tint());
 }

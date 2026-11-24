@@ -37,6 +37,24 @@ pub(crate) const VARIABLE: &str = "RAWR_CRATE_SOURCE";
 /// The prefix of a program module that holds a crate module's generic items.
 const PREFIX: &str = "__rawr_crate";
 
+/// The prefix of the trait that holds the generic inherent methods a
+/// crate-source module gives one of its crate's own concrete types: rustc
+/// lets no other crate add inherent methods to a type, so the program
+/// module holds them as this trait's impl, which is in scope wherever the
+/// type is, as inherent methods are.
+const INHERENT: &str = "__rawr_inherent__";
+
+/// Whether `trait_name` holds a crate-source module's inherent methods.
+pub(crate) fn is_inherent(trait_name: &str) -> bool {
+    trait_name.starts_with(INHERENT)
+}
+
+/// The trait that holds the generic inherent methods of `owner`, a type's
+/// name, which a crate-source module gives it.
+pub(crate) fn inherent(owner: &str) -> String {
+    format!("{INHERENT}{owner}")
+}
+
 /// The crate modules [`VARIABLE`] names, each as its path from the crate's
 /// name.
 pub(crate) fn modules() -> Vec<Box<[ImmutableString]>> {

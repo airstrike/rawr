@@ -48,6 +48,15 @@ impl Style {
     pub fn order(&self) -> usize {
         self.order
     }
+
+    /// The style with `tint`, darkened, in the same order.
+    #[must_use]
+    pub fn retinted(self, tint: impl Into<Tint>) -> Self {
+        Self {
+            tint: darken(tint.into()),
+            ..self
+        }
+    }
 }
 
 /// A count that only goes up. Its count is private.

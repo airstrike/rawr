@@ -3808,8 +3808,10 @@ fn a_save_that_first_names_a_module_beside_a_function_of_its_name_takes_effect()
 
 /// A crate module's generic code runs from the crate's own source when
 /// `RAWR_CRATE_SOURCE` names the module: `shade(impl Into<Tint>)` at a
-/// native type and at the program's, and `Panel<M>` and `draw` at the
-/// program's `M`. Their bodies call the module's private helper, build its
+/// native type and at the program's, `Panel<M>` and `draw` at the
+/// program's `M`, and the generic method `Style::retinted` of a concrete
+/// crate type, which the runner's copy hides from the program, so the
+/// program's runs. Their bodies call the module's private helper, build its
 /// private-field `Style` and bump its private static through the runner's
 /// copy of the crate, which opens them, and the crate's concrete `plain`
 /// bumps the same static natively. The runner holds no instance of the
@@ -3850,7 +3852,7 @@ fn a_crate_modules_generic_code_runs_from_its_source_with_no_instance_built() {
     for entry in fs::read_dir(&adapters).unwrap() {
         bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
     }
-    for generic in ["shade\"", "draw\"", "Panel\"", "Panel::"] {
+    for generic in ["shade\"", "draw\"", "Panel\"", "Panel::", "Style::retinted"] {
         let item = format!("item: \"events::tinted::{generic}");
         assert!(!bound.contains(&item), "{item} is bound:\n{bound}");
     }

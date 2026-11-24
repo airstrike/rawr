@@ -4,20 +4,28 @@
 /// The crate module's file `text` with only its generic items, its `use`
 /// declarations and its `macro_rules!` definitions at their places
 /// (`polyglot::generic_items`), everything else blank but its line breaks,
-/// and a glob import of the crate module at `path` at its end. Rawr reads
-/// the concrete items only as far as their bounds, so a concrete item it
-/// can't parse is no error.
+/// and a glob import of the crate module at `path` at its end. The generic
+/// inherent methods of the crate's concrete types are their trait's, which
+/// is declared after the module's text (`crate_source::inherent`). Rawr
+/// reads the concrete items only as far as their bounds, so a concrete
+/// item it can't parse is no error.
 pub(crate) fn text<S: AsRef<str>>(text: &str, path: &[S]) -> String {
-    let kept = super::super::polyglot::generic_items(text);
+    let items = super::super::polyglot::generic_items(text);
     let mut generic = String::with_capacity(text.len());
     for (at, character) in text.char_indices() {
-        let inside = kept.iter().any(|range| range.contains(&at));
+        let inside = items.kept.iter().any(|range| range.contains(&at));
         if inside || matches!(character, '\n' | '\r') {
             generic.push(character);
         } else {
             generic.push_str(&" ".repeat(character.len_utf8()));
         }
     }
+    let mut replaced = items.replaced;
+    replaced.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, written) in replaced {
+        generic.replace_range(range, &written);
+    }
+    generic.push_str(&items.declared);
     let glob = glob(path);
     if !text.contains(&glob) {
         generic.push_str(&glob);
@@ -74,5 +82,33 @@ mod tests {
             ]
         );
         assert_eq!(super::text(&generic, &["events", "tinted"]), generic);
+    }
+
+    /// A generic method of a concrete type's inherent impl is its trait's,
+    /// declared after the text, its visibility blank, and the impl's
+    /// concrete method goes.
+    #[test]
+    fn a_concrete_types_generic_method_is_its_inherent_traits() {
+        let text = "impl Style {\n\
+                    pub fn tint(&self) -> Tint { self.tint }\n\
+                    pub fn retinted(self, tint: impl Into<Tint>) -> Self { Self { tint: tint.into(), ..self } }\n\
+                    }\n";
+        let generic = super::text(text, &["events", "tinted"]);
+        let lines = generic.lines().map(str::trim_end).collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            [
+                "impl __rawr_inherent__Style for Style {",
+                "",
+                "    fn retinted(self, tint: impl Into<Tint>) -> Self { Self { tint: tint.into(), ..self } }",
+                "}",
+                "",
+                "pub trait __rawr_inherent__Style {",
+                "    fn retinted(self, tint: impl Into<Tint>) -> Self;",
+                "}",
+                "",
+                "pub use events::tinted::*;",
+            ]
+        );
     }
 }
