@@ -232,11 +232,19 @@ impl Bound<'_> {
     /// A call of each function of the concrete impl `item`.
     fn methods(&mut self, tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) {
         let header = &tokens[item.header.clone()];
-        // An impl with lifetime parameters is left to the program's uses.
-        let lifetimes = header
+        // An impl with lifetime parameters, or of a generic type's instance,
+        // is left to the program's uses.
+        let owner_tokens = header
+            .iter()
+            .position(|(token, _)| matches!(token, Token::Ident("for", _)))
+            .map_or(header, |at| &header[at + 1..]);
+        let arguments = header
             .first()
-            .is_some_and(|(token, _)| *token == Token::Punct(b'<'));
-        if lifetimes || item.header.end >= item.end {
+            .is_some_and(|(token, _)| *token == Token::Punct(b'<'))
+            || owner_tokens
+                .iter()
+                .any(|(token, _)| *token == Token::Punct(b'<'));
+        if arguments || item.header.end >= item.end {
             return;
         }
         let start = header.first().map_or(0, |(_, at)| *at);

@@ -548,44 +548,33 @@ fn generic_inherent_methods(text: &str) -> Vec<usize> {
 /// The byte ranges of `text`'s module-level items that a crate's program
 /// module keeps (`crate_source`), each from its first attribute through
 /// its `}` or `;`: its `use` declarations and `macro_rules!` definitions,
-/// its functions, structs, enums and unions with a type or const parameter
-/// (an argument-position `impl Trait` is one), and its impls with one or
-/// whose header names one of those types. Of an inherent impl of another
-/// type, it keeps the methods with a type or const parameter, inside the
-/// impl's header and closing brace. Everything else is concrete code,
-/// which this reads only as far as its bounds.
+/// and its functions with a type or const parameter (an argument-position
+/// `impl Trait` is one). Of an inherent impl of a concrete type, it keeps
+/// the methods with a type or const parameter, as the impl of the type's
+/// inherent trait. Its types, generic ones too, and their other impls are
+/// native, which this reads only as far as their bounds.
 pub(crate) fn generic_items(text: &str) -> Generic {
     let tokens = placed(text);
     let items = module_items(text, &tokens);
-    let generic_types = items
-        .iter()
-        .filter_map(|item| match item.keyword {
-            "struct" | "enum" | "union" if item.generic => item.name,
-            _ => None,
-        })
-        .collect::<Vec<_>>();
     let mut generic = Generic::default();
     for item in &items {
         let header = &tokens[item.header.clone()];
         let whole = match item.keyword {
             "use" | "macro_rules" => true,
-            "fn" | "struct" | "enum" | "union" => item.generic,
-            "impl" => {
-                item.generic
-                    || header.iter().any(|(token, _)| {
-                        matches!(token, Token::Ident(name, _) if generic_types.contains(name))
-                    })
-            }
+            "fn" => item.generic,
             _ => false,
         };
         if whole {
             generic.kept.push(item.bytes.clone());
             continue;
         }
-        let inherent = !header
-            .iter()
-            .any(|(token, _)| matches!(token, Token::Ident("for", _)));
-        if item.keyword != "impl" || !inherent || item.header.end >= item.end {
+        // Generic types and every impl of a generic type or with
+        // parameters stay native, instantiated per program (D629). Only an
+        // inherent impl of a concrete type gives its generic methods.
+        let concrete = !header.iter().any(|(token, _)| {
+            matches!(token, Token::Ident("for", _)) || *token == Token::Punct(b'<')
+        });
+        if item.keyword != "impl" || item.generic || !concrete || item.header.end >= item.end {
             continue;
         }
         let body = &tokens[item.header.end + 1..item.end];
@@ -593,13 +582,8 @@ pub(crate) fn generic_items(text: &str) -> Generic {
             .into_iter()
             .filter(|method| method.keyword == "fn" && method.generic)
             .collect::<Vec<_>>();
-        // The owner's name: the last word of its path, before its
-        // arguments. An impl with lifetime parameters stays native.
-        if methods.is_empty()
-            || header
-                .first()
-                .is_some_and(|(token, _)| *token == Token::Punct(b'<'))
-        {
+        // The owner's name: the last word of its path.
+        if methods.is_empty() {
             continue;
         }
         let Some(owner) = header

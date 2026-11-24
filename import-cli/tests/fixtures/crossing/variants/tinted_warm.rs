@@ -1,9 +1,9 @@
 // rawr
 // `tinted.rs` edited: a new program type through the crate's generic
-// `shade`, `Panel` and `draw`, and new native inputs to `shade`: a `Tint`
+// `shade` and `draw`, and new native inputs to `shade`: a `Tint`
 // itself and a `[u8; 3]` the crate converts.
 
-use events::tinted::{self, Canvas, Panel, Tint};
+use events::tinted::{self, Canvas, Tint};
 
 #[derive(Debug, Clone)]
 enum Mood {
@@ -46,11 +46,9 @@ fn main() {
     println!("{gray:?} {}", gray.order());
     println!("{:?} {}", calm.tint(), calm.order());
 
-    let panel = Panel::new("moods").push(Mood::Calm).push(Mood::Bright);
+    let moods = [Mood::Calm, Mood::Bright];
     let mut canvas = Canvas::new();
-    tinted::draw(&panel, &mut canvas);
-    let named = panel.map(|mood| format!("{mood:?}"));
-    println!("{} {} {}", named.title, named.len(), named.is_empty());
+    tinted::draw("moods", &moods, &mut canvas);
     for cell in canvas.cells() {
         println!("{cell}");
     }
@@ -68,9 +66,9 @@ fn main() {
         rgb.tint(),
         rgb.order()
     );
-    let warm = Panel::new("warm").push(Warmth(200)).push(Warmth(40));
+    let warm = [Warmth(200), Warmth(40)];
     let mut cells = Canvas::new();
-    tinted::draw(&warm, &mut cells);
+    tinted::draw("warm", &warm, &mut cells);
     for cell in cells.cells() {
         println!("{cell}");
     }

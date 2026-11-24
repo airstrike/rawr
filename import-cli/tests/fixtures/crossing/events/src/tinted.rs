@@ -1,4 +1,4 @@
-//! Tints and panels: concrete code the crate compiles once, and generic
+//! Tints and canvases: concrete code the crate compiles once, and generic
 //! code that each program instantiates at its own types, as iced's
 //! `container::background(impl Into<Background>)` is.
 
@@ -116,50 +116,7 @@ pub fn shade(tint: impl Into<Tint>) -> Style {
     }
 }
 
-/// A titled panel of a program's items. Its items are private.
-pub struct Panel<M> {
-    pub title: String,
-    items: Vec<M>,
-}
-
-impl<M> Panel<M> {
-    /// An empty panel titled `title`.
-    pub fn new(title: &str) -> Self {
-        Self {
-            title: title.to_owned(),
-            items: Vec::new(),
-        }
-    }
-
-    /// The panel with `item` after its others.
-    #[must_use]
-    pub fn push(mut self, item: M) -> Self {
-        self.items.push(item);
-        self
-    }
-
-    /// The panel with each item mapped by `f`.
-    pub fn map<N>(self, f: impl Fn(M) -> N) -> Panel<N> {
-        Panel {
-            title: self.title,
-            items: self.items.into_iter().map(f).collect(),
-        }
-    }
-
-    /// How many items the panel holds.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    /// Whether the panel holds no item.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-}
-
-/// The cells a panel is drawn into. They are private.
+/// The cells items are drawn into. They are private.
 #[derive(Default)]
 pub struct Canvas {
     cells: Vec<String>,
@@ -188,10 +145,10 @@ impl Canvas {
     }
 }
 
-/// Each of `panel`'s items shaded into a cell of `canvas`.
-pub fn draw<M: Clone + Into<Tint>>(panel: &Panel<M>, canvas: &mut Canvas) {
-    for (index, item) in panel.items.iter().enumerate() {
-        let label = format!("{} {index}", panel.title);
+/// Each of `items` shaded into a cell of `canvas` labelled `title`.
+pub fn draw<M: Clone + Into<Tint>>(title: &str, items: &[M], canvas: &mut Canvas) {
+    for (index, item) in items.iter().enumerate() {
+        let label = format!("{title} {index}");
         canvas.fill(&label, &shade(item.clone()));
     }
 }

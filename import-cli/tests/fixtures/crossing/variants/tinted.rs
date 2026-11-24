@@ -1,11 +1,11 @@
 // rawr
 // A crate's generic code at a native type and at the program's own: `shade`
-// takes `impl Into<Tint>`, and `draw` and `Panel` take the program's `M`.
+// takes `impl Into<Tint>`, and `draw` takes the program's `M`.
 // Their bodies call the crate's private helper, build its private-field
 // `Style` and bump its private static, which the crate's concrete `plain`
 // bumps too.
 
-use events::tinted::{self, Canvas, Panel, Tint};
+use events::tinted::{self, Canvas, Tint};
 
 #[derive(Debug, Clone)]
 enum Mood {
@@ -34,11 +34,9 @@ fn main() {
     println!("{gray:?} {}", gray.order());
     println!("{:?} {}", calm.tint(), calm.order());
 
-    let panel = Panel::new("moods").push(Mood::Calm).push(Mood::Bright);
+    let moods = [Mood::Calm, Mood::Bright];
     let mut canvas = Canvas::new();
-    tinted::draw(&panel, &mut canvas);
-    let named = panel.map(|mood| format!("{mood:?}"));
-    println!("{} {} {}", named.title, named.len(), named.is_empty());
+    tinted::draw("moods", &moods, &mut canvas);
     for cell in canvas.cells() {
         println!("{cell}");
     }

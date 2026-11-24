@@ -60,10 +60,10 @@ fn glob<S: AsRef<str>>(path: &[S]) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// A module's generic function, generic type and its impls stay at
-    /// their places with its imports, its concrete items go, one rawr
-    /// can't parse included, the glob of the crate module comes after
-    /// them, and functions that bind the concrete items.
+    /// A module's generic function stays at its place with its imports;
+    /// its types, generic ones too, their impls and its concrete items go,
+    /// one rawr can't parse included, the glob of the crate module comes
+    /// after them, and functions that bind the concrete items.
     #[test]
     fn a_module_keeps_its_generic_items_and_imports_at_their_places() {
         let text = "use std::fmt::Debug;\n\
@@ -89,11 +89,11 @@ mod tests {
                 "",
                 "",
                 "pub fn shade(tint: impl Into<Tint>) -> Tint { darken(tint.into()) }",
-                "#[derive(Clone)]",
-                "pub struct Panel<M> { items: Vec<M> }",
-                "impl<M: Debug> Panel<M> { pub fn len(&self) -> usize { self.items.len() } }",
                 "",
-                "impl Panel<u8> { pub fn first(&self) -> u8 { self.items[0] } }",
+                "",
+                "",
+                "",
+                "",
                 "",
                 "pub use events::tinted::*;",
             ]
