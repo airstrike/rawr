@@ -62,14 +62,35 @@ pub(crate) fn rounds() -> usize {
     ROUNDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// The plain profile. A program whose imported calls were proved from
-/// intrinsic facts (D650) is checked under those facts too: the union's
-/// identity joins the profile's, so a check cached under other facts is
-/// never replayed for it.
+/// The plain profile, under [`profile_identity`].
 fn adapter(
     facts: Option<&[u8; 32]>,
     instances: &rawr_import::record::Record,
 ) -> trusted::Adapter<Operations> {
+    let identity = profile_identity(facts, instances, rawr::package::import::BUILD);
+    trusted::Adapter::trusted(
+        Operations,
+        profile::Identity::new(&identity),
+        profile::Version::new(VERSION),
+        false,
+    )
+    .semantic_api()
+}
+
+/// The plain profile's identity, which keys each check it caches. A
+/// program whose imported calls were proved from intrinsic facts (D650) is
+/// checked under those facts too: the union's identity joins the
+/// profile's, so a check cached under other facts is never replayed for
+/// it. So does `build`, the build of rawr that checks it: another build's
+/// lowering may make other native uses, as a generic body's `into()` of a
+/// crate's type uses its target's `from` once rawr runs the blanket
+/// `Into`, so its check is never replayed either, and no runner it chose
+/// starts short of one of this build's uses.
+fn profile_identity(
+    facts: Option<&[u8; 32]>,
+    instances: &rawr_import::record::Record,
+    build: &str,
+) -> String {
     let mut identity = match facts {
         Some(facts) => {
             let hex = facts
@@ -80,6 +101,8 @@ fn adapter(
         }
         None => IDENTITY.to_owned(),
     };
+    identity.push_str(".build.");
+    identity.push_str(build);
     // A check compiles each instance native code calls a marked generic at
     // (D869): one cached for other instances is never replayed.
     if !instances.instances().is_empty() {
@@ -92,13 +115,7 @@ fn adapter(
         identity.push_str(".instances.");
         identity.push_str(&rawr::package::instances::digest(&key));
     }
-    trusted::Adapter::trusted(
-        Operations,
-        profile::Identity::new(&identity),
-        profile::Version::new(VERSION),
-        false,
-    )
-    .semantic_api()
+    identity
 }
 
 /// The profile that adds nothing to the runner, for a program built as
@@ -1211,4 +1228,23 @@ fn prepare_resolving(
             .with_uses(uses)
             .with_demand(resolved.into_boxed_slice()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    /// A check is keyed by the build of rawr that made it, so a start
+    /// never replays one another build's lowering made: that check named
+    /// iced's `Color::into` where this build's lowering of
+    /// `container::background` names `Background::from`, and the runner it
+    /// chose started without it.
+    #[test]
+    fn a_check_is_keyed_by_the_build_of_rawr_that_made_it() {
+        let instances = rawr_import::record::Record::default();
+        let this = super::profile_identity(None, &instances, rawr::package::import::BUILD);
+        let other = super::profile_identity(None, &instances, "0000000000000000");
+        assert_ne!(this, other);
+        assert!(this.contains(rawr::package::import::BUILD), "{this}");
+        let facts = super::profile_identity(Some(&[7; 32]), &instances, "0000000000000000");
+        assert_ne!(facts, other);
+    }
 }

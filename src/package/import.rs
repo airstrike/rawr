@@ -15,6 +15,12 @@ mod unresolved;
 
 pub use kept::Kept;
 
+/// The digest of the sources this build of rawr was compiled from, its
+/// lowering's own among them: a check cached by another build lowered the
+/// program with other code, so its native uses may not be this build's.
+#[doc(hidden)]
+pub const BUILD: &str = env!("RAWR_BUILD_DIGEST");
+
 /// Same-pass compilation against metadata owned by the retained native compiler.
 #[doc(hidden)]
 pub mod resident;
