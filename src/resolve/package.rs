@@ -3263,14 +3263,17 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .map(|segment| segment.name.text.clone())
                 .collect::<Vec<_>>();
-            if !self.is_script_path(context, &written) {
-                return;
-            }
-            // A path into a `.rs` module keeps its types' own resolution.
-            let Some(spelled) = self
-                .rust_spelling(context, &written)
-                .filter(|spelled| app.is_none_or(|app| spelled[0] != app))
-            else {
+            // A crate-source module's `crate::` path names the crate's
+            // item through the program's dependency on that crate.
+            let spelled = match self.crate_source_spelled(context, &written) {
+                Some(spelled) => Some(spelled),
+                None if !self.is_script_path(context, &written) => return,
+                // A path into a `.rs` module keeps its types' own resolution.
+                None => self
+                    .rust_spelling(context, &written)
+                    .filter(|spelled| app.is_none_or(|app| spelled[0] != app)),
+            };
+            let Some(spelled) = spelled else {
                 return;
             };
             let (at, span) = (first.name.span, first.span);
@@ -5359,11 +5362,23 @@ fn each_signature_path(
             Type::Reference { target, .. } => ty(target, path),
         }
     }
+    // A bound's trait, and the types its arguments name: `Paint` of
+    // `T: Into<crate::paint::Paint>`.
+    let bound = |bound: &mut Path| {
+        path(bound, Place::Trait);
+        for segment in bound.segments.iter_mut() {
+            for argument in segment.arguments.iter_mut() {
+                if let Argument::Type(argument) = argument {
+                    ty(argument, path);
+                }
+            }
+        }
+    };
     let generics = |generics: &mut [crate::item::GenericParam]| {
         for generic in generics.iter_mut() {
             let mut bounds = generic.bounds.to_vec();
-            for bound in &mut bounds {
-                path(bound, Place::Trait);
+            for written in &mut bounds {
+                bound(written);
             }
             generic.bounds = bounds.into_boxed_slice();
         }
