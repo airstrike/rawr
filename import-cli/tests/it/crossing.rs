@@ -3805,3 +3805,86 @@ fn a_save_that_first_names_a_module_beside_a_function_of_its_name_takes_effect()
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
+
+/// A crate module's generic code runs from the crate's own source when
+/// `RAWR_CRATE_SOURCE` names the module: `shade(impl Into<Tint>)` at a
+/// native type and at the program's, and `Panel<M>` and `draw` at the
+/// program's `M`. Their bodies call the module's private helper, build its
+/// private-field `Style` and bump its private static through the runner's
+/// copy of the crate, which opens them, and the crate's concrete `plain`
+/// bumps the same static natively. The runner holds no instance of the
+/// generic items, only concrete ones. The output is `cargo run`'s. An edit
+/// that adds a program type through them and gives `shade` new native
+/// inputs, whose concrete conversions the first build bound, prints `cargo
+/// run`'s output with no new runner build.
+#[test]
+fn a_crate_modules_generic_code_runs_from_its_source_with_no_instance_built() {
+    let root = lane(Some("tinted.rs"));
+    let run = |root: &std::path::Path| {
+        let output = |mut command: Command| {
+            let run = command
+                .current_dir(root)
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("RUSTFLAGS")
+                .env_remove("RAWR_VERBOSE")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+            assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+            stdout
+        };
+        let mut rawr = crate::support::rawr_import();
+        rawr.arg("run")
+            .arg(root)
+            .env("RAWR_CRATE_SOURCE", "events::tinted")
+            .env("RAWR_HOME", crate::support::runtime_home());
+        let mut cargo = Command::new("cargo");
+        cargo.args(["run", "-q"]);
+        (output(rawr), output(cargo))
+    };
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).unwrap() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    for generic in ["shade\"", "draw\"", "Panel\"", "Panel::"] {
+        let item = format!("item: \"events::tinted::{generic}");
+        assert!(!bound.contains(&item), "{item} is bound:\n{bound}");
+    }
+    assert!(bound.contains("tinted::darken"), "{bound}");
+    let built = runners(&root.join("target/rawr/store"));
+
+    fs::write(
+        root.join("src/main.rs"),
+        CROSSING.read("variants/tinted_warm.rs"),
+    )
+    .unwrap();
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("warm 1 #1e0fa2 @10\nshaded 10"), "{rawr}");
+    assert_eq!(runners(&root.join("target/rawr/store")), built);
+}
+
+/// Each runner executable under `store`, with when it was written.
+fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut found = Vec::new();
+    let mut pending = vec![store.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .file_name()
+                .is_some_and(|name| name == "rawr-generated-runner")
+            {
+                found.push((path, entry.metadata().unwrap().modified().unwrap()));
+            }
+        }
+    }
+    found.sort();
+    found
+}

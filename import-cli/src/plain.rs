@@ -163,7 +163,12 @@ fn demand_more(
     // gives it: only worth asking when another member already makes the
     // next round probe, since the type alone replays the tables it has.
     let misses = error.rust_misses();
-    let missed_type = |owner: &str| misses.iter().any(|(path, ..)| *path == owner);
+    // A type demanded already that the pass still misses is no new type:
+    // its member is what the next round can give.
+    let missed_type = |owner: &str| {
+        misses.iter().any(|(path, ..)| *path == owner)
+            && !request_demand.iter().any(|known| **known == *owner)
+    };
     let probing = misses
         .iter()
         .any(|(_, _, owner)| owner.is_some_and(|owner| !missed_type(owner)));

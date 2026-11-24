@@ -70,6 +70,10 @@ pub struct Package {
     /// items, which Rust lets a child module see of its ancestors': the
     /// shadow crate stands those items too.
     below: super::island::Below,
+    /// The files of crate modules whose generic items the package holds
+    /// (`crate_source`), each with its whole text: native inputs, whose
+    /// sources hold only those items.
+    crate_sources: Vec<(PathBuf, String)>,
 }
 
 /// One `use` declaration of a marked module that a native module's path
@@ -259,6 +263,13 @@ impl Package {
     #[must_use]
     pub fn rust_modules(&self) -> &[RustModule] {
         &self.rust_modules
+    }
+
+    /// The files of crate modules whose generic items the package holds
+    /// (`crate_source`), each with its whole text.
+    #[must_use]
+    pub fn crate_sources(&self) -> &[(PathBuf, String)] {
+        &self.crate_sources
     }
 
     /// The marked modules' `use` declarations native paths go through.
@@ -1009,6 +1020,7 @@ impl<'a> Builder<'a> {
             },
         };
         let entry_package = self.load_package(request)?;
+        self.load_crate_sources(entry_package)?;
         let entry_source = self.packages[entry_package.0].source;
         Ok(Graph {
             packages: self.packages.into_boxed_slice(),
@@ -1041,6 +1053,7 @@ impl<'a> Builder<'a> {
             package: None,
         };
         let entry_package = self.load_package(request)?;
+        self.load_crate_sources(entry_package)?;
         let entry_source = self.packages[entry_package.0].source;
         Ok(Graph {
             packages: self.packages.into_boxed_slice(),
@@ -1191,6 +1204,7 @@ impl<'a> Builder<'a> {
             re_exports: Vec::new(),
             marked_uses: false,
             below: super::island::Below::new(),
+            crate_sources: Vec::new(),
         });
 
         let module_root = request
@@ -1328,6 +1342,70 @@ impl<'a> Builder<'a> {
         }
         self.find_marked_uses(package);
         Ok(package)
+    }
+
+    /// Each crate module whose generic items rawr reads from the crate's
+    /// source (`crate_source`), as a module of `package`'s: the crate's file
+    /// with only those items, at their places. A module of a crate that is
+    /// no path dependency of the package, or whose file is missing, is left
+    /// to the crate's native build.
+    fn load_crate_sources(&mut self, package: Id) -> Result<(), Error> {
+        for path in super::crate_source::modules() {
+            let Some(file) = self.crate_module_file(package, &path) else {
+                continue;
+            };
+            let Ok(text) = self.read_to_string(&file) else {
+                continue;
+            };
+            let (name, root) = {
+                let package = &self.packages[package.0];
+                (package.name.clone(), package.root.clone())
+            };
+            let generic = super::crate_source::generic::text(&text, &path);
+            self.packages[package.0]
+                .crate_sources
+                .push((file.clone(), text));
+            let text = generic;
+            let module_root = file.parent().unwrap_or(&root).to_path_buf();
+            self.load_module_text(
+                package,
+                &name,
+                &root,
+                &module_root,
+                Box::new([super::crate_source::name(&path)]),
+                file.clone(),
+                file,
+                text,
+                None,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The file of the module at `path` of a crate `package` names by a
+    /// path dependency, the crate's name first: `src/a/b.rs` or
+    /// `src/a/b/mod.rs` under the crate's directory.
+    fn crate_module_file(&self, package: Id, path: &[ImmutableString]) -> Option<PathBuf> {
+        let (alias, modules) = path.split_first()?;
+        let config = self.packages[package.0].rust.as_ref()?;
+        let directory =
+            config
+                .dependencies
+                .iter()
+                .find_map(|dependency| match &dependency.source {
+                    manifest::rust::Source::Path(directory) if dependency.alias == *alias => {
+                        Some(directory.clone())
+                    }
+                    _ => None,
+                })?;
+        let mut file = directory.join("src");
+        file.extend(modules.iter().map(ImmutableString::as_str));
+        let flat = file.with_extension("rs");
+        if self.is_file(&flat) {
+            return Some(flat);
+        }
+        let nested = file.join("mod.rs");
+        self.is_file(&nested).then_some(nested)
     }
 
     /// A binary whose tree is marked runs, so a marked module in the tree

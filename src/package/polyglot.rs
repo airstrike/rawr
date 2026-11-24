@@ -456,6 +456,416 @@ pub(crate) fn root_items_public(text: &str) -> String {
     inserted(text, &inserts, "pub ")
 }
 
+/// `text`, a crate module whose generic items rawr runs as the program's
+/// (`crate_source`), with every item and field rustc lets those items name
+/// public to the runner: `pub ` before each of the module's own items but
+/// its `use` declarations, before each named field of its structs and
+/// unions, and before each item of its inherent impls, and `pub` in place
+/// of each `pub(crate)`, `pub(super)` and `pub(in ..)`, padded to its old
+/// width. A tuple struct's field that starts with punctuation (`&str`,
+/// `[u8; 3]`) and the items of inline modules are left as written.
+#[cfg_attr(
+    not(all(feature = "rust-import", not(target_arch = "wasm32"))),
+    allow(dead_code)
+)]
+pub(crate) fn module_items_public(text: &str) -> String {
+    let tokens = tokens(text);
+    let mut inserts = private_items(&tokens)
+        .into_iter()
+        .filter(|(_, index)| !matches!(tokens[*index], Token::Ident("use", _)))
+        .map(|(at, _)| at)
+        .collect::<Vec<_>>();
+    let mut depth = 0_usize;
+    let mut index = 0;
+    while index < tokens.len() {
+        match tokens[index] {
+            Token::Punct(b'{' | b'(' | b'[') => depth += 1,
+            Token::Punct(b'}' | b')' | b']') => depth = depth.saturating_sub(1),
+            Token::Ident(keyword @ ("struct" | "union" | "impl"), _) if depth == 0 => {
+                if let Some((open, close, inherent)) = item_body(&tokens, index)
+                    && (keyword != "impl" || inherent)
+                {
+                    let inner = &tokens[open + 1..close];
+                    if keyword == "impl" {
+                        inserts.extend(private_items(inner).into_iter().map(|(at, _)| at));
+                    } else {
+                        inserts.extend(private_fields(inner));
+                    }
+                    index = close + 1;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    inserts.sort_unstable();
+    inserts.dedup();
+    let mut opened = inserted(text, &inserts, "pub ");
+    for (range, width) in restricted_visibilities(&opened).into_iter().rev() {
+        opened.replace_range(range, &format!("{:width$}", "pub"));
+    }
+    opened
+}
+
+/// The byte ranges of `text`'s module-level items that a crate's program
+/// module keeps (`crate_source`), each from its first attribute through
+/// its `}` or `;`: its `use` declarations and `macro_rules!` definitions,
+/// its functions, structs, enums and unions with a type or const parameter
+/// (an argument-position `impl Trait` is one), and its impls with one or
+/// whose header names one of those types. Of an inherent impl of another
+/// type, it keeps the methods with a type or const parameter, inside the
+/// impl's header and closing brace. Everything else is concrete code,
+/// which this reads only as far as its bounds.
+pub(crate) fn generic_items(text: &str) -> Vec<std::ops::Range<usize>> {
+    let tokens = placed(text);
+    let items = module_items(text, &tokens);
+    let generic_types = items
+        .iter()
+        .filter_map(|item| match item.keyword {
+            "struct" | "enum" | "union" if item.generic => item.name,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut kept = Vec::new();
+    for item in &items {
+        let header = &tokens[item.header.clone()];
+        let whole = match item.keyword {
+            "use" | "macro_rules" => true,
+            "fn" | "struct" | "enum" | "union" => item.generic,
+            "impl" => {
+                item.generic
+                    || header.iter().any(|(token, _)| {
+                        matches!(token, Token::Ident(name, _) if generic_types.contains(name))
+                    })
+            }
+            _ => false,
+        };
+        if whole {
+            kept.push(item.bytes.clone());
+            continue;
+        }
+        let inherent = !header
+            .iter()
+            .any(|(token, _)| matches!(token, Token::Ident("for", _)));
+        if item.keyword != "impl" || !inherent || item.header.end >= item.end {
+            continue;
+        }
+        let methods = module_items(text, &tokens[item.header.end + 1..item.end])
+            .into_iter()
+            .filter(|method| method.keyword == "fn" && method.generic)
+            .map(|method| method.bytes)
+            .collect::<Vec<_>>();
+        if !methods.is_empty() {
+            kept.push(item.bytes.start..tokens[item.header.end].1 + 1);
+            kept.extend(methods);
+            kept.push(tokens[item.end].1..tokens[item.end].1 + 1);
+        }
+    }
+    kept
+}
+
+/// One module-level item as [`generic_items`] reads it.
+struct ModuleItem<'t> {
+    /// The keyword that says what it is: `fn`, `struct`, `impl`, `use`,
+    /// `macro_rules`, and so on.
+    keyword: &'t str,
+    /// The name it declares, when it declares one.
+    name: Option<&'t str>,
+    /// Whether it has a type or const parameter.
+    generic: bool,
+    /// The token indices of its header: past its keyword, up to its body.
+    header: std::ops::Range<usize>,
+    /// The token index of its last token, its `}` or `;`.
+    end: usize,
+    /// Its bytes, from its first attribute through its last token.
+    bytes: std::ops::Range<usize>,
+}
+
+/// The module-level items of `text`, whose tokens are `tokens`, in order.
+fn module_items<'t>(text: &str, tokens: &[(Token<'t>, usize)]) -> Vec<ModuleItem<'t>> {
+    const KEYWORDS: [&str; 12] = [
+        "fn",
+        "struct",
+        "enum",
+        "union",
+        "impl",
+        "use",
+        "static",
+        "const",
+        "type",
+        "trait",
+        "mod",
+        "macro_rules",
+    ];
+    const QUALIFIERS: [&str; 4] = ["fn", "unsafe", "async", "extern"];
+    let bare = tokens.iter().map(|(token, _)| *token).collect::<Vec<_>>();
+    let mut items = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let first = tokens[index].1;
+        let mut cursor = index;
+        while bare.get(cursor) == Some(&Token::Punct(b'#')) {
+            cursor = attribute_end(&bare, cursor);
+        }
+        let Some(keyword_at) = bare
+            .get(cursor..)
+            .unwrap_or_default()
+            .iter()
+            .position(|token| match token {
+                Token::Ident(word, _) => KEYWORDS.contains(word),
+                Token::Punct(b'{' | b';') => true,
+                _ => false,
+            })
+            .map(|offset| cursor + offset)
+        else {
+            break;
+        };
+        // A macro call where an item goes: `m!();` or `m! { .. }`.
+        let Token::Ident(keyword, _) = bare[keyword_at] else {
+            index = item_end(tokens, keyword_at).0 + 1;
+            continue;
+        };
+        // `const fn` is a function, and `const _: () = ..` a constant.
+        let keyword = match (keyword, bare.get(keyword_at + 1)) {
+            ("const", Some(Token::Ident(word, _))) if QUALIFIERS.contains(word) => "fn",
+            _ => keyword,
+        };
+        let name_at = bare[keyword_at + 1..]
+            .iter()
+            .position(|token| match token {
+                Token::Ident(word, _) => !QUALIFIERS.contains(word),
+                Token::Str(_) => false,
+                Token::Punct(_) => true,
+            })
+            .map(|offset| keyword_at + 1 + offset);
+        let name = match (keyword, name_at.map(|at| bare[at])) {
+            ("impl" | "use", _) => None,
+            (_, Some(Token::Ident(name, _))) => Some(name),
+            _ => None,
+        };
+        let after_name = match (name, name_at) {
+            (Some(_), Some(at)) => at + 1,
+            _ => keyword_at + 1,
+        };
+        let (end, body) = item_end(tokens, keyword_at + 1);
+        let mut generic = bare.get(after_name) == Some(&Token::Punct(b'<'))
+            && type_parameter(text, &tokens[after_name + 1..]);
+        if keyword == "fn" && !generic {
+            generic = bare[after_name..body]
+                .iter()
+                .any(|token| matches!(token, Token::Ident("impl", _)));
+        }
+        items.push(ModuleItem {
+            keyword,
+            name,
+            generic,
+            header: after_name..body,
+            end,
+            bytes: first..tokens[end].1 + 1,
+        });
+        index = end + 1;
+    }
+    items
+}
+
+/// Where the item whose header starts at `index` ends, its `;` or the `}`
+/// of its body, and where its body starts (its end when it has none), as
+/// token indices.
+fn item_end(tokens: &[(Token<'_>, usize)], index: usize) -> (usize, usize) {
+    let mut depth = 0_usize;
+    let mut body = None;
+    let mut cursor = index;
+    while let Some((token, _)) = tokens.get(cursor) {
+        match *token {
+            Token::Punct(b'{') => {
+                if depth == 0 && body.is_none() {
+                    body = Some(cursor);
+                }
+                depth += 1;
+            }
+            Token::Punct(b'(' | b'[') => depth += 1,
+            Token::Punct(b')' | b']') => depth = depth.saturating_sub(1),
+            Token::Punct(b'}') => {
+                depth = depth.saturating_sub(1);
+                let semicolon = tokens
+                    .get(cursor + 1)
+                    .is_some_and(|(token, _)| *token == Token::Punct(b';'));
+                if depth == 0 && !semicolon {
+                    return (cursor, body.unwrap_or(cursor));
+                }
+            }
+            Token::Punct(b';') if depth == 0 => return (cursor, body.unwrap_or(cursor)),
+            _ => {}
+        }
+        cursor += 1;
+    }
+    let end = tokens.len().saturating_sub(1);
+    (end, body.unwrap_or(end))
+}
+
+/// Whether the parameter list of `text` whose tokens `tokens` start past
+/// its `<` has a type or const parameter, not only lifetimes.
+fn type_parameter(text: &str, tokens: &[(Token<'_>, usize)]) -> bool {
+    let mut depth = 0_usize;
+    let mut start = true;
+    for (index, (token, at)) in tokens.iter().enumerate() {
+        match *token {
+            Token::Punct(b'<' | b'(' | b'[') => depth += 1,
+            Token::Punct(b'>') if index == 0 || tokens[index - 1].0 != Token::Punct(b'-') => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            Token::Punct(b')' | b']') => depth = depth.saturating_sub(1),
+            Token::Punct(b',') if depth == 0 => start = true,
+            Token::Ident(..) if depth == 0 && start => {
+                let lifetime = at
+                    .checked_sub(1)
+                    .is_some_and(|before| text.as_bytes()[before] == b'\'');
+                if !lifetime {
+                    return true;
+                }
+                start = false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The braces or parentheses of the struct, union or impl whose keyword is
+/// at `index`, as token indices, and whether it is an impl of no trait.
+/// Only a tuple struct's body is in parentheses, before any `where`.
+/// `None` for a unit struct, or a body this reading can't find.
+fn item_body(tokens: &[Token<'_>], index: usize) -> Option<(usize, usize, bool)> {
+    let mut angle = 0_usize;
+    let mut inherent = true;
+    let mut parenthesized = !matches!(tokens[index], Token::Ident("impl", _));
+    let mut cursor = index + 1;
+    while let Some(token) = tokens.get(cursor) {
+        match *token {
+            Token::Punct(b'<') => angle += 1,
+            Token::Punct(b'>') if tokens.get(cursor - 1) != Some(&Token::Punct(b'-')) => {
+                angle = angle.saturating_sub(1);
+            }
+            Token::Ident("for", _)
+                if angle == 0 && tokens.get(cursor + 1) != Some(&Token::Punct(b'<')) =>
+            {
+                inherent = false;
+            }
+            Token::Ident("where", _) => parenthesized = false,
+            Token::Punct(b';') if angle == 0 => return None,
+            Token::Punct(b'(') if angle == 0 && !parenthesized => {
+                let mut depth = 0_usize;
+                for (at, inner) in tokens.iter().enumerate().skip(cursor) {
+                    match *inner {
+                        Token::Punct(b'(') => depth += 1,
+                        Token::Punct(b')') => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                cursor = at;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Token::Punct(open @ (b'{' | b'(')) if angle == 0 => {
+                let wanted = if open == b'{' { b'}' } else { b')' };
+                let mut depth = 0_usize;
+                for (at, inner) in tokens.iter().enumerate().skip(cursor) {
+                    match *inner {
+                        Token::Punct(b'{' | b'(' | b'[') => depth += 1,
+                        Token::Punct(close @ (b'}' | b')' | b']')) => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                return (close == wanted).then_some((cursor, at, inherent));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return None;
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
+}
+
+/// Where `pub ` goes for each field of a struct's body, `tokens` inside its
+/// braces or parentheses, that has no visibility and starts with a word.
+fn private_fields(tokens: &[Token<'_>]) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = true;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if depth == 0 && start {
+            if token == Token::Punct(b'#') {
+                index = attribute_end(tokens, index);
+                continue;
+            }
+            start = false;
+            if let Token::Ident(word, at) = token
+                && word != "pub"
+            {
+                found.push(at);
+            }
+        }
+        match token {
+            Token::Punct(b'{' | b'(' | b'[' | b'<') => depth += 1,
+            Token::Punct(b'>')
+                if index
+                    .checked_sub(1)
+                    .is_none_or(|before| tokens[before] != Token::Punct(b'-')) =>
+            {
+                depth = depth.saturating_sub(1);
+            }
+            Token::Punct(b'}' | b')' | b']') => depth = depth.saturating_sub(1),
+            Token::Punct(b',') if depth == 0 => start = true,
+            _ => {}
+        }
+        index += 1;
+    }
+    found
+}
+
+/// Each `pub(..)` of `text` that restricts an item to its crate or to a
+/// module: the range from `pub` through its `)`.
+fn restricted_visibilities(text: &str) -> Vec<(std::ops::Range<usize>, usize)> {
+    let bytes = text.as_bytes();
+    let skip = |mut at: usize| {
+        while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+            at += 1;
+        }
+        at
+    };
+    let mut found = Vec::new();
+    for token in tokens(text) {
+        let Token::Ident("pub", start) = token else {
+            continue;
+        };
+        let open = skip(start + 3);
+        if bytes.get(open) != Some(&b'(') {
+            continue;
+        }
+        let Some(close) = text[open..].find(')').map(|offset| open + offset) else {
+            continue;
+        };
+        let scope = text[open + 1..close].trim();
+        if scope == "crate" || scope == "super" || scope.starts_with("in ") {
+            found.push((start..close + 1, close + 1 - start));
+        }
+    }
+    found
+}
+
 /// The top-level `use` declarations of `text`, a native crate root, alone,
 /// each with its visibility: what a marked module's path through `crate`
 /// may stand for, as the root's `pub use theme::Theme;` makes
@@ -1040,6 +1450,11 @@ fn cfg(tokens: &[Token<'_>], cursor: &mut usize, features: &Enabled) -> bool {
 }
 
 fn tokens(text: &str) -> Vec<Token<'_>> {
+    placed(text).into_iter().map(|(token, _)| token).collect()
+}
+
+/// The tokens of `text`, each with the byte it starts at.
+fn placed(text: &str) -> Vec<(Token<'_>, usize)> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
     // Rust starts after a shebang line and a frontmatter block.
@@ -1074,7 +1489,7 @@ fn tokens(text: &str) -> Vec<Token<'_>> {
                 // Unterminated, it runs to the end of the text.
                 let closed = end > index + 1 && bytes[end - 1] == b'"';
                 let contents = index + 1..if closed { end - 1 } else { end };
-                tokens.push(Token::Str(&text[contents]));
+                tokens.push((Token::Str(&text[contents]), index));
                 index = end;
             }
             b'\'' => {
@@ -1115,12 +1530,12 @@ fn tokens(text: &str) -> Vec<Token<'_>> {
                     end = index + 1;
                     start = index;
                 }
-                tokens.push(Token::Ident(&text[start..end], start));
+                tokens.push((Token::Ident(&text[start..end], start), start));
                 index = end;
             }
             byte if byte.is_ascii_whitespace() || !byte.is_ascii() => index += 1,
             byte => {
-                tokens.push(Token::Punct(byte));
+                tokens.push((Token::Punct(byte), index));
                 index += 1;
             }
         }
@@ -1334,6 +1749,36 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
                 "{line} in\n{public}"
             );
         }
+    }
+
+    /// A crate module whose generic items rawr runs opens its own items
+    /// but its imports, its structs' fields and its inherent impls' items,
+    /// and leaves a trait impl's items and a function's body as written.
+    #[test]
+    fn a_crate_modules_items_and_fields_become_public() {
+        let text = "use std::sync::atomic::AtomicUsize;\n\
+                    struct Counter { #[doc(hidden)] count: AtomicUsize, map: Vec<(u8, u8)>, pub open: u8 }\n\
+                    struct Pair(u8, pub u8);\n\
+                    pub(crate) fn shared() {}\n\
+                    static SHADED: u8 = 0;\n\
+                    impl Counter { fn bump(&self) -> usize { let x = 1; x } pub fn get(&self) {} }\n\
+                    impl From<u8> for Pair { fn from(x: u8) -> Self { Pair(x, x) } }\n\
+                    impl<M> Wrap<M> where M: for<'a> Fn(&'a u8) { const N: u8 = 1; }\n";
+        let public = super::module_items_public(text);
+        let lines = public.lines().collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            [
+                "use std::sync::atomic::AtomicUsize;",
+                "pub struct Counter { #[doc(hidden)] pub count: AtomicUsize, pub map: Vec<(u8, u8)>, pub open: u8 }",
+                "pub struct Pair(pub u8, pub u8);",
+                "pub        fn shared() {}",
+                "pub static SHADED: u8 = 0;",
+                "impl Counter { pub fn bump(&self) -> usize { let x = 1; x } pub fn get(&self) {} }",
+                "impl From<u8> for Pair { fn from(x: u8) -> Self { Pair(x, x) } }",
+                "impl<M> Wrap<M> where M: for<'a> Fn(&'a u8) { pub const N: u8 = 1; }",
+            ]
+        );
     }
 
     #[test]

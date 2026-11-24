@@ -500,6 +500,31 @@ impl<'a> Resolver<'a> {
 
         for unit in units {
             let context = &unit.context;
+            // A crate module whose generic items the package holds is a
+            // module of its root that no `mod` item declares
+            // (`crate_source`): every module of the crate reaches it.
+            if let [module] = context.namespace.modules.as_ref()
+                && crate::package::crate_source::is_name(module)
+            {
+                let root = Namespace {
+                    package: context.namespace.package.clone(),
+                    modules: Box::default(),
+                };
+                let address = Address {
+                    package: root.package.clone(),
+                    modules: Box::default(),
+                    name: module.clone(),
+                };
+                self.insert_declaration(
+                    address,
+                    Declaration {
+                        source: context.source,
+                        span: Span::new(crate::Position::START, crate::Position::START),
+                        reach: root.reach(None),
+                        target: Target::Module,
+                    },
+                )?;
+            }
             let items = unit.parsed.items();
             let mut slots = Vec::with_capacity(items.len());
             let mut blocks = BlockItems::new();
@@ -2762,6 +2787,50 @@ impl<'a> Resolver<'a> {
                 || first == "super"
                 || first == "self" && path.len() > 1
                 || self.is_child_module(context, first)
+        }) || self.crate_source_path(context, path).is_some()
+    }
+
+    /// `path` from the program module that stands for a crate module whose
+    /// generic items the package holds (`crate_source`), when the path goes
+    /// through that crate module: `events::tinted::Tint` is
+    /// `crate::__rawr_crate__events__tinted::Tint`, which the program
+    /// module's glob re-exports from the crate, and `events::tinted::shade`
+    /// the program module's own `shade`. A crate's own code never names
+    /// itself through the extern prelude, so in such a program module the
+    /// crate's name is the native crate's, which its glob names.
+    fn crate_source_path(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let first = path.first()?;
+        let in_crate_source = context
+            .namespace
+            .modules
+            .first()
+            .is_some_and(|module| crate::package::crate_source::is_name(module));
+        if path.len() < 2
+            || in_crate_source
+            || self.tables.declaration(&context.address(first)).is_some()
+            || !self.tables.reaches(first)
+        {
+            return None;
+        }
+        let package: ImmutableString = self.tables.package_name(context.package).into();
+        (2..=path.len()).rev().find_map(|split| {
+            let module = crate::package::crate_source::name(&path[..split]);
+            let address = Address {
+                package: package.clone(),
+                modules: Box::default(),
+                name: module.clone(),
+            };
+            self.tables.declaration(&address)?;
+            Some(
+                [ImmutableString::from("crate"), module]
+                    .into_iter()
+                    .chain(path[split..].iter().cloned())
+                    .collect(),
+            )
         })
     }
 
@@ -2788,6 +2857,9 @@ impl<'a> Resolver<'a> {
         path: &[ImmutableString],
         active: &mut BTreeSet<Address>,
     ) -> bool {
+        if let Some(mapped) = self.crate_source_path(context, path) {
+            return self.names_script_module(context, &mapped, active);
+        }
         let path = through_self(path);
         let supers = path
             .iter()
@@ -3360,6 +3432,9 @@ impl<'a> Resolver<'a> {
         path: &[ImmutableString],
         active: &mut BTreeSet<Address>,
     ) -> Option<Vec<ImmutableString>> {
+        if let Some(mapped) = self.crate_source_path(context, path) {
+            return self.spelling_from(context, &mapped, active);
+        }
         let path = through_self(path);
         let first = path.first()?;
         let supers = path
@@ -3498,6 +3573,9 @@ impl<'a> Resolver<'a> {
         reference: Span,
         active: &mut BTreeSet<Address>,
     ) -> Result<Target, Failure> {
+        if let Some(mapped) = self.crate_source_path(context, path) {
+            return self.resolve_path(context, &mapped, reference, active);
+        }
         let path = through_self(path);
         let Some(first) = path.first() else {
             return Err(self.unknown_import(context, path, reference));

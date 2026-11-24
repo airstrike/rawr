@@ -28,8 +28,10 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment, &mut Copies::default())?;
-        request(entry, config, environment, None, app, &[], limits).map(Some)
+        let mut copies = Copies::default();
+        let config = opened_crates(entry, config, &environment, &mut copies)?;
+        let app = app_crate(self, &environment, &mut copies)?;
+        request(entry, &config, environment, None, app, &[], limits).map(Some)
     }
 
     /// The Rust imports, resolved in `universe` (the importer's plain one).
@@ -57,6 +59,7 @@ impl Graph {
             (None, None) => return Ok(None),
         };
         script_project(entry)?;
+        let config = opened_crates(entry, &config, &environment, copies)?;
         let app = app_crate(self, &environment, copies)?;
         request(
             entry,
@@ -87,8 +90,9 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
+        let config = opened_crates(entry, config, &environment, copies)?;
         let app = app_crate(self, &environment, copies)?;
-        request_inventory(entry, config, environment, app, closure, limits).map(Some)
+        request_inventory(entry, &config, environment, app, closure, limits).map(Some)
     }
 
     /// The Rust edition of the entry crate's source, `2015` when its Cargo
@@ -361,6 +365,54 @@ impl Copies {
             }
         }
     }
+}
+
+/// `config` with each path dependency whose modules rawr reads generic code
+/// from (`crate_source`) named through the runner's copy of it, written
+/// beside the runner as `opened-<name>` in the project's Rawr directory:
+/// the crate with those modules' items and fields public
+/// (`crate_source::opened`), which their generic items, run as the
+/// program's, reach as rustc lets them. Both the runner and the bindings
+/// read that copy, so the program's own `cargo build` keeps the crate as
+/// written.
+fn opened_crates(
+    entry: &super::graph::Package,
+    config: &Config,
+    environment: &Environment,
+    copies: &mut Copies,
+) -> rawr_import::Result<Config> {
+    let crates = super::crate_source::crates();
+    let modules = super::crate_source::modules();
+    let mut config = config.clone();
+    if crates.is_empty() {
+        return Ok(config);
+    }
+    let rawr = copies.rawr_directory(entry.root(), environment);
+    let mut dependencies = config.dependencies.into_vec();
+    for dependency in &mut dependencies {
+        let Source::Path(crate_directory) = &dependency.source else {
+            continue;
+        };
+        if !crates.contains(&dependency.alias) {
+            continue;
+        }
+        let directory = rawr.join(format!("opened-{}", dependency.alias));
+        let paths = modules
+            .iter()
+            .filter(|path| path.first() == Some(&dependency.alias))
+            .map(|path| &path[1..])
+            .collect::<Vec<_>>();
+        let files = super::crate_source::opened::files(crate_directory, &directory, &paths)
+            .map_err(|source| rawr_import::Error::Io {
+                operation: "read crate",
+                path: crate_directory.clone(),
+                source,
+            })?;
+        write_changed(files, &mut copies.written)?;
+        dependency.source = Source::Path(directory);
+    }
+    config.dependencies = dependencies.into_boxed_slice();
+    Ok(config)
 }
 
 /// The digest [`Copies`] keeps of a copy's text.

@@ -4,6 +4,7 @@
 pub mod called;
 mod cell;
 pub(crate) mod compile;
+pub(crate) mod crate_source;
 mod entry;
 mod error;
 pub(crate) mod graph;

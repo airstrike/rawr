@@ -43,6 +43,7 @@ pub mod spans;
 pub mod staged;
 pub mod stock;
 pub mod styled;
+pub mod tinted;
 pub mod tuned;
 pub mod viewed;
 
