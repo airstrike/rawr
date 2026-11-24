@@ -4,12 +4,14 @@
 /// The crate module's file `text` with only its generic items, its `use`
 /// declarations and its `macro_rules!` definitions at their places
 /// (`polyglot::generic_items`), everything else blank but its line breaks,
-/// and a glob import of the crate module at `path` at its end. The generic
-/// inherent methods of the crate's concrete types are their trait's, which
-/// is declared after the module's text (`crate_source::inherent`). Rawr
+/// and a glob import of the crate module at `path` after them, then a
+/// function that binds each concrete item (`bound`). The generic inherent
+/// methods of the crate's concrete types are their trait's, which is
+/// declared after the module's text (`crate_source::inherent`). Rawr
 /// reads the concrete items only as far as their bounds, so a concrete
-/// item it can't parse is no error.
-pub(crate) fn text<S: AsRef<str>>(text: &str, path: &[S]) -> String {
+/// item it can't parse is no error. A runner's program, whose runner is
+/// built, takes no binding functions ([`Bindings::Left`]).
+pub(crate) fn text<S: AsRef<str>>(text: &str, path: &[S], bindings: Bindings) -> String {
     let items = super::super::polyglot::generic_items(text);
     let mut generic = String::with_capacity(text.len());
     for (at, character) in text.char_indices() {
@@ -26,11 +28,22 @@ pub(crate) fn text<S: AsRef<str>>(text: &str, path: &[S]) -> String {
         generic.replace_range(range, &written);
     }
     generic.push_str(&items.declared);
-    let glob = glob(path);
-    if !text.contains(&glob) {
-        generic.push_str(&glob);
+    generic.push_str(&glob(path));
+    if bindings == Bindings::Written {
+        generic.push_str(&super::bound::functions(text));
     }
     generic
+}
+
+/// Whether a program module of a crate module's generic items has the
+/// functions that bind its concrete items.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Bindings {
+    /// The check that builds the runner reads them, so the runner binds
+    /// every concrete item.
+    Written,
+    /// The runner's own compile of the program, whose runner is built.
+    Left,
 }
 
 /// The public glob import of the native crate module at `path` that a
@@ -49,7 +62,8 @@ fn glob<S: AsRef<str>>(path: &[S]) -> String {
 mod tests {
     /// A module's generic function, generic type and its impls stay at
     /// their places with its imports, its concrete items go, one rawr
-    /// can't parse included, and the glob of the crate module ends it.
+    /// can't parse included, the glob of the crate module comes after
+    /// them, and functions that bind the concrete items.
     #[test]
     fn a_module_keeps_its_generic_items_and_imports_at_their_places() {
         let text = "use std::fmt::Debug;\n\
@@ -62,8 +76,11 @@ mod tests {
                     impl<M: Debug> Panel<M> { pub fn len(&self) -> usize { self.items.len() } }\n\
                     impl From<[u8; 1]> for Tint { fn from([red]: [u8; 1]) -> Self { Tint { red } } }\n\
                     impl Panel<u8> { pub fn first(&self) -> u8 { self.items[0] } }\n";
-        let generic = super::text(text, &["events", "tinted"]);
-        let lines = generic.lines().map(str::trim_end).collect::<Vec<_>>();
+        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written);
+        let (kept, bound) = generic
+            .split_once("\n#[allow(dead_code)]")
+            .unwrap_or((&generic, ""));
+        let lines = kept.lines().map(str::trim_end).collect::<Vec<_>>();
         assert_eq!(
             lines,
             [
@@ -81,20 +98,23 @@ mod tests {
                 "pub use events::tinted::*;",
             ]
         );
-        assert_eq!(super::text(&generic, &["events", "tinted"]), generic);
+        assert!(bound.contains("darken(__a0)"), "{bound}");
     }
 
     /// A generic method of a concrete type's inherent impl is its trait's,
     /// declared after the text, its visibility blank, and the impl's
-    /// concrete method goes.
+    /// concrete method goes, named by a binding function instead.
     #[test]
     fn a_concrete_types_generic_method_is_its_inherent_traits() {
         let text = "impl Style {\n\
                     pub fn tint(&self) -> Tint { self.tint }\n\
                     pub fn retinted(self, tint: impl Into<Tint>) -> Self { Self { tint: tint.into(), ..self } }\n\
                     }\n";
-        let generic = super::text(text, &["events", "tinted"]);
-        let lines = generic.lines().map(str::trim_end).collect::<Vec<_>>();
+        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written);
+        let (kept, bound) = generic
+            .split_once("\n#[allow(dead_code)]")
+            .unwrap_or((&generic, ""));
+        let lines = kept.lines().map(str::trim_end).collect::<Vec<_>>();
         assert_eq!(
             lines,
             [
@@ -110,5 +130,6 @@ mod tests {
                 "pub use events::tinted::*;",
             ]
         );
+        assert!(bound.contains("Style::tint(__a0)"), "{bound}");
     }
 }

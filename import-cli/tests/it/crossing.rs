@@ -3815,10 +3815,11 @@ fn a_save_that_first_names_a_module_beside_a_function_of_its_name_takes_effect()
 /// private-field `Style` and bump its private static through the runner's
 /// copy of the crate, which opens them, and the crate's concrete `plain`
 /// bumps the same static natively. The runner holds no instance of the
-/// generic items, only concrete ones. The output is `cargo run`'s. An edit
-/// that adds a program type through them and gives `shade` new native
-/// inputs, whose concrete conversions the first build bound, prints `cargo
-/// run`'s output with no new runner build.
+/// generic items, and every concrete one of the module, the `[u8; 3]`
+/// conversion the program never names among them. The output is `cargo
+/// run`'s. An edit that adds a program type through them and gives `shade`
+/// new native inputs, a `Tint` and a `[u8; 3]`, prints `cargo run`'s output
+/// with no new runner build.
 #[test]
 fn a_crate_modules_generic_code_runs_from_its_source_with_no_instance_built() {
     let root = lane(Some("tinted.rs"));
@@ -3866,7 +3867,7 @@ fn a_crate_modules_generic_code_runs_from_its_source_with_no_instance_built() {
     .unwrap();
     let (rawr, cargo) = run(&root);
     assert_eq!(rawr, cargo);
-    assert!(rawr.contains("warm 1 #1e0fa2 @10\nshaded 10"), "{rawr}");
+    assert!(rawr.contains("warm 1 #1e0fa2 @9\nshaded 9"), "{rawr}");
     assert_eq!(runners(&root.join("target/rawr/store")), built);
 }
 

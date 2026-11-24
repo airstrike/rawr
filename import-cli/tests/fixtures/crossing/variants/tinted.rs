@@ -11,7 +11,6 @@ use events::tinted::{self, Canvas, Panel, Tint};
 enum Mood {
     Calm,
     Bright,
-    Dusk,
 }
 
 impl From<Mood> for Tint {
@@ -23,7 +22,6 @@ impl From<Mood> for Tint {
                 blue: 160,
             },
             Mood::Bright => Tint::from(240),
-            Mood::Dusk => Tint::from([200, 120, 40]),
         }
     }
 }
@@ -36,10 +34,7 @@ fn main() {
     println!("{gray:?} {}", gray.order());
     println!("{:?} {}", calm.tint(), calm.order());
 
-    let panel = Panel::new("moods")
-        .push(Mood::Calm)
-        .push(Mood::Bright)
-        .push(Mood::Dusk);
+    let panel = Panel::new("moods").push(Mood::Calm).push(Mood::Bright);
     let mut canvas = Canvas::new();
     tinted::draw(&panel, &mut canvas);
     let named = panel.map(|mood| format!("{mood:?}"));
@@ -48,5 +43,5 @@ fn main() {
         println!("{cell}");
     }
     println!("shaded {}", tinted::shaded());
-    println!("{:?}", calm.retinted(Mood::Dusk).tint());
+    println!("{:?}", calm.retinted(Mood::Bright).tint());
 }

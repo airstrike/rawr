@@ -122,6 +122,19 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         };
         let first = lower(false, &mut allocation_failure);
         let (lowered, more) = again(first, || lower(true, &mut None));
+        // A function that binds a crate-source module's concrete item
+        // binds nothing when rawr can't hold the item: nothing calls it,
+        // and interpreted code that reaches the item fails at its call. A
+        // miss is asked for, as any body's is.
+        if let Err(error) = &lowered
+            && LoweringFailure::miss_of(error).is_none()
+            && checked.key.is_some_and(|key| {
+                crate::package::crate_source::is_binding(key.modules(), key.name())
+            })
+        {
+            uses.truncate(before);
+            continue;
+        }
         let entry = lowered_sources
             .entry(source)
             .or_insert_with(|| (Finding::default(), true));

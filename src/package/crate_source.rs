@@ -27,6 +27,7 @@
 
 use crate::ImmutableString;
 
+mod bound;
 pub(crate) mod generic;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod opened;
@@ -43,6 +44,13 @@ const PREFIX: &str = "__rawr_crate";
 /// module holds them as this trait's impl, which is in scope wherever the
 /// type is, as inherent methods are.
 const INHERENT: &str = "__rawr_inherent__";
+
+/// Whether the function `name` of the program module at `modules` binds a
+/// crate-source module's concrete item (`bound`).
+#[cfg(feature = "rust-import")]
+pub(crate) fn is_binding(modules: &[ImmutableString], name: &str) -> bool {
+    modules.first().is_some_and(|module| is_name(module)) && name.starts_with(bound::BINDING)
+}
 
 /// Whether `trait_name` holds a crate-source module's inherent methods.
 pub(crate) fn is_inherent(trait_name: &str) -> bool {

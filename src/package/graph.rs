@@ -1361,7 +1361,12 @@ impl<'a> Builder<'a> {
                 let package = &self.packages[package.0];
                 (package.name.clone(), package.root.clone())
             };
-            let generic = super::crate_source::generic::text(&text, &path);
+            let bindings = if self.snapshot.is_some() {
+                super::crate_source::generic::Bindings::Left
+            } else {
+                super::crate_source::generic::Bindings::Written
+            };
+            let generic = super::crate_source::generic::text(&text, &path, bindings);
             self.packages[package.0]
                 .crate_sources
                 .push((file.clone(), text));

@@ -31,7 +31,7 @@ pub(crate) struct Declaration {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Token<'a> {
+pub(crate) enum Token<'a> {
     Ident(&'a str, usize),
     Punct(u8),
     /// A string literal's contents, as written: what a `cfg` value or a
@@ -686,24 +686,24 @@ fn restricted_end(text: &str, at: usize) -> usize {
 }
 
 /// One module-level item as [`generic_items`] reads it.
-struct ModuleItem<'t> {
+pub(crate) struct ModuleItem<'t> {
     /// The keyword that says what it is: `fn`, `struct`, `impl`, `use`,
     /// `macro_rules`, and so on.
-    keyword: &'t str,
+    pub(crate) keyword: &'t str,
     /// The name it declares, when it declares one.
-    name: Option<&'t str>,
+    pub(crate) name: Option<&'t str>,
     /// Whether it has a type or const parameter.
-    generic: bool,
+    pub(crate) generic: bool,
     /// The token indices of its header: past its keyword, up to its body.
-    header: std::ops::Range<usize>,
+    pub(crate) header: std::ops::Range<usize>,
     /// The token index of its last token, its `}` or `;`.
-    end: usize,
+    pub(crate) end: usize,
     /// Its bytes, from its first attribute through its last token.
-    bytes: std::ops::Range<usize>,
+    pub(crate) bytes: std::ops::Range<usize>,
 }
 
 /// The module-level items of `text`, whose tokens are `tokens`, in order.
-fn module_items<'t>(text: &str, tokens: &[(Token<'t>, usize)]) -> Vec<ModuleItem<'t>> {
+pub(crate) fn module_items<'t>(text: &str, tokens: &[(Token<'t>, usize)]) -> Vec<ModuleItem<'t>> {
     const KEYWORDS: [&str; 12] = [
         "fn",
         "struct",
@@ -1574,7 +1574,7 @@ fn tokens(text: &str) -> Vec<Token<'_>> {
 }
 
 /// The tokens of `text`, each with the byte it starts at.
-fn placed(text: &str) -> Vec<(Token<'_>, usize)> {
+pub(crate) fn placed(text: &str) -> Vec<(Token<'_>, usize)> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
     // Rust starts after a shebang line and a frontmatter block.
