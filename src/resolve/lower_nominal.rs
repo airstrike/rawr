@@ -878,7 +878,7 @@ struct Parser<'a> {
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     instance_calls: Vec<(crate::item::Key, Vec<Ty>, Span)>,
     /// In an instance, each parameter its template bounds by `Into<U>`
-    /// into a held std type, by its declaration, with its `U`
+    /// into a native type, by its declaration, with its `U`
     /// (`Instances::conversions`).
     instance_conversions: BTreeMap<Span, Ty>,
     /// Each call of a template whose instance waits for the body's types

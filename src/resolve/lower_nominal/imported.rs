@@ -808,38 +808,36 @@ pub(super) fn instanced(function: &item::Function) -> bool {
     function
         .generics
         .iter()
-        .any(|generic| generic.host || held_into(generic).is_some())
+        .any(|generic| generic.host || host_into(generic).is_some())
 }
 
-/// The std type Rawr's std holds that `generic`'s `Into` bound converts
-/// into: `PathBuf` of `impl Into<PathBuf>`. A crate's `impl From<Its> for
-/// PathBuf` is a member of `Its` (the `into` of core's blanket `Into`), so
-/// only a body that reads the parameter at the caller's type reaches it,
-/// as rustc's monomorphised body does.
+/// The native type `generic`'s `Into` bound converts into: `PathBuf` of
+/// `impl Into<PathBuf>`, a std type Rawr's std holds, or `Background` of
+/// a crate's `impl Into<Background>`. A crate's `impl From<Its> for
+/// PathBuf` is a member of `Its` (the `into` of core's blanket `Into`), as
+/// iced's `impl From<Color> for Background` is of `Color`, so only a body
+/// that reads the parameter at the caller's type reaches it, as rustc's
+/// monomorphised body does.
 #[cfg(feature = "rust-import")]
-fn held_into(generic: &item::Generic) -> Option<&type_ref::Type> {
+fn host_into(generic: &item::Generic) -> Option<&type_ref::Type> {
     generic
         .trait_arguments
         .iter()
         .find_map(|(trait_name, arguments)| match &arguments[..] {
             [target @ type_ref::Type::Path(type_ref::Path {
-                target: type_ref::Target::Host { definition, .. },
+                target: type_ref::Target::Host { .. },
                 ..
-            })] if trait_name.as_str() == "Into"
-                && !crate::std_facade::held_forms(&definition.path()).is_empty() =>
-            {
-                Some(target)
-            }
+            })] if trait_name.as_str() == "Into" => Some(target),
             _ => None,
         })
 }
 
 /// Each of `parameters` its signature writes as one of `generics` bounded
-/// by an `Into` into a held std type (`held_into`), with that type at
+/// by an `Into` into a native type (`host_into`), with that type at
 /// `substituted`, an instance's types: `path` of `fn load(path: impl
 /// Into<PathBuf>)`.
 #[cfg(feature = "rust-import")]
-fn held_conversions(
+fn into_conversions(
     parameters: &[item::Parameter],
     generics: &[item::Generic],
     substituted: &[(ImmutableString, type_ref::Type)],
@@ -862,7 +860,7 @@ fn held_conversions(
             let generic = generics.iter().find(|generic| generic.name.text == *name)?;
             Some((
                 parameter.name.text.clone(),
-                substitute_parameters(held_into(generic)?, substituted),
+                substitute_parameters(host_into(generic)?, substituted),
             ))
         })
         .collect()
@@ -871,14 +869,19 @@ fn held_conversions(
 /// Whether rawr compiles the script method `definition` once per
 /// instantiation its callers use, as `instanced` decides for a function: a
 /// generic parameter of its impl or its own touches a crate's types (D629).
+/// A crate-source module's generic inherent method is an inherent method,
+/// though its trait holds it, which no bound names.
 #[cfg(feature = "rust-import")]
 pub(super) fn instanced_method(definition: &method::Definition) -> bool {
-    definition.trait_name().is_none()
-        && definition.builtin_owner().is_none()
+    let inherent = match definition.trait_name() {
+        None => definition.builtin_owner().is_none(),
+        Some(name) => crate::package::crate_source::is_inherent(name),
+    };
+    inherent
         && definition
             .generics()
             .iter()
-            .any(|generic| generic.host || held_into(generic).is_some())
+            .any(|generic| generic.host || host_into(generic).is_some())
 }
 
 /// Whether rawr compiles the `from` of a script `impl From<S>` for a
@@ -1016,7 +1019,9 @@ pub(super) fn instance_templates(program: &mut Program) -> bool {
             program
                 .builtin_methods
                 .iter()
-                .filter(|definition| instanced_crate_impl(definition))
+                .filter(|definition| {
+                    instanced_crate_impl(definition) || instanced_method(definition)
+                })
                 .map(|definition| definition.key().clone()),
         )
         .collect::<Vec<_>>();
@@ -1373,7 +1378,7 @@ pub(super) fn method_instance(
         substitute_parameters(ty, &substituted)
     });
     let conversions =
-        held_conversions(definition.parameters(), definition.generics(), &substituted);
+        into_conversions(definition.parameters(), definition.generics(), &substituted);
     if !conversions.is_empty() {
         instances.conversions.insert(key.clone(), conversions);
     }
@@ -1970,7 +1975,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .cloned()
                 .collect();
             let conversions =
-                held_conversions(&definition.parameters, &definition.generics, &substituted);
+                into_conversions(&definition.parameters, &definition.generics, &substituted);
             if !conversions.is_empty() {
                 program
                     .instances
