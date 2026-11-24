@@ -74,6 +74,38 @@ pub struct Package {
     /// (`crate_source`), each with its whole text: native inputs, whose
     /// sources hold only those items.
     crate_sources: Vec<(PathBuf, String)>,
+    /// Each program module of a crate module's generic items, with the
+    /// program's path to the root module of the crate that defines it and
+    /// the module's path from that root, which its `crate::` and
+    /// `super::` go through.
+    crate_source_roots: Vec<CrateSourceRoot>,
+}
+
+/// The file of a crate module a program names (`crate_source`).
+struct CrateModule {
+    file: PathBuf,
+    /// The program's path to the root module of the crate that defines it.
+    root: Box<[ImmutableString]>,
+    /// The module's path from that root.
+    module: Box<[ImmutableString]>,
+    /// The features Cargo resolved for that crate, or `None` for a path
+    /// dependency's, which the program's stand for.
+    features: Option<Vec<String>>,
+    /// The program's hidden dependency on that crate, which `root` names,
+    /// when the program names it by no dependency of its own.
+    dependency: Option<manifest::rust::Dependency>,
+}
+
+/// Where a program module of a crate module's generic items
+/// (`crate_source`) reads its `crate::` and `super::` paths from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CrateSourceRoot {
+    /// The program module ([`super::crate_source::name`]).
+    module: ImmutableString,
+    /// The program's path to the root module of the crate that defines it.
+    root: Box<[ImmutableString]>,
+    /// The crate module's path from that root.
+    path: Box<[ImmutableString]>,
 }
 
 /// One `use` declaration of a marked module that a native module's path
@@ -270,6 +302,34 @@ impl Package {
     #[must_use]
     pub fn crate_sources(&self) -> &[(PathBuf, String)] {
         &self.crate_sources
+    }
+
+    /// The program's path that a program module of a crate module's
+    /// generic items (`crate_source`) names by `crate`, or by `super`
+    /// `supers` times, with `rest` after it.
+    pub(crate) fn crate_source_path(
+        &self,
+        module: &str,
+        supers: usize,
+        rest: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let found = self
+            .crate_source_roots
+            .iter()
+            .find(|root| root.module.as_str() == module)?;
+        let kept = if supers == 0 {
+            0
+        } else {
+            found.path.len().checked_sub(supers)?
+        };
+        let path: Vec<ImmutableString> = found
+            .root
+            .iter()
+            .chain(&found.path[..kept])
+            .chain(rest)
+            .cloned()
+            .collect();
+        Some(path)
     }
 
     /// The marked modules' `use` declarations native paths go through.
@@ -1205,6 +1265,7 @@ impl<'a> Builder<'a> {
             marked_uses: false,
             below: super::island::Below::new(),
             crate_sources: Vec::new(),
+            crate_source_roots: Vec::new(),
         });
 
         let module_root = request
@@ -1351,11 +1412,33 @@ impl<'a> Builder<'a> {
     /// to the crate's native build.
     fn load_crate_sources(&mut self, package: Id) -> Result<(), Error> {
         for path in super::crate_source::modules() {
-            let Some(file) = self.crate_module_file(package, &path) else {
+            let Some(found) = self.crate_module_file(package, &path) else {
                 continue;
             };
+            let file = found.file;
             let Ok(text) = self.read_to_string(&file) else {
                 continue;
+            };
+            if let (Some(dependency), Some(config)) =
+                (found.dependency, self.packages[package.0].rust.as_mut())
+                && !config
+                    .dependencies
+                    .iter()
+                    .any(|known| known.alias == dependency.alias)
+            {
+                let mut dependencies = std::mem::take(&mut config.dependencies).into_vec();
+                dependencies.push(dependency);
+                config.dependencies = dependencies.into_boxed_slice();
+            }
+            // The crate's items as its own features select them.
+            let text = match found.features {
+                Some(features) => super::polyglot::cfg_resolved(
+                    &text,
+                    &crate::project::cargo::features::Enabled::of_names(
+                        features.iter().map(String::as_str),
+                    ),
+                ),
+                None => text,
             };
             let (name, root) = {
                 let package = &self.packages[package.0];
@@ -1370,6 +1453,13 @@ impl<'a> Builder<'a> {
             self.packages[package.0]
                 .crate_sources
                 .push((file.clone(), text));
+            self.packages[package.0]
+                .crate_source_roots
+                .push(CrateSourceRoot {
+                    module: super::crate_source::name(&path),
+                    root: found.root,
+                    path: found.module,
+                });
             let text = generic;
             let module_root = file.parent().unwrap_or(&root).to_path_buf();
             self.load_module_text(
@@ -1387,10 +1477,13 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    /// The file of the module at `path` of a crate `package` names by a
-    /// path dependency, the crate's name first: `src/a/b.rs` or
-    /// `src/a/b/mod.rs` under the crate's directory.
-    fn crate_module_file(&self, package: Id, path: &[ImmutableString]) -> Option<PathBuf> {
+    /// The file of the module at `path` of a crate `package` names, the
+    /// crate's name first, and the package's path to the root module of
+    /// the crate that defines it: `src/a/b.rs` or `src/a/b/mod.rs` under a
+    /// path dependency's directory, or the module Cargo's package graph
+    /// and the crates' re-exports reach (`crate_source::located`), whose
+    /// crate the package reaches by a hidden dependency.
+    fn crate_module_file(&self, package: Id, path: &[ImmutableString]) -> Option<CrateModule> {
         let (alias, modules) = path.split_first()?;
         let config = self.packages[package.0].rust.as_ref()?;
         let directory =
@@ -1402,15 +1495,39 @@ impl<'a> Builder<'a> {
                         Some(directory.clone())
                     }
                     _ => None,
-                })?;
+                });
+        let Some(directory) = directory else {
+            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+            {
+                let manifest = self.packages[package.0].cargo.as_ref()?.path.clone();
+                let located = super::crate_source::located::locate(&manifest, path)?;
+                let alias = located.alias()?;
+                return Some(CrateModule {
+                    dependency: located.dependency(),
+                    file: located.file,
+                    root: Box::new([alias]),
+                    module: located.module,
+                    features: Some(located.features),
+                });
+            }
+            #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
+            return None;
+        };
         let mut file = directory.join("src");
         file.extend(modules.iter().map(ImmutableString::as_str));
+        let found = |file| CrateModule {
+            file,
+            root: Box::new([alias.clone()]),
+            module: modules.into(),
+            features: None,
+            dependency: None,
+        };
         let flat = file.with_extension("rs");
         if self.is_file(&flat) {
-            return Some(flat);
+            return Some(found(flat));
         }
         let nested = file.join("mod.rs");
-        self.is_file(&nested).then_some(nested)
+        self.is_file(&nested).then(|| found(nested))
     }
 
     /// A binary whose tree is marked runs, so a marked module in the tree

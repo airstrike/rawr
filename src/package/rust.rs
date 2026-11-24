@@ -29,9 +29,19 @@ impl Graph {
         };
         script_project(entry)?;
         let mut copies = Copies::default();
-        let config = opened_crates(entry, config, &environment, &mut copies)?;
+        let (config, patches) = opened_crates(entry, config, &environment, &mut copies)?;
         let app = app_crate(self, &environment, &mut copies)?;
-        request(entry, &config, environment, None, app, &[], limits).map(Some)
+        request(
+            entry,
+            &config,
+            &patches,
+            environment,
+            None,
+            app,
+            &[],
+            limits,
+        )
+        .map(Some)
     }
 
     /// The Rust imports, resolved in `universe` (the importer's plain one).
@@ -59,11 +69,12 @@ impl Graph {
             (None, None) => return Ok(None),
         };
         script_project(entry)?;
-        let config = opened_crates(entry, &config, &environment, copies)?;
+        let (config, patches) = opened_crates(entry, &config, &environment, copies)?;
         let app = app_crate(self, &environment, copies)?;
         request(
             entry,
             &config,
+            &patches,
             environment,
             Some(universe),
             app,
@@ -90,9 +101,9 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
-        let config = opened_crates(entry, config, &environment, copies)?;
+        let (config, patches) = opened_crates(entry, config, &environment, copies)?;
         let app = app_crate(self, &environment, copies)?;
-        request_inventory(entry, &config, environment, app, closure, limits).map(Some)
+        request_inventory(entry, &config, &patches, environment, app, closure, limits).map(Some)
     }
 
     /// The Rust edition of the entry crate's source, `2015` when its Cargo
@@ -380,12 +391,13 @@ fn opened_crates(
     config: &Config,
     environment: &Environment,
     copies: &mut Copies,
-) -> rawr_import::Result<Config> {
+) -> rawr_import::Result<(Config, Vec<Patch>)> {
     let crates = super::crate_source::crates();
     let modules = super::crate_source::modules();
     let mut config = config.clone();
+    let mut patches = Vec::new();
     if crates.is_empty() {
-        return Ok(config);
+        return Ok((config, patches));
     }
     let rawr = copies.rawr_directory(entry.root(), environment);
     let mut dependencies = config.dependencies.into_vec();
@@ -411,8 +423,110 @@ fn opened_crates(
         write_changed(files, &mut copies.written)?;
         dependency.source = Source::Path(directory);
     }
+    // A module of a crate no path dependency is, as a registry or git
+    // crate, or one reached through another crate's re-exports: a linked
+    // copy of its source tree, one per tree with each of its modules
+    // opened, patched in for every crate that uses it.
+    let mut trees: Vec<Tree> = Vec::new();
+    for path in &modules {
+        let direct = dependencies.iter().any(|dependency| {
+            matches!(dependency.source, Source::Path(_)) && path.first() == Some(&dependency.alias)
+        });
+        if direct {
+            continue;
+        }
+        let Some(located) = super::crate_source::located::locate(&config.cargo_authority, path)
+        else {
+            continue;
+        };
+        let Some(source) = located.package.patch_source() else {
+            continue;
+        };
+        let root = located.package.copy_root();
+        match trees.iter_mut().find(|tree| tree.root == root) {
+            Some(tree) => tree.opened.push(located.file),
+            None => trees.push(Tree {
+                root,
+                source,
+                opened: vec![located.file],
+                packages: located.siblings,
+            }),
+        }
+    }
+    for Tree {
+        root,
+        source,
+        opened,
+        packages,
+    } in trees
+    {
+        let destination = opened_tree(&root, &opened);
+        let io = |error| rawr_import::Error::Io {
+            operation: "link crate",
+            path: root.clone(),
+            source: error,
+        };
+        super::crate_source::opened::linked(&root, &destination, &opened).map_err(io)?;
+        // Every package of the tree comes from the copy, so a sibling its
+        // manifest names by a workspace path is the one its other
+        // dependents use.
+        for package in packages {
+            let Ok(relative) = package.directory.strip_prefix(&root) else {
+                continue;
+            };
+            patches.push(Patch {
+                source: source.clone(),
+                name: package.name.clone(),
+                directory: destination.join(relative),
+            });
+        }
+    }
     config.dependencies = dependencies.into_boxed_slice();
-    Ok(config)
+    Ok((config, patches))
+}
+
+/// Where the linked copy of the source tree at `root` that opens `opened`
+/// lives: in rawr's home, outside every project, since the tree is a
+/// workspace of its own, as a git checkout's is, which the runner names by
+/// its path as Cargo names any package outside the project's workspace.
+/// Projects that open the same files of one tree share it.
+fn opened_tree(root: &Path, opened: &[std::path::PathBuf]) -> std::path::PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut files = opened.to_vec();
+    files.sort();
+    let mut hasher = std::hash::DefaultHasher::new();
+    files.hash(&mut hasher);
+    let name: Vec<_> = root
+        .iter()
+        .rev()
+        .take(2)
+        .map(|component| component.to_string_lossy())
+        .collect();
+    super::manifest::script::home().join("opened").join(format!(
+        "{}-{:016x}",
+        name.join("-"),
+        hasher.finish()
+    ))
+}
+
+/// A source tree whose linked copy opens some of its crates' modules.
+struct Tree {
+    /// The tree: a git checkout's root, or a registry package.
+    root: std::path::PathBuf,
+    /// Its `[patch]` source.
+    source: String,
+    /// The files of the modules it opens.
+    opened: Vec<std::path::PathBuf>,
+    /// The packages of the program's graph it holds.
+    packages: Vec<super::crate_source::located::Package>,
+}
+
+/// A package the runner's `[patch]` names its opened copy for.
+struct Patch {
+    /// The `[patch]` source: `crates-io`, or a git URL.
+    source: String,
+    name: String,
+    directory: std::path::PathBuf,
 }
 
 /// The digest [`Copies`] keeps of a copy's text.
@@ -1770,6 +1884,7 @@ mod seed {
 fn request_inventory(
     entry: &super::graph::Package,
     config: &Config,
+    patches: &[Patch],
     environment: Environment,
     app: App,
     closure: &[Dependency],
@@ -1783,6 +1898,9 @@ fn request_inventory(
     .environment(environment)
     .profile(&config.profile);
     builder = builder.cargo_authority(&config.cargo_authority);
+    for patch in patches {
+        builder = builder.patch(&patch.source, &patch.name, &patch.directory);
+    }
     // The probe declares what the program does; the inventory declares
     // its whole library closure, each crate by its own name.
     if closure.is_empty() {
@@ -1848,6 +1966,7 @@ fn dependencies(config: &Config) -> rawr_import::Result<Vec<Dependency>> {
 fn request(
     entry: &super::graph::Package,
     config: &Config,
+    patches: &[Patch],
     environment: Environment,
     universe: Option<rawr_import::cargo::universe::Catalog>,
     app: App,
@@ -1862,6 +1981,9 @@ fn request(
     .environment(environment)
     .profile(&config.profile);
     builder = builder.cargo_authority(&config.cargo_authority);
+    for patch in patches {
+        builder = builder.patch(&patch.source, &patch.name, &patch.directory);
+    }
     for dependency in dependencies(config)? {
         builder = builder.dependency(dependency);
     }

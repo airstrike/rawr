@@ -50,7 +50,7 @@ pub(crate) fn files(
             let text = if relative == Path::new("Cargo.toml") {
                 manifest(&text, crate_directory)
             } else if opened.contains(relative) {
-                super::super::polyglot::module_items_public(&text)
+                opened_module(&text)
             } else {
                 text
             };
@@ -58,6 +58,72 @@ pub(crate) fn files(
         }
     }
     Ok(files)
+}
+
+/// The copy at `destination` of the package source tree at `source`, a git
+/// checkout's root or a registry package: its directories its own, each of
+/// `opened`, files under `source`, opened, and every other file a link to
+/// the original, so the copy is the package as Cargo reads it, its
+/// workspace's manifest included, and costs no copy of it.
+///
+/// # Errors
+///
+/// When a directory can't be read, or a link or file written.
+pub(crate) fn linked(source: &Path, destination: &Path, opened: &[PathBuf]) -> std::io::Result<()> {
+    let mut pending = vec![(source.to_path_buf(), destination.to_path_buf())];
+    while let Some((from, to)) = pending.pop() {
+        std::fs::create_dir_all(&to)?;
+        for entry in std::fs::read_dir(&from)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name == "target" || name == ".git" {
+                continue;
+            }
+            let (original, copy) = (entry.path(), to.join(&name));
+            if entry.file_type()?.is_dir() {
+                pending.push((original, copy));
+            } else if opened.contains(&original) {
+                let text = std::fs::read_to_string(&original)?;
+                let opened = opened_module(&text);
+                if std::fs::read_to_string(&copy).ok().as_deref() != Some(opened.as_str()) {
+                    if copy.symlink_metadata().is_ok() {
+                        std::fs::remove_file(&copy)?;
+                    }
+                    std::fs::write(&copy, opened)?;
+                }
+            } else if name == "Cargo.toml" {
+                // Cargo names a package by its manifest's real path.
+                let text = std::fs::read(&original)?;
+                if std::fs::read(&copy).ok().as_deref() != Some(text.as_slice()) {
+                    if copy.symlink_metadata().is_ok() {
+                        std::fs::remove_file(&copy)?;
+                    }
+                    std::fs::write(&copy, text)?;
+                }
+            } else if copy.symlink_metadata().is_err() {
+                link(&original, &copy)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A link at `copy` to the file `original`, or a copy of it where links
+/// need privileges.
+fn link(original: &Path, copy: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(original, copy);
+    #[cfg(not(unix))]
+    return std::fs::copy(original, copy).map(|_| ());
+}
+
+/// The opened text of a crate module's file `text`: its items and fields
+/// public, and its lints allowed, since the crate's own `deny`s (such as
+/// `missing_docs`) hold for a path package and its new public items break
+/// them. The allow shares the file's first line, so its lines stay.
+fn opened_module(text: &str) -> String {
+    let opened = super::super::polyglot::module_items_public(text);
+    format!("#![allow(warnings, missing_docs)] {opened}")
 }
 
 /// The files the module at `path` may be in, relative to the crate's

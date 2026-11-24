@@ -215,6 +215,17 @@ pub struct Builder {
     universe: Option<universe::Catalog>,
     demand: std::collections::BTreeSet<DemandPath>,
     recorded: Vec<PathBuf>,
+    /// Packages the request's `[patch]` names a path for.
+    patches: Vec<Patch>,
+}
+
+/// A package a request's `[patch]` replaces by the one at a path
+/// ([`Builder::patch`]).
+struct Patch {
+    /// `crates-io`, or a git URL.
+    source: Box<str>,
+    name: Box<str>,
+    directory: PathBuf,
 }
 
 /// One Rust path Rawr names, root alias first.
@@ -859,6 +870,7 @@ impl Request {
             universe: None,
             demand: std::collections::BTreeSet::new(),
             recorded: Vec::new(),
+            patches: Vec::new(),
         })
     }
 
@@ -2517,6 +2529,18 @@ impl Builder {
         self
     }
 
+    /// Patch the package `name` of `source` (`crates-io`, or a git URL)
+    /// with the one at `directory`, as the workspace root's `[patch]`
+    /// would, unless the project patches it itself.
+    pub fn patch(mut self, source: &str, name: &str, directory: &Path) -> Self {
+        self.patches.push(Patch {
+            source: source.into(),
+            name: name.into(),
+            directory: directory.to_path_buf(),
+        });
+        self
+    }
+
     /// Bind the exact Rawr-manifest exclusion policy to this request.
     pub fn policy(mut self, policy: crate::extract::Policy) -> Self {
         self.policy = Some(policy);
@@ -2606,6 +2630,15 @@ impl Builder {
         let mut authority = Authority::load(workspace_authority.as_deref())?;
         if let (Some(universe), Some(patch)) = (self.universe.as_ref(), internal.patch()) {
             authority.inherit_patches(patch, |name| universe.names_package(name))?;
+        }
+        for patch in &self.patches {
+            let mut entry = InlineTable::new();
+            entry.insert("path", patch.directory.display().to_string().into());
+            let mut registry = Table::new();
+            registry.insert(&patch.name, Item::Value(Value::InlineTable(entry)));
+            let mut table = Table::new();
+            table.insert(&patch.source, Item::Table(registry));
+            authority.inherit_patches(&Item::Table(table), |_| true)?;
         }
         let config = config::Provenance::discover(
             &project_root,

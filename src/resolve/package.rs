@@ -2453,6 +2453,17 @@ impl<'a> Resolver<'a> {
                 }
                 let import = match target {
                     _ if let Some(variant) = variant.clone() => variant,
+                    // A crate module the program module stands for, which
+                    // shares its name with a native item, as
+                    // `iced::widget::container` is a module and a function:
+                    // the import binds both, as rustc's binds each namespace.
+                    Target::Module
+                        if !module_only
+                            && let Some((definitions, owner)) =
+                                self.crate_source_item(context, &path) =>
+                    {
+                        item::Import::ModuleItem { definitions, owner }
+                    }
                     Target::Module | Target::Trait(_) => item::Import::Module,
                     // `use a::m::{self}` imports the module `m` only.
                     Target::HostModuleItem { .. } if module_only => item::Import::Module,
@@ -2781,7 +2792,63 @@ impl<'a> Resolver<'a> {
                     .is_some_and(|first| self.module_alias(context, first).is_some())
     }
 
+    /// `path` in a program module of a crate module's generic items
+    /// (`crate_source`) when it starts at `crate` or `super`: the program's
+    /// path to the crate's item, as `crate::core::Border` in `iced_widget`
+    /// is `__rawr_source_iced_widget::core::Border`, through the package's
+    /// hidden dependency on the crate.
+    fn crate_source_spelled(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let module = context.namespace.modules.first()?;
+        if context.namespace.modules.len() != 1 || !crate::package::crate_source::is_name(module) {
+            return None;
+        }
+        let supers = path
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let (supers, rest) = match path.first()?.as_str() {
+            "crate" => (0, &path[1..]),
+            "super" => (supers, &path[supers..]),
+            _ => return None,
+        };
+        self.tables
+            .crate_source_path(context.package, module, supers, rest)
+    }
+
+    /// The native item `path` names beside the crate module whose program
+    /// module it stands for (`crate_source`), when the path names that
+    /// module itself: the function `iced::widget::container` beside the
+    /// module.
+    fn crate_source_item(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<(
+        Box<[host::item::Definition]>,
+        Option<host::facade::Dependency>,
+    )> {
+        let mapped = self.crate_source_path(context, path)?;
+        if mapped.len() != 2 {
+            return None;
+        }
+        let qualified = path.join("::");
+        match self.host.entry(&qualified) {
+            Some(host::Entry::ModuleItem(definitions)) => Some((
+                definitions.into(),
+                self.host.item_owner(&qualified).cloned(),
+            )),
+            _ => None,
+        }
+    }
+
     fn is_direct_script_path(&self, context: &Context, path: &[ImmutableString]) -> bool {
+        if self.crate_source_spelled(context, path).is_some() {
+            return false;
+        }
         path.first().is_some_and(|first| {
             first == "crate"
                 || first == "super"
@@ -2857,6 +2924,9 @@ impl<'a> Resolver<'a> {
         path: &[ImmutableString],
         active: &mut BTreeSet<Address>,
     ) -> bool {
+        if self.crate_source_spelled(context, path).is_some() {
+            return false;
+        }
         if let Some(mapped) = self.crate_source_path(context, path) {
             return self.names_script_module(context, &mapped, active);
         }
@@ -3027,7 +3097,9 @@ impl<'a> Resolver<'a> {
         reference: Span,
         active: &mut BTreeSet<Address>,
     ) -> Result<Target, Failure> {
-        if self.is_script_path(context, path) {
+        if let Some(spelled) = self.crate_source_spelled(context, path) {
+            self.resolve_any_path(context, &spelled, reference, active)
+        } else if self.is_script_path(context, path) {
             self.resolve_path(context, path, reference, active)
         } else if let Some((address, alias)) = self.crate_alias(context, path)
             && active.insert(address.clone())
@@ -3432,6 +3504,9 @@ impl<'a> Resolver<'a> {
         path: &[ImmutableString],
         active: &mut BTreeSet<Address>,
     ) -> Option<Vec<ImmutableString>> {
+        if let Some(spelled) = self.crate_source_spelled(context, path) {
+            return Some(spelled);
+        }
         if let Some(mapped) = self.crate_source_path(context, path) {
             return self.spelling_from(context, &mapped, active);
         }
@@ -3573,6 +3648,9 @@ impl<'a> Resolver<'a> {
         reference: Span,
         active: &mut BTreeSet<Address>,
     ) -> Result<Target, Failure> {
+        if let Some(spelled) = self.crate_source_spelled(context, path) {
+            return self.resolve_any_path(context, &spelled, reference, active);
+        }
         if let Some(mapped) = self.crate_source_path(context, path) {
             return self.resolve_path(context, &mapped, reference, active);
         }

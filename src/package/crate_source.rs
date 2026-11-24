@@ -30,6 +30,8 @@ use crate::ImmutableString;
 mod bound;
 pub(crate) mod generic;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub(crate) mod located;
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod opened;
 
 /// The variable that names the crate modules rawr reads generic code from.

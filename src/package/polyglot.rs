@@ -456,6 +456,82 @@ pub(crate) fn root_items_public(text: &str) -> String {
     inserted(text, &inserts, "pub ")
 }
 
+/// `text`, a crate module's file, as rustc reads it under the crate's own
+/// `features` (`crate_source`): each item whose outer `#[cfg]` does not
+/// hold, at the module's level or in an impl's or trait's body, blank but
+/// its line breaks, and each `#[cfg]` that holds blank too. A reader under
+/// the program's features then reads the crate's items at their places.
+#[cfg_attr(
+    not(all(feature = "rust-import", not(target_arch = "wasm32"))),
+    allow(dead_code)
+)]
+pub(crate) fn cfg_resolved(text: &str, features: &Enabled) -> String {
+    let placed = placed(text);
+    let bare = placed.iter().map(|(token, _)| *token).collect::<Vec<_>>();
+    let byte_end = |index: usize| {
+        placed
+            .get(index + 1)
+            .map_or(text.len(), |(_, start)| *start)
+            .min(text.len())
+    };
+    let mut blank = Vec::new();
+    // The brace depths whose items are read: the module's, and each
+    // impl's or trait's body.
+    let mut item_depths = vec![0_usize];
+    let mut depth = 0_usize;
+    let mut opens_items = false;
+    let mut index = 0;
+    while index < bare.len() {
+        let at_items = item_depths.last() == Some(&depth);
+        match bare[index] {
+            Token::Punct(b'#') if at_items && bare.get(index + 1) == Some(&Token::Punct(b'[')) => {
+                let is_cfg = matches!(bare.get(index + 2), Some(Token::Ident("cfg", _)));
+                let (said, end) = attribute(&bare, index, features);
+                if said.disabled {
+                    let (item, _) = item_end(&placed, end);
+                    blank.push(placed[index].1..byte_end(item));
+                    index = item + 1;
+                    continue;
+                }
+                if is_cfg {
+                    blank.push(placed[index].1..byte_end(end - 1));
+                }
+                index = end;
+                continue;
+            }
+            Token::Ident("impl" | "trait", _) if at_items => opens_items = true,
+            Token::Punct(b'{') => {
+                depth += 1;
+                if opens_items {
+                    item_depths.push(depth);
+                    opens_items = false;
+                }
+            }
+            Token::Punct(b'}') => {
+                if depth > 0 && item_depths.last() == Some(&depth) {
+                    item_depths.pop();
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Token::Punct(b';') => opens_items = false,
+            _ => {}
+        }
+        index += 1;
+    }
+    let mut resolved = text.to_owned();
+    for range in blank.into_iter().rev() {
+        let spaces = text[range.clone()]
+            .chars()
+            .map(|character| match character {
+                '\n' | '\r' => character.to_string(),
+                _ => " ".repeat(character.len_utf8()),
+            })
+            .collect::<String>();
+        resolved.replace_range(range, &spaces);
+    }
+    resolved
+}
+
 /// `text`, a crate module whose generic items rawr runs as the program's
 /// (`crate_source`), with every item and field rustc lets those items name
 /// public to the runner: `pub ` before each of the module's own items but
@@ -1701,6 +1777,32 @@ mod tests {
     /// A Linux target with the feature `x`, as rustc and Cargo give them.
     fn features() -> Enabled {
         Enabled::of_lines(["feature=\"x\"", "target_os=\"linux\"", "unix"])
+    }
+
+    /// An item whose `cfg` fails under the crate's features goes, at the
+    /// module's level and in an impl, and a `cfg` that holds goes while
+    /// its item stays, each blank at its place.
+    #[test]
+    fn a_crate_modules_cfgs_are_read_under_its_own_features() {
+        let text = "#[cfg(feature = \"x\")]\nfn on() {}\n\
+                    #[cfg(feature = \"y\")]\nfn off() {}\n\
+                    impl A {\n    #[cfg(windows)]\n    fn gone() {}\n    fn kept() {}\n}\n";
+        let resolved = super::cfg_resolved(text, &features());
+        let lines = resolved.lines().map(str::trim_end).collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            [
+                "",
+                "fn on() {}",
+                "",
+                "",
+                "impl A {",
+                "",
+                "",
+                "    fn kept() {}",
+                "}"
+            ]
+        );
     }
 
     fn paths(text: &str) -> Vec<(String, bool)> {

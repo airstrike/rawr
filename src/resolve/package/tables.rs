@@ -366,6 +366,19 @@ impl Tables {
         self.note(|| Read::Walk);
     }
 
+    /// The program's path a crate-source program `module` of `package`
+    /// names by `crate`, or by `super` `supers` times, with `rest` after it
+    /// (`Package::crate_source_path`).
+    pub(super) fn crate_source_path(
+        &self,
+        package: graph::Id,
+        module: &str,
+        supers: usize,
+        rest: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        self.packages[package.index()].crate_source_path(module, supers, rest)
+    }
+
     /// The package `package`'s name.
     pub(super) fn package_name(&self, package: graph::Id) -> &str {
         self.note(|| Read::Name(package));

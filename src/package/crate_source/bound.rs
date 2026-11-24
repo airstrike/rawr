@@ -105,6 +105,13 @@ impl Bound<'_> {
         let Some(close) = closing(header, open, b'(', b')') else {
             return;
         };
+        // A trait impl's method whose signature names one of `Self`'s
+        // associated types, such as a catalog's `Self::Class<'a>`, is
+        // spelled through a projection the binding can't name yet.
+        let signature = &self.text[header[open].1..tokens[item.header.end].1];
+        if owner.is_some_and(|owner| owner.qualified.is_some()) && signature.contains("Self::") {
+            return;
+        }
         let output_start = header[close].1 + 1;
         let output_end = header
             .iter()
