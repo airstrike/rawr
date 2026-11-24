@@ -662,7 +662,10 @@ impl<'a> Parser<'a> {
             if let Some(definition) = self.models.host.type_(&full).cloned()
                 && self.models.host_items(&format!("{full}::from")).is_none()
             {
-                let target = type_def::Id::foreign(&definition.path());
+                let target = type_def::Id::foreign(&crate::host::defined::Defined::of_type(
+                    &definition,
+                    self.models.item_owner(&full),
+                ));
                 // `Element::from(widget)`: a widget has no `From` conversion
                 // into the type its facade trait erases to, as in rustc.
                 if !self.models.conversions.contains_key(&target)

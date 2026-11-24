@@ -2,6 +2,7 @@
 
 pub mod debug;
 pub(crate) mod declared;
+pub(crate) mod defined;
 pub mod display;
 mod error;
 pub mod export;

@@ -111,14 +111,11 @@ impl Id {
     }
 
     /// A facade type as a trait impl owner (`impl From<Shade> for
-    /// iced::Color`), by its path: an id no script or builtin type has.
-    pub(crate) fn foreign(path: &str) -> Self {
-        // FNV-1a, folded below the builtin codes' 64 ids.
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in path.bytes() {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
-        }
-        Self(u64::MAX - 64 - hash % (1 << 40))
+    /// iced::Color`), by the type it is at any of its paths
+    /// (`host::defined`): an id no script or builtin type has.
+    pub(crate) fn foreign(defined: &crate::host::defined::Defined) -> Self {
+        // Folded below the builtin codes' 64 ids.
+        Self(u64::MAX - 64 - defined.digest() % (1 << 40))
     }
 
     /// The witness code of a builtin impl owner's id.
@@ -215,10 +212,16 @@ impl Definition {
         Self::outside(Id::builtin(code), name, item, name_span)
     }
 
-    /// The owner of trait impls for the facade type at `path`, which has
-    /// no declaration in the crate: keyed `std::path`.
-    pub(crate) fn foreign(path: &str, item: item::Id, name_span: Span) -> Self {
-        Self::outside(Id::foreign(path), path, item, name_span)
+    /// The owner of trait impls for the facade type `defined`, named
+    /// `path` where the impl names it, which has no declaration in the
+    /// crate: keyed `std::path`.
+    pub(crate) fn foreign(
+        defined: &crate::host::defined::Defined,
+        path: &str,
+        item: item::Id,
+        name_span: Span,
+    ) -> Self {
+        Self::outside(Id::foreign(defined), path, item, name_span)
     }
 
     fn outside(id: Id, name: &str, item: item::Id, name_span: Span) -> Self {

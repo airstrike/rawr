@@ -3747,10 +3747,13 @@ fn resolve_methods(
             // A facade type (`impl From<Shade> for iced::Color`) owns impls
             // under the same rule.
             let outside = builtin_owner(&item.owner)
-                .map(|(code, name)| (Some(code), name))
-                .or_else(|| foreign_owner(&item.owner).map(|path| (None, path)));
+                .map(|(code, name)| (Outside::Builtin(code), name))
+                .or_else(|| {
+                    foreign_owner(&item.owner)
+                        .map(|(defined, path)| (Outside::Foreign(defined), path))
+                });
             let builtin = outside
-                .map(|(code, owner_name)| {
+                .map(|(outside, owner_name)| {
                     if declared.name.span == Span::NONE && !local_argument && item.std.is_none() {
                         return Err(Error::InvalidImplOwner {
                             owner: format!(
@@ -3761,14 +3764,15 @@ fn resolve_methods(
                             reference: type_span(&item.owner),
                         });
                     }
-                    Ok(match code {
-                        Some(code) => type_def::Definition::builtin(
+                    Ok(match outside {
+                        Outside::Builtin(code) => type_def::Definition::builtin(
                             code,
                             &owner_name,
                             shell.id,
                             type_span(&item.owner),
                         ),
-                        None => type_def::Definition::foreign(
+                        Outside::Foreign(defined) => type_def::Definition::foreign(
+                            &defined,
                             &owner_name,
                             shell.id,
                             type_span(&item.owner),
@@ -4115,14 +4119,24 @@ fn resolve_methods(
 const BUILTIN_METHOD_IDS: usize = 1 << 30;
 
 /// A facade type as a trait impl owner: its path.
-fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
+fn foreign_owner(ty: &type_ref::Type) -> Option<(host::defined::Defined, ImmutableString)> {
     match ty {
         type_ref::Type::Path(path) => match &path.target {
-            type_ref::Target::Host { definition, .. } => Some(definition.path().into()),
+            type_ref::Target::Host { definition, owner } => Some((
+                host::defined::Defined::of_type(definition, owner.as_ref()),
+                definition.path().into(),
+            )),
             _ => None,
         },
         _ => None,
     }
+}
+
+/// The type outside the crate an impl is for: a builtin type, by its
+/// witness code, or a facade type.
+enum Outside {
+    Builtin(i64),
+    Foreign(host::defined::Defined),
 }
 
 /// The witness code of a blanket impl's owner (`impl<T: Bound> Trait for

@@ -1954,7 +1954,9 @@ pub(super) fn owner_id(ty: &Ty) -> Option<type_def::Id> {
     match ty {
         Ty::Script(id, _) => Some(*id),
         Ty::Boxed(..) | Ty::Counted(..) | Ty::Weak(..) => None,
-        Ty::Host { proof, .. } => Some(type_def::Id::foreign(&proof.definition.path())),
+        Ty::Host { proof, .. } => Some(type_def::Id::foreign(
+            &crate::host::defined::Defined::of_type(&proof.definition, proof.owner.as_ref()),
+        )),
 
         ty => builtin_code(ty).map(type_def::Id::builtin),
     }
