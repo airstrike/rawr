@@ -4,6 +4,8 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::paint::Paint;
+
 /// A colour whose channels are public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tint {
@@ -114,6 +116,12 @@ pub fn shade(tint: impl Into<Tint>) -> Style {
         tint: darken(tint.into()),
         order,
     }
+}
+
+/// How many coats `paint` takes, through the `From` of a module apart
+/// from this one (`crate::paint`).
+pub fn coats(paint: impl Into<Paint>) -> u8 {
+    paint.into().coats
 }
 
 /// The cells items are drawn into. They are private.

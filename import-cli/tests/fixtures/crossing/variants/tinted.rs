@@ -33,6 +33,7 @@ fn main() {
     println!("{plain:?}");
     println!("{gray:?} {}", gray.order());
     println!("{:?} {}", calm.tint(), calm.order());
+    println!("coats {}", tinted::coats(gray.tint()));
 
     let moods = [Mood::Calm, Mood::Bright];
     let mut canvas = Canvas::new();

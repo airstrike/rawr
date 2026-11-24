@@ -3816,7 +3816,9 @@ fn a_save_that_first_names_a_module_beside_a_function_of_its_name_takes_effect()
 /// copy of the crate, which opens them, and the crate's concrete `plain`
 /// bumps the same static natively. The runner holds no instance of the
 /// generic items, and every concrete one of the module, the `[u8; 3]`
-/// conversion the program never names among them. The output is `cargo
+/// conversion the program never names among them. `coats(impl
+/// Into<Paint>)` at a `Tint` runs core's blanket `Into` as the `from` of
+/// `Paint`, which a module apart from `tinted` writes. The output is `cargo
 /// run`'s. An edit that adds a program type through them and gives `shade`
 /// new native inputs, a `Tint` and a `[u8; 3]`, prints `cargo run`'s output
 /// with no new runner build.
