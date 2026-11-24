@@ -2696,6 +2696,7 @@
     {"t":"T2694","issue":2694,"title":"T2694: A const-generic function's trait object of a type naming its parameter runs with an unknown witness","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D1115"],"commit":null,"release":null},
     {"t":"T2695","issue":2695,"title":"T2695: A const's array of trait objects is refused as a type mismatch","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2696","issue":2696,"title":"T2696: A turbofish on a std free function rawr runs is the not-yet error","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2697","issue":2697,"title":"T2697: A std enum's variant by its full path is the not-yet error","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2697","issue":2697,"title":"T2697: A std enum's variant by its full path is the not-yet error","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2698","issue":2698,"title":"T2698: Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"play","row":"universe-coverage"},"decisions":["D1118"],"commit":null,"release":null}
   ]
 }

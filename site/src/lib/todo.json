@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-22",
+  "updated": "2026-11-23",
   "version": "0.5.23",
   "examples": {
     "running": 55,
@@ -6606,7 +6606,8 @@
     {"issue":2694,"title":"A const-generic function's trait object of a type naming its parameter runs with an unknown witness","state":"open","category":"Divergences from rustc"},
     {"issue":2695,"title":"A const's array of trait objects is refused as a type mismatch","state":"open","category":"Divergences from rustc"},
     {"issue":2696,"title":"A turbofish on a std free function rawr runs is the not-yet error","state":"open","category":"Divergences from rustc"},
-    {"issue":2697,"title":"A std enum's variant by its full path is the not-yet error","state":"open","category":"Divergences from rustc"}
+    {"issue":2697,"title":"A std enum's variant by its full path is the not-yet error","state":"open","category":"Divergences from rustc"},
+    {"issue":2698,"title":"Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -9330,7 +9331,8 @@
             {"number":463,"title":"The universe runner covers only its seed program's calls","state":"open"},
             {"number":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open"},
             {"number":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open"},
-            {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"}
+            {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"},
+            {"number":2698,"title":"Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open"}
           ],
           "milestone": "0.8"
         },
