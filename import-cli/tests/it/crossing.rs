@@ -3805,3 +3805,58 @@ fn a_save_that_first_names_a_module_beside_a_function_of_its_name_takes_effect()
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
+
+/// A save that first calls a crate's macro whose name is also a module,
+/// as `use iced::color; color!(0xff0000)` beside `border::color(c)`, takes
+/// effect, and prints what `cargo run` prints. The running build reached
+/// the module `tint` only through the type it defines, which the program
+/// names at the root, so it holds no `tint!`: the call is a miss against
+/// native code, which preparation answers, never a module that is not a
+/// macro.
+#[test]
+fn a_save_that_first_calls_a_macro_named_as_a_module_takes_effect() {
+    let text = CROSSING.read("variants/tinted.rs");
+    let calls = [
+        (
+            "use events::{outline, tint, Tint};",
+            "use events::{outline, Tint};",
+        ),
+        (
+            "let red: Tint = tint!(0xff0000);",
+            "let red = Tint::default();",
+        ),
+        (
+            "let edge = outline::tint(red).width(1);",
+            "let edge = outline::wide(2);",
+        ),
+    ];
+    let before = calls.iter().fold(text.clone(), |before, (call, earlier)| {
+        assert!(before.contains(call), "{before}");
+        before.replace(call, earlier)
+    });
+    let root = CROSSING.lease(&[("src/main.rs", &before)]);
+    // A save that fails says so in the events, which ends the wait.
+    let mut run = start(
+        &root,
+        &[
+            ("EVENTS_STOP", root.join("stop")),
+            ("RAWR_MCP_EVENTS", root.join("events.jsonl")),
+        ],
+    );
+    run.until(|line| line.starts_with("0 "));
+
+    fs::write(root.join("src/main.rs"), &text).unwrap();
+    let shown = run.until(|line| line.contains("width: 1"));
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+    // The stop file is there, so each shows its line once.
+    let (rawr, cargo) = both_printed_in(&root, "", &[]);
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        shown.split_once(' ').map(|(_, shown)| shown),
+        cargo.strip_prefix("0 "),
+        "{}",
+        run.seen.join("\n")
+    );
+}

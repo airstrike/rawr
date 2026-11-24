@@ -1868,11 +1868,14 @@ impl<'a> Parser<'a> {
                 owner,
             }) = binding.target
             else {
-                return Err(Error::InvalidHostOperation {
-                    item: binding.qualified,
+                let error = Error::InvalidHostOperation {
+                    item: binding.qualified.clone(),
                     reason: "it is not a macro".into(),
                     operation: name_span,
-                });
+                };
+                #[cfg(feature = "rust-import")]
+                let error = self.macro_miss(&binding.qualified, error);
+                return Err(error);
             };
             let items = macro_or_value(items.into_vec(), true).into_boxed_slice();
             return self.parse_host_macro(items, owner, name_span);

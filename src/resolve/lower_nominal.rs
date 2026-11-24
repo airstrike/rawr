@@ -1056,6 +1056,20 @@ impl<'a> Parser<'a> {
         error
     }
 
+    /// `error`, at a `!` call of the dependency path `qualified` where
+    /// the retained facades hold no macro, as a miss preparation answers:
+    /// they hold a path's macro only when the program named the path when
+    /// it was prepared, so a module they reach through other paths, as
+    /// iced's `color` module through `Color`, is there without its
+    /// `color!`.
+    #[cfg(feature = "rust-import")]
+    fn macro_miss(&mut self, qualified: &str, error: Error) -> Error {
+        let declared = self
+            .native_site()
+            .is_some_and(|site| site.declared_binding(qualified));
+        self.native_miss(declared, error)
+    }
+
     fn new_with_offset(
         engine: &Engine,
         source: &'a str,
