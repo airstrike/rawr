@@ -272,10 +272,13 @@ pub struct Outputs {
     /// the value's impl through them (#2698).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     object: Option<Box<[super::object::Method]>>,
+    /// The supertraits whose vtables the stand-in implements too.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    supertraits: Box<[super::object::Supertrait]>,
 }
 
 impl Outputs {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         defaults: Box<[Option<super::convert::Type>]>,
         methods: Box<[(Box<str>, Opaque)]>,
     ) -> Self {
@@ -283,13 +286,29 @@ impl Outputs {
             defaults,
             methods,
             object: None,
+            supertraits: Box::default(),
         }
     }
 
-    /// These outputs, of a trait whose vtable holds `object`.
+    /// These outputs, of a trait whose vtable holds `object`, beside its
+    /// `supertraits`'.
     #[must_use]
-    pub(crate) fn with_object(self, object: Option<Box<[super::object::Method]>>) -> Self {
-        Self { object, ..self }
+    pub(crate) fn with_object(
+        self,
+        object: Option<Box<[super::object::Method]>>,
+        supertraits: Box<[super::object::Supertrait]>,
+    ) -> Self {
+        Self {
+            object,
+            supertraits,
+            ..self
+        }
+    }
+
+    /// The supertraits whose vtables the trait's stand-in implements.
+    #[must_use]
+    pub fn supertraits(&self) -> &[super::object::Supertrait] {
+        &self.supertraits
     }
 
     /// The methods of the trait's vtable, each parameter by position, when

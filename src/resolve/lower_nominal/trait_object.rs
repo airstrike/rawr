@@ -474,17 +474,59 @@ impl Parser<'_> {
                 && names(candidate.path.as_str())
         });
         let last = trait_name.rsplit("::").next().unwrap_or_default();
-        // The impl's functions, by name, of the trait as the object names
-        // it or as the impl writes it.
+        let by_name = self.impl_functions(owner, |written| {
+            names(written) || (implemented && written.rsplit("::").next() == Some(last))
+        });
+        let Some(mut members) =
+            self.impl_members(by_name, &concrete, (trait_name, arguments), span)?
+        else {
+            return Ok(None);
+        };
+        // Each supertrait's, as the impl of it writes its last segment, by
+        // the key the stand-in's impl of it calls (#2698).
+        let supertraits = crate::host::path::Path::parse(trait_name)
+            .ok()
+            .and_then(|path| self.models.host.trait_header(&path))
+            .and_then(|header| header.object.clone())
+            .unwrap_or_default();
+        for (position, supertrait) in supertraits.iter().enumerate() {
+            let last = supertrait.rsplit("::").next().unwrap_or_default();
+            let by_name =
+                self.impl_functions(owner, |written| written.rsplit("::").next() == Some(last));
+            let found = self
+                .impl_members(by_name, &concrete, (supertrait, &[]), span)?
+                .unwrap_or_default();
+            members.extend(found.into_iter().map(|(function, path)| {
+                (
+                    rawr_import::classify::representability::object::Supertrait::key(
+                        position, &function,
+                    )
+                    .into(),
+                    path,
+                )
+            }));
+        }
+        Ok(Some(members))
+    }
+
+    /// The functions of the program's impls for the type `owner` of each
+    /// trait `names` holds of as the impl writes it, by name.
+    #[cfg(feature = "rust-import")]
+    fn impl_functions(
+        &self,
+        owner: crate::type_def::Id,
+        names: impl Fn(&str) -> bool,
+    ) -> BTreeMap<ImmutableString, Vec<method::Definition>> {
         let mut by_name = BTreeMap::<ImmutableString, Vec<method::Definition>>::new();
         for ((of, function), definitions) in &self.models.trait_methods {
             if *of != owner {
                 continue;
             }
             for definition in definitions {
-                if definition.trait_name().is_some_and(|written| {
-                    names(written) || (implemented && written.rsplit("::").next() == Some(last))
-                }) {
+                if definition
+                    .trait_name()
+                    .is_some_and(|written| names(written))
+                {
                     by_name
                         .entry(function.clone())
                         .or_default()
@@ -492,6 +534,21 @@ impl Parser<'_> {
                 }
             }
         }
+        by_name
+    }
+
+    /// The member each of `by_name`, the functions of the impls of the
+    /// trait `trait_name` at `arguments` for `concrete`, is in the running
+    /// program, by the function's name. `None` when it has none, or one
+    /// isn't a member of the program's.
+    #[cfg(feature = "rust-import")]
+    fn impl_members(
+        &mut self,
+        mut by_name: BTreeMap<ImmutableString, Vec<method::Definition>>,
+        concrete: &Ty,
+        (trait_name, arguments): (&ImmutableString, &[Ty]),
+        span: Span,
+    ) -> Result<Option<Vec<(ImmutableString, ImmutableString)>>, Error> {
         // An instance of a generic impl's method (D629) is its template's
         // to bind at `concrete`'s arguments, as a call binds it.
         for definitions in by_name.values_mut() {
@@ -510,10 +567,10 @@ impl Parser<'_> {
         }
         let mut members = Vec::with_capacity(by_name.len());
         for (function, definitions) in by_name {
-            let Some(definition) = self.fitting_impl(definitions, &concrete) else {
+            let Some(definition) = self.fitting_impl(definitions, concrete) else {
                 return Ok(None);
             };
-            let substitution = self.impl_at(&definition, &concrete, arguments);
+            let substitution = self.impl_at(&definition, concrete, arguments);
             // An instance lowered at the types (D1115) takes no witnesses;
             // the method itself, or a crate-bounded one's instance (D629),
             // takes those its generics still name.

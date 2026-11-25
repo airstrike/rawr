@@ -5588,12 +5588,14 @@ fn shape(
             auto_trait,
             supertraits,
             associated,
+            provided,
             generics,
         } => model::Kind::Trait {
             unsafe_trait,
             auto_trait,
             supertraits: predicates(supertraits, catalog, limits, allocation)?,
             associated: ids(associated, catalog, allocation)?,
+            provided: ids(provided, catalog, allocation)?,
             generics: generics_of(generics, catalog, limits, allocation)?,
         },
         protocol::Shape::AssociatedType {

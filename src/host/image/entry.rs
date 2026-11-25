@@ -184,9 +184,7 @@ impl Held {
                     parameters: header.parameters().map(ImmutableString::from).collect(),
                     defaults,
                     call: header.call().and_then(|call| runner::ty(call).ok()),
-                    object: header
-                        .outputs()
-                        .is_some_and(|outputs| outputs.object().is_some()),
+                    object: host::facade::stand_in(header.outputs()),
                 }
                 .resolve(self.root(), self)
             })

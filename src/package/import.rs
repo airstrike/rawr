@@ -3241,13 +3241,13 @@ fn build(
     // stand-in for each (#2698).
     let objects = contract
         .outcomes()
-        .filter(|outcome| {
-            outcome
-                .outputs()
-                .is_some_and(|outputs| outputs.object().is_some())
+        .filter_map(|outcome| {
+            Some((
+                *outcome.identity().definition()?.as_bytes(),
+                host::facade::stand_in(outcome.outputs())?,
+            ))
         })
-        .filter_map(|outcome| Some(*outcome.identity().definition()?.as_bytes()))
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<std::collections::BTreeMap<_, _>>();
     for header in trait_headers {
         if let Some(undeclared) =
             Undeclared::first(header.defaults.iter().flatten(), &header.parameters)
@@ -3293,7 +3293,7 @@ fn build(
                 .collect(),
             defaults,
             call,
-            objects.contains(&header.identity),
+            objects.get(&header.identity).cloned(),
         )?;
     }
     for header in impl_headers {

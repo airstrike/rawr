@@ -171,6 +171,10 @@ pub enum Kind {
         supertraits: Box<[Predicate]>,
         /// Canonical associated definition identities.
         associated: Box<[identity::Definition]>,
+        /// The associated functions with a default body, which an impl
+        /// may leave to the trait.
+        #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+        provided: Box<[identity::Definition]>,
         /// Type, lifetime, const, bound, and where-clause evidence.
         generics: Generics,
     },

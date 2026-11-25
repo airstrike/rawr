@@ -27263,9 +27263,9 @@ impl Revealed<'_> {
 enum Callee<'a> {
     /// The member at this path, of the proxy's impl (D594).
     Member(&'a str),
-    /// The member the program's trait object `self.0` names for the
-    /// function, of the trait's stand-in (`crossing::Object`, #2698).
-    Object,
+    /// The member the program's trait object `self.0` names by this key,
+    /// of the trait's stand-in (`crossing::Object`, #2698).
+    Object(&'a str),
 }
 
 /// One function of a script impl, as `render_impls` writes it, or of a
@@ -27519,7 +27519,7 @@ fn render_impl_function(
             "static MEMBER: __rawr_internal::crossing::Member = __rawr_internal::crossing::Member::new({path:?});
         let member = MEMBER.enter();"
         ),
-        Callee::Object => format!("let member = self.0.enter({:?});", function.name()),
+        Callee::Object(key) => format!("let member = self.0.enter({key:?});"),
     };
     let mutable = mutable.join(", ");
     // An output that borrows, as a `view(&self) -> impl Widget<..> + 'a`'s

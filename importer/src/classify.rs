@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 284;
+const CLASSIFIER_VERSION: u32 = 286;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -814,13 +814,26 @@ fn type_names_static(ty: &model::Type) -> bool {
 }
 
 /// Whether `ty` names the `Self` of the trait `trait_id`, at any depth: a
-/// pointer, callable, object or opaque type is taken to, as no vtable
-/// method's signature the runner writes holds one that does.
+/// raw pointer, function pointer or opaque type is taken to, as no vtable
+/// method's signature the runner writes holds one that does. An object,
+/// as `&mut dyn Operation` of iced's `Widget::operate`, does where one of
+/// its bounds' arguments does.
 fn names_trait_self(ty: &model::Type, trait_id: &api::identity::Definition) -> bool {
     let argument = |argument: &model::Argument| match argument {
         model::Argument::Type(ty) => names_trait_self(ty, trait_id),
         _ => false,
     };
+    if let model::Type::TraitObject { bounds, .. } = ty {
+        return bounds.iter().any(|bound| match bound {
+            model::ObjectBound::Trait(model::Bound::Trait { arguments, .. }) => {
+                arguments.iter().any(argument)
+            }
+            model::ObjectBound::Trait(model::Bound::MaybeSized) => false,
+            model::ObjectBound::ProjectionEquality { arguments, ty, .. } => {
+                arguments.iter().any(argument) || names_trait_self(ty, trait_id)
+            }
+        });
+    }
     match ty {
         model::Type::SelfType(_) => true,
         model::Type::Parameter { owner, index } => owner == trait_id && *index == 0,
@@ -9595,9 +9608,12 @@ impl<'graph> Context<'graph> {
                 _ => None,
             })
             .collect();
+        let (object, supertraits) = object.map_or((None, Vec::new()), |(object, supertraits)| {
+            (Some(object), supertraits)
+        });
         Ok(Some(
             representability::signature::Outputs::new(defaults, methods.into_boxed_slice())
-                .with_object(object),
+                .with_object(object, supertraits.into_boxed_slice()),
         ))
     }
 
@@ -11493,20 +11509,25 @@ impl<'graph> Context<'graph> {
     /// The methods of the trait `definition`'s vtable, each trait parameter
     /// other than `Self` by its position (`by_position`), as the runner's
     /// one stand-in for the trait implements them by calling a program's
-    /// impl at an object's arguments (#2698). `None` when the trait is not
-    /// object safe, has a supertrait other than a marker or an associated
+    /// impl at an object's arguments (#2698), and each supertrait's, as
+    /// iced's `Widget` has `widget::Meta`'s. `None` when the trait is not
+    /// object safe, has a supertrait with type arguments or an associated
     /// type, or a method names a type the runner can't give or take, where
     /// a program's value can't become its object.
     fn object_methods(
         &self,
         definition: &model::Definition,
         by_position: &BTreeMap<u32, model::Type>,
-    ) -> Option<Box<[representability::object::Method]>> {
+    ) -> Option<(
+        Box<[representability::object::Method]>,
+        Vec<representability::object::Supertrait>,
+    )> {
         use crate::surface::instance::ImplReceiver;
         let trait_id = definition.id();
         let model::Kind::Trait {
             supertraits,
             associated,
+            provided,
             ..
         } = definition.kind()
         else {
@@ -11525,8 +11546,65 @@ impl<'graph> Context<'graph> {
             model::Predicate::Bound { .. } | model::Predicate::TypeOutlives { .. } => true,
             _ => false,
         };
-        if !supertraits.iter().all(marker) {
-            return None;
+        // Each supertrait that names no type but `Self`, with its own
+        // supertraits after it, once.
+        let mut above = Vec::<representability::object::Supertrait>::new();
+        for predicate in supertraits.iter() {
+            if marker(predicate) {
+                continue;
+            }
+            let model::Predicate::Bound {
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+                ..
+            } = predicate
+            else {
+                return None;
+            };
+            if !arguments
+                .iter()
+                .all(|argument| matches!(argument, model::Argument::Lifetime(_)))
+            {
+                return None;
+            }
+            let supertrait = self
+                .graph
+                .definition_index(trait_id)
+                .and_then(|index| self.graph.definition_at(index))?;
+            let (methods, higher) = self.object_methods(supertrait, &BTreeMap::new())?;
+            let identity = *self.graph.surface_definition(trait_id).as_bytes();
+            let unit = trait_id.unit();
+            let display = supertrait
+                .display_path()
+                .skip_while(|segment| *segment == unit.crate_name());
+            let path = std::iter::once(format!(
+                "::{}{}_{}",
+                crate::api::ledger::CRATE_SEGMENT,
+                unit.crate_name(),
+                unit.stable_crate_id()
+            ))
+            .chain(display.map(str::to_owned))
+            .collect::<Vec<_>>()
+            .join("::");
+            for found in std::iter::once(representability::object::Supertrait::new(
+                identity,
+                path.into(),
+                methods,
+            ))
+            .chain(higher)
+            {
+                if !above
+                    .iter()
+                    .any(|known| known.identity() == found.identity())
+                {
+                    above.push(found);
+                }
+            }
         }
         let at = |ty: &model::Type| Some(substitute_bindings(ty, by_position));
         let names_self = |ty: &model::Type| names_trait_self(ty, trait_id);
@@ -11590,15 +11668,8 @@ impl<'graph> Context<'graph> {
             let output = self
                 .convert_value(&late_as_static(&at(signature.output())?))
                 .ok()?;
-            // A method some impl leaves to the trait has the trait's body.
-            let provided = self
-                .graph
-                .implementations_of(trait_id)
-                .any(|implementation| {
-                    implementation
-                        .associated()
-                        .any(|associated| associated == id)
-                });
+            // A method with the trait's body, which an impl may leave out.
+            let provided = provided.contains(id);
             methods.push(representability::object::Method::new(
                 item.display_path().last()?.into(),
                 receiver,
@@ -11607,7 +11678,7 @@ impl<'graph> Context<'graph> {
                 provided,
             ));
         }
-        Some(methods.into_boxed_slice())
+        Some((methods.into_boxed_slice(), above))
     }
 
     /// Whether `id` is core's `Option`.
@@ -18999,6 +19070,7 @@ mod tests {
                     auto_trait: false,
                     supertraits: Box::default(),
                     associated: Box::default(),
+                    provided: Box::default(),
                     generics: empty.clone(),
                 },
                 Kind::Trait,

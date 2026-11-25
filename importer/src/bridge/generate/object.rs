@@ -13,7 +13,9 @@ use std::fmt::Write as _;
 
 use super::{concrete_type, render_from_dynamic, request, TYPE_PATHS};
 use crate::classify::representability::convert;
-use crate::classify::representability::object::{Object, Pointer, ARGUMENTS, CALLABLE, PROGRAM};
+use crate::classify::representability::object::{
+    Method, Object, Pointer, Supertrait, ARGUMENTS, CALLABLE, PROGRAM,
+};
 
 /// A type the facade implements a trait for that the adapter coerces a
 /// program's value of to the trait's object.
@@ -114,7 +116,7 @@ thread_local! {
 /// `None` when the trait's vtable has a method the runner can't write
 /// (`Object::methods`).
 fn stand_in(object: &Object) -> Result<Option<String>, request::Error> {
-    let Some(methods) = vtable(object) else {
+    let Some((methods, supertraits)) = vtable(object) else {
         return Ok(None);
     };
     let Some(dynamic) = object_type(&object.behind(Pointer::Boxed)) else {
@@ -128,7 +130,7 @@ fn stand_in(object: &Object) -> Result<Option<String>, request::Error> {
         return Ok(known);
     }
     let name = format!("__RawrObject{}", STAND_INS.with_borrow(BTreeMap::len));
-    let made = render_stand_in(object, &methods, &name)?.map(|text| StandIn {
+    let made = render_stand_in(object, (&methods, &supertraits), &name)?.map(|text| StandIn {
         name: name.clone(),
         text,
     });
@@ -138,8 +140,8 @@ fn stand_in(object: &Object) -> Result<Option<String>, request::Error> {
 }
 
 /// The methods of `object`'s trait's vtable at the object's arguments,
-/// each parameter it leaves out at its default.
-fn vtable(object: &Object) -> Option<Vec<crate::classify::representability::object::Method>> {
+/// each parameter it leaves out at its default, and its supertraits'.
+fn vtable(object: &Object) -> Option<(Vec<Method>, Vec<Supertrait>)> {
     VTABLES.with_borrow(|vtables| {
         let outputs = vtables.get(object.principal().as_bytes())?;
         let given = |index: u32| {
@@ -150,38 +152,127 @@ fn vtable(object: &Object) -> Option<Vec<crate::classify::representability::obje
                 .cloned()
                 .or_else(|| outputs.defaults().get(index).cloned().flatten())
         };
-        outputs
+        let methods = outputs
             .object()?
             .iter()
             .map(|method| method.with_parameters(&given))
-            .collect()
+            .collect::<Option<_>>()?;
+        Some((methods, outputs.supertraits().to_vec()))
     })
 }
 
-/// The declaration and impl of the stand-in `name` for `object`'s trait,
-/// each method of `methods` calling the program's impl's (`Callee::
-/// Object`). `None` where a method's inputs or output can't cross.
+/// One trait the stand-in implements: its path at its arguments, its
+/// methods, and the key of each method's member before its name.
+struct Implemented<'a> {
+    path: String,
+    methods: &'a [Method],
+    position: Option<usize>,
+}
+
+/// The declaration and impls of the stand-in `name` for `object`'s trait
+/// and each of its supertraits, each method calling the program's impl's
+/// (`Callee::Object`). `None` where a method's inputs or output can't
+/// cross, or a supertrait has no path.
 fn render_stand_in(
     object: &Object,
-    methods: &[crate::classify::representability::object::Method],
+    (methods, supertraits): (&[Method], &[Supertrait]),
     name: &str,
 ) -> Result<Option<String>, request::Error> {
-    let Some(implemented) = trait_type(object) else {
+    let Some(principal) = trait_type(object) else {
         return Ok(None);
     };
-    use crate::surface::instance::ImplReceiver;
     let dynamic = object_type(object).ok_or_else(|| request::drift("a trait object's type"))?;
+    let traits = std::iter::once(Implemented {
+        path: principal,
+        methods,
+        position: None,
+    })
+    .chain(
+        supertraits
+            .iter()
+            .enumerate()
+            .map(|(position, supertrait)| Implemented {
+                path: TYPE_PATHS
+                    .with_borrow(|paths| paths.get(supertrait.identity()).cloned())
+                    .unwrap_or_else(|| supertrait.path().to_owned()),
+                methods: supertrait.methods(),
+                position: Some(position),
+            }),
+    )
+    .collect::<Vec<_>>();
     // A provided method the program's impl doesn't write runs the trait's
     // body, over a second handle to the value whose impl writes only the
     // required methods. One whose output borrows its receiver can't come
     // back from that handle, and calls the impl's alone.
-    let defaulted = |method: &crate::classify::representability::object::Method| {
-        method.provided() && !super::carries_lifetime(method.output())
-    };
+    let defaulted =
+        |method: &Method| method.provided() && !super::carries_lifetime(method.output());
     let defaults = format!("{name}Defaults");
+    let mut impls = String::new();
+    let mut required_impls = String::new();
+    for implemented in &traits {
+        let Some((body, required)) = render_stand_in_methods(implemented, &defaults, defaulted)?
+        else {
+            return Ok(None);
+        };
+        let path = &implemented.path;
+        write!(
+            impls,
+            "
+#[allow(unused_mut, unused_variables, clippy::all)]
+impl {path} for {name} {{
+{body}}}
+"
+        )
+        .map_err(request::unwritable)?;
+        write!(
+            required_impls,
+            "
+#[allow(unused_mut, unused_variables, clippy::all)]
+impl {path} for {defaults} {{
+{required}}}
+"
+        )
+        .map_err(request::unwritable)?;
+    }
+    let mut text = format!(
+        "/// The runner's one stand-in for `{dynamic}`: a program's value of any type, \
+         whose impl each method calls (#2698).
+pub struct {name}(pub __rawr_internal::crossing::Object);
+{impls}"
+    );
+    if traits
+        .iter()
+        .any(|implemented| implemented.methods.iter().any(defaulted))
+    {
+        write!(
+            text,
+            "
+/// The value of a [`{name}`] where a provided method its impl doesn't
+/// write runs the trait's body, which calls the impl's required methods.
+pub struct {defaults}(pub __rawr_internal::crossing::Object);
+{required_impls}"
+        )
+        .map_err(request::unwritable)?;
+    }
+    Ok(Some(text))
+}
+
+/// The methods of the stand-in's impl of `implemented`, and those of the
+/// impl of its `defaults` value, which writes only the required ones.
+/// `None` where a method's inputs or output can't cross.
+fn render_stand_in_methods(
+    implemented: &Implemented<'_>,
+    defaults: &str,
+    defaulted: impl Fn(&Method) -> bool,
+) -> Result<Option<(String, String)>, request::Error> {
+    use crate::surface::instance::ImplReceiver;
     let mut body = String::new();
     let mut required = String::new();
-    for method in methods {
+    for method in implemented.methods {
+        let key = implemented.position.map_or_else(
+            || method.name().to_owned(),
+            |position| Supertrait::key(position, method.name()),
+        );
         let function = crate::surface::instance::ScriptImplFunction::new(
             method.name().into(),
             Box::default(),
@@ -190,7 +281,7 @@ fn render_stand_in(
             method.output().clone(),
         );
         let rendered = match request::trial(|| {
-            super::render_impl_function(&function, super::Callee::Object, &[], None, None)
+            super::render_impl_function(&function, super::Callee::Object(&key), &[], None, None)
         }) {
             Ok(rendered) => rendered,
             Err(request::Error::Unwritten(_)) => return Ok(None),
@@ -216,37 +307,13 @@ fn render_stand_in(
             .join(", ");
         write!(
             body,
-            "{header}{{\n        if !self.0.writes({method:?}) {{\n            let mut defaults = {defaults}(self.0.share());\n            return <{defaults} as {implemented}>::{method}({inputs});\n        }}\n{rest}",
+            "{header}{{\n        if !self.0.writes({key:?}) {{\n            let mut defaults = {defaults}(self.0.share());\n            return <{defaults} as {path}>::{method}({inputs});\n        }}\n{rest}",
+            path = implemented.path,
             method = method.name(),
         )
         .map_err(request::unwritable)?;
     }
-    let mut text = format!(
-        "/// The runner's one stand-in for `{dynamic}`: a program's value of any type, \
-         whose impl each method calls (#2698).
-pub struct {name}(pub __rawr_internal::crossing::Object);
-
-#[allow(unused_mut, unused_variables, clippy::all)]
-impl {implemented} for {name} {{
-{body}}}
-"
-    );
-    if methods.iter().any(defaulted) {
-        write!(
-            text,
-            "
-/// The value of a [`{name}`] where a provided method its impl doesn't
-/// write runs the trait's body, which calls the impl's required methods.
-pub struct {defaults}(pub __rawr_internal::crossing::Object);
-
-#[allow(unused_mut, unused_variables, clippy::all)]
-impl {implemented} for {defaults} {{
-{required}}}
-"
-        )
-        .map_err(request::unwritable)?;
-    }
-    Ok(Some(text))
+    Ok(Some((body, required)))
 }
 
 /// Each stand-in an arm made, declared with its impl.

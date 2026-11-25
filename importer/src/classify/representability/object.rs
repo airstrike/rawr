@@ -151,6 +151,55 @@ impl Method {
     }
 }
 
+/// A supertrait of a trait whose vtable the runner's stand-in implements
+/// (#2698), as iced's `Widget` has `widget::Meta`: its identity, the path
+/// the runner names it by through the crate that defines it, and its
+/// methods, which name no type but `Self`.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Supertrait {
+    #[serde(with = "crate::hex")]
+    identity: [u8; 32],
+    path: Box<str>,
+    methods: Box<[Method]>,
+}
+
+impl Supertrait {
+    #[must_use]
+    pub(crate) const fn new(identity: [u8; 32], path: Box<str>, methods: Box<[Method]>) -> Self {
+        Self {
+            identity,
+            path,
+            methods,
+        }
+    }
+
+    /// The supertrait's identity.
+    #[must_use]
+    pub const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+
+    /// Its Rust path, through the crate that defines it.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Its methods.
+    #[must_use]
+    pub fn methods(&self) -> &[Method] {
+        &self.methods
+    }
+
+    /// The key the stand-in calls the value's impl of its method `name`
+    /// by, the supertrait at `position` among its trait's: the method's
+    /// name after the position, as no method of the trait's own is.
+    #[must_use]
+    pub fn key(position: usize, name: &str) -> String {
+        format!("{position}::{name}")
+    }
+}
+
 /// The inputs and output of the `Fn` bound of a trait's one impl for every
 /// callable, at the object's arguments: a program's callable coerced to
 /// the object runs with these, as the impl's methods call it.

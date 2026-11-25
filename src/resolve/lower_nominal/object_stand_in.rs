@@ -137,7 +137,7 @@ impl Parser<'_> {
             let object = crate::host::path::Path::parse(&trait_name)
                 .ok()
                 .and_then(|path| self.models.host.trait_header(&path))
-                .is_some_and(|header| header.object);
+                .is_some_and(|header| header.object.is_some());
             let mentions = signature
                 .parameters()
                 .iter()

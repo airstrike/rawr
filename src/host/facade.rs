@@ -190,8 +190,9 @@ impl TypeAlias {
 /// A crate trait Rawr code names (D604): its qualified path, identity,
 /// type parameters other than `Self`, each one's default, and the callable
 /// a program's function or closure fills it as, through the crate's impl
-/// of it for every callable (#1981), and whether the runner has one
-/// stand-in for it that a program's value of any type fills (#2698).
+/// of it for every callable (#1981), and, when the runner has one
+/// stand-in for it that a program's value of any type fills (#2698), the
+/// paths of the supertraits the stand-in implements too.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TraitHeader {
     pub(crate) path: host::path::Path,
@@ -199,7 +200,25 @@ pub(crate) struct TraitHeader {
     pub(crate) parameters: Box<[ImmutableString]>,
     pub(crate) defaults: Box<[Option<host::type_ref::Type>]>,
     pub(crate) call: Option<host::type_ref::Type>,
-    pub(crate) object: bool,
+    pub(crate) object: Option<Box<[ImmutableString]>>,
+}
+
+/// What a trait's header says of the runner's one stand-in for it
+/// (`TraitHeader::object`): the paths of its supertraits, when its
+/// classified `outputs` hold the trait's vtable.
+#[cfg(feature = "rust-import")]
+pub(crate) fn stand_in(
+    outputs: Option<&rawr_import::classify::representability::signature::Outputs>,
+) -> Option<Box<[ImmutableString]>> {
+    let outputs = outputs?;
+    outputs.object()?;
+    Some(
+        outputs
+            .supertraits()
+            .iter()
+            .map(|supertrait| ImmutableString::from(supertrait.path()))
+            .collect(),
+    )
 }
 
 /// One impl of a crate trait (D604): its own type parameters, the trait's
@@ -264,7 +283,7 @@ impl TraitHeader {
                 .as_ref()
                 .map(host::type_ref::Type::try_clone)
                 .transpose()?,
-            object: self.object,
+            object: self.object.clone(),
         })
     }
 }
@@ -339,7 +358,7 @@ impl TraitHeader {
             parameters: self.parameters.clone(),
             defaults,
             call,
-            object: self.object,
+            object: self.object.clone(),
         })
     }
 }
@@ -814,7 +833,7 @@ impl Builder {
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
         call: Option<host::type_ref::Type>,
-        object: bool,
+        object: Option<Box<[ImmutableString]>>,
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         self.trait_headers

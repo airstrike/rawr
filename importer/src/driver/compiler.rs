@@ -133,7 +133,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // forwards the associated type a parameter's projection names to its own
 // parameter's, with that item (#2060). `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 103;
+const PROTOCOL_SCHEMA: u32 = 104;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -552,6 +552,8 @@ enum Shape {
         auto_trait: bool,
         supertraits: Vec<Predicate>,
         associated: Vec<Id>,
+        /// The associated functions with a default body.
+        provided: Vec<Id>,
         generics: Generics,
     },
     AssociatedType {
@@ -3792,6 +3794,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let associated_count = tcx.associated_items(def_id).in_definition_order().count();
         self.edge(associated_count)?;
         let mut associated = Vec::new();
+        let mut provided = Vec::new();
         for item in tcx.associated_items(def_id).in_definition_order() {
             let associated_id = item.def_id;
             let associated_namespace = namespace(item.namespace());
@@ -3806,6 +3809,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 .try_reserve(1)
                 .map_err(|error| format!("trait associated allocation failed: {error}"))?;
             associated.push(self.id(associated_id, associated_namespace)?);
+            if item.is_fn() && tcx.defaultness(associated_id).has_value() {
+                provided
+                    .try_reserve(1)
+                    .map_err(|error| format!("trait provided allocation failed: {error}"))?;
+                provided.push(self.id(associated_id, associated_namespace)?);
+            }
         }
         let predicates = crate::compat::explicit_super_clauses(tcx, def_id).skip_binder();
         self.edge(predicates.len())?;
@@ -3816,6 +3825,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             auto_trait: self.tcx.trait_is_auto(def_id),
             supertraits,
             associated,
+            provided,
             generics: self.generics(def_id)?,
         })
     }
