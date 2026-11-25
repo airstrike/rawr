@@ -3071,6 +3071,27 @@ fn language_operators_lex_as_rust() {
     assert_eq!(value, (3 + 7 + 5 + 3 + 7 + 3) + 2 + 1);
 }
 
+/// A generic associated type's lifetimes, as iced's `Catalog` declares
+/// `type Class<'a>;` and its impls give `type Class<'a> = ..;`, are erased
+/// as every lifetime is.
+#[test]
+fn language_associated_type_lifetimes() {
+    let value = run(r#"
+        trait Catalog {
+            type Class<'a>;
+            fn class<'a>(&self) -> Self::Class<'a>;
+        }
+        struct Theme;
+        impl Catalog for Theme {
+            type Class<'a> = i64;
+            fn class<'a>(&self) -> i64 { 7 }
+        }
+        pub fn run() -> i64 { Theme.class() }
+        run()
+    "#);
+    assert_eq!(value, 7);
+}
+
 #[test]
 fn language_associated_types() {
     let shapes = r#"

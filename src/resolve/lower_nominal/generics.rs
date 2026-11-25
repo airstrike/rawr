@@ -946,7 +946,11 @@ impl<'a> Parser<'a> {
             {
                 ty = self.inference.resolve(target);
             }
-            let witness = self.witness(&ty, &parameter, span)?;
+            // A template call read for its instance has none to witness.
+            let witness = match self.witness(&ty, &parameter, span) {
+                Err(_) if self.collecting_instances => continue,
+                witness => witness?,
+            };
             if let Ty::Param(_, Parameter::Opaque(captured)) = &ty {
                 let arguments = self
                     .opaque_argument_witnesses(&captured.arguments, &parameter, span)
