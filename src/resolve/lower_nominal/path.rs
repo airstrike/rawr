@@ -966,14 +966,17 @@ impl<'a> Parser<'a> {
                 _ => crate::resolve::std_reexport(&format!("{owner}::{member}"), &self.models.host)
                     .to_string(),
             };
+            // A macro beside a crate function of its name, as
+            // `events::framed!` beside the `framed` a glob re-exports: the
+            // namespace the `!` names, as rustc's.
+            let bang = matches!(self.peek(), Token::Bang);
             if let Some(items) = self
                 .models
                 .host_items(&path)
+                .map(|items| macro_or_value(items.to_vec(), bang))
                 .filter(|items| items.iter().all(|item| item.imported_identity().is_none()))
-                .map(<[_]>::to_vec)
             {
                 let item_owner = self.models.item_owner(&path).cloned();
-                let items = macro_or_value(items, matches!(self.peek(), Token::Bang));
                 let items =
                     value_or_call(items, matches!(self.peek(), Token::LeftParen | Token::Unit));
                 return if items.first().is_some_and(|item| item.kind().is_macro())

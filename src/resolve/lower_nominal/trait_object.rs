@@ -477,8 +477,12 @@ impl Parser<'_> {
         let by_name = self.impl_functions(owner, |written| {
             names(written) || (implemented && written.rsplit("::").next() == Some(last))
         });
-        let Some(mut members) =
-            self.impl_members(by_name, &concrete, (trait_name, arguments), span)?
+        // An impl that writes no function, as `impl Meta for Mood {}`, has
+        // the trait's provided ones, which the stand-in runs itself.
+        let written = !by_name.is_empty();
+        let Some(mut members) = self
+            .impl_members(by_name, &concrete, (trait_name, arguments), span)?
+            .or_else(|| (implemented && !written).then(Vec::new))
         else {
             return Ok(None);
         };

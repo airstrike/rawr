@@ -122,29 +122,16 @@ impl Parser<'_> {
                 },
                 _ => continue,
             };
-            let mut bounds = relations
-                .iter()
-                .filter(|relation| relation.parameter() == name);
-            let (Some(relation), None) = (bounds.next(), bounds.next()) else {
+            let Some((relation, trait_name)) = self.stand_in_bound(relations, &name) else {
                 continue;
             };
-            let Some(identity) = relation.trait_identity() else {
-                continue;
-            };
-            let Some(trait_name) = self.models.host.trait_name(&identity) else {
-                continue;
-            };
-            let object = crate::host::path::Path::parse(&trait_name)
-                .ok()
-                .and_then(|path| self.models.host.trait_header(&path))
-                .is_some_and(|header| header.object.is_some());
             let mentions = signature
                 .parameters()
                 .iter()
                 .chain([signature.output()])
                 .filter(|ty| mentions(ty, &name))
                 .count();
-            if !object || mentions != 1 || !self.models.native_trait(&trait_name) {
+            if mentions != 1 || !self.models.native_trait(&trait_name) {
                 continue;
             }
             let Some(argument) = arguments.get_mut(position) else {
@@ -196,6 +183,43 @@ impl Parser<'_> {
         Ok(pending)
     }
 
+    /// The one bound of `relations` on the parameter `name` whose trait
+    /// has an object, with the trait's path, where each other bound on it
+    /// is that trait's or a supertrait's, which the trait's stand-in
+    /// implements too: a provided method over a trait's `Self`
+    /// (`surface::member`) bounds it by the trait and by each supertrait
+    /// the trait's predicates name.
+    fn stand_in_bound<'r>(
+        &self,
+        relations: &'r [crate::host::signature::Relation],
+        name: &str,
+    ) -> Option<(&'r crate::host::signature::Relation, ImmutableString)> {
+        let bounds = relations
+            .iter()
+            .filter(|relation| relation.parameter() == name)
+            .map(|relation| {
+                let identity = relation.trait_identity()?;
+                Some((relation, self.models.host.trait_name(&identity)?))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        bounds.iter().find_map(|(relation, trait_name)| {
+            let supertraits = crate::host::path::Path::parse(trait_name)
+                .ok()
+                .and_then(|path| self.models.host.trait_header(&path))?
+                .object
+                .clone()?;
+            bounds
+                .iter()
+                .all(|(_, other)| {
+                    other == trait_name
+                        || supertraits
+                            .iter()
+                            .any(|supertrait| within_crate(supertrait) == within_crate(other))
+                })
+                .then(|| (*relation, trait_name.clone()))
+        })
+    }
+
     /// Keep each of `pending`, the arguments [`Parser::stand_in_arguments`]
     /// passed through their ops, of the call pushed as the op `call`,
     /// whose operands start at `first` with the argument at index `0`.
@@ -229,9 +253,16 @@ impl Parser<'_> {
                 span,
             } = pending;
             let ty = self.inference.resolve(&ty);
-            // A native island's type is the stand-in rawr's copy of its
-            // crate declares for it (#1264).
-            if !matches!(ty, Ty::Script(..)) || self.native_object_owner(&ty, &trait_name).is_some()
+            // A marked type's is the stand-in rawr's copy of its crate
+            // declares for it (#1264); any other type of the program's is
+            // the trait's one stand-in, so a new one builds no runner.
+            let Ty::Script(id, _) = ty else {
+                continue;
+            };
+            if matches!(
+                self.models.holder(id),
+                rawr_import::classify::representability::convert::Holder::Mirror
+            ) && self.native_object_owner(&ty, &trait_name).is_some()
             {
                 continue;
             }
@@ -307,6 +338,14 @@ pub(super) fn standing_in(
         }
         surface => surface,
     }
+}
+
+/// The path `path` past its crate's segment, which the runner spells
+/// apart from the program (`::__rawr_crate_events_..::framed::Meta` of
+/// `events::framed::Meta`).
+fn within_crate(path: &str) -> &str {
+    let path = path.trim_start_matches("::");
+    path.split_once("::").map_or(path, |(_, rest)| rest)
 }
 
 /// Whether `ty` names the type parameter `name`, at any depth.

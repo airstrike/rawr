@@ -17,6 +17,15 @@ pub trait Meta {
 pub trait Shown: Meta {
     /// The cell's text.
     fn shown(&self) -> String;
+
+    /// The cell held as its trait object, as iced's `Widget::_boxed`
+    /// boxes a widget for `column!`.
+    fn held<'a>(self) -> crate::held::Held<'a>
+    where
+        Self: Sized + 'a,
+    {
+        crate::held::Held::new(self)
+    }
 }
 
 /// A label the crate shows as it is.

@@ -1886,6 +1886,15 @@ impl<'a> Parser<'a> {
                     }
                     Err(back) => value = back,
                 }
+                if matches!(self.peek(), Token::LeftParen | Token::Unit) {
+                    match self.provided_member_call(value, definition_id, &member)? {
+                        Ok(called) => {
+                            value = called;
+                            continue;
+                        }
+                        Err(back) => value = back,
+                    }
+                }
             }
             // A scripted widget's `map` and `boxed` (`erasure_with`).
             let resolved = self.inference.resolve(&value.ty);

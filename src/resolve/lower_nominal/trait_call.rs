@@ -1540,17 +1540,72 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     pub(super) fn spliced_trait_call(
         &mut self,
-        mut value: ParsedExpr,
+        value: ParsedExpr,
         member: &str,
         member_span: Span,
     ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
         let Some(path) = self.spliced_trait_member(member, member_span) else {
             return Ok(Err(value));
         };
-        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+        self.self_member_call(value, &path)
+    }
+
+    /// `value.method(..)` of a program type with no method of the name,
+    /// whose program impl of a crate trait in scope leaves the trait's
+    /// provided `method` to it, as a widget's `_boxed` or a cell's
+    /// `held`: the trait's method over its `Self` (`surface::member`), as
+    /// rustc finds the trait's method. `Err(value)` back when no such
+    /// trait has one, or more than one does.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn provided_member_call(
+        &mut self,
+        value: ParsedExpr,
+        owner: crate::type_def::Id,
+        member: &str,
+    ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
+        let suffix = format!("::__rawr_self::{member}");
+        let implemented = |path: &str| {
+            let Some(trait_path) = path.strip_suffix(&suffix) else {
+                return false;
+            };
+            let known = self.trait_known_as(trait_path);
+            self.models.script_impls.iter().any(|candidate| {
+                matches!(&candidate.owner, crate::resolve::type_ref::Type::Path(
+                    crate::resolve::type_ref::Path {
+                        target: crate::resolve::type_ref::Target::Script { definition, .. },
+                        ..
+                    }
+                ) if *definition == owner)
+                    && (candidate.path.as_str() == trait_path
+                        || known.as_ref().is_some_and(|known| {
+                            self.trait_known_as(&candidate.path)
+                                .is_some_and(|written| written == *known)
+                        }))
+            })
+        };
+        let paths = self
+            .scoped_trait_members(member)
+            .into_iter()
+            .filter(|path| implemented(path))
+            .collect::<Vec<_>>();
+        let [path] = paths.as_slice() else {
             return Ok(Err(value));
         };
-        let owner = self.models.item_owner(&path).cloned();
+        self.self_member_call(value, path)
+    }
+
+    /// `value.method(..)` through the trait's method over its `Self` at
+    /// `path` (`surface::member`), its arguments read next.
+    #[cfg(feature = "rust-import")]
+    fn self_member_call(
+        &mut self,
+        mut value: ParsedExpr,
+        path: &str,
+    ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
+        let Some(items) = self.models.host_items(path).map(<[_]>::to_vec) else {
+            return Ok(Err(value));
+        };
+        let owner = self.models.item_owner(path).cloned();
         let start = value.span.start();
         let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
         let mut inputs = Vec::with_capacity(arguments.len() + 1);
