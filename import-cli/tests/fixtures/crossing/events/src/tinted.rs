@@ -209,7 +209,7 @@ pub struct Tallied<S> {
 }
 
 /// `item` with an empty tally.
-pub fn tallied<S: Shown>(item: S) -> Tallied<S> {
+pub fn tallied<S>(item: S) -> Tallied<S> {
     Tallied {
         item,
         tally: Tally::new(),
@@ -223,5 +223,41 @@ impl<S: Shown> Tallied<S> {
         self.tally
             .diff_children(std::slice::from_mut(&mut self.item));
         &self.tally.labels
+    }
+}
+
+/// What a holder diffs, as iced's `Widget<Message, Theme, Renderer>`,
+/// whose `Message` only the impls and their bounds name.
+pub trait Diffed<M> {
+    /// The holder's label, made as it diffs.
+    fn label(&mut self) -> String;
+}
+
+/// A crate label diffs at any `M`, as iced's `impl<Message, ..> Widget<
+/// Message, ..> for Text` is a widget at any message.
+impl<M> Diffed<M> for crate::framed::Label {
+    fn label(&mut self) -> String {
+        self.0.clone()
+    }
+}
+
+impl Tally {
+    /// The tally's labels made `items`', as `diff_children`, at the `M`
+    /// only the items' bound names.
+    pub fn diff_marked<M>(&mut self, items: &mut [impl Diffed<M>]) {
+        self.labels.clear();
+        for item in items.iter_mut() {
+            self.labels.push(item.label());
+        }
+    }
+}
+
+impl<S, M> Diffed<M> for Tallied<S>
+where
+    S: Diffed<M>,
+{
+    fn label(&mut self) -> String {
+        self.tally.diff_marked(std::slice::from_mut(&mut self.item));
+        format!("[{}]", self.tally.labels.join(","))
     }
 }

@@ -159,4 +159,31 @@ mod tests {
         );
         assert!(bound.contains("Style::tint(__a0)"), "{bound}");
     }
+
+    /// Each inherent impl of a type that gives generic methods is a trait
+    /// of its own, as two `impl Tally` blocks are, so the two never clash.
+    #[test]
+    fn two_inherent_impls_of_a_type_are_two_traits() {
+        let text = "impl Tally {\n\
+                    pub fn diff(&mut self, items: &mut [impl Shown]) {}\n\
+                    }\n\
+                    impl Tally {\n\
+                    pub fn marked<M>(&mut self, items: &mut [impl Diffed<M>]) {}\n\
+                    }\n";
+        let generic = super::text(
+            text,
+            &["events", "tinted"],
+            super::Bindings::Left,
+            &[],
+            &|_| true,
+        );
+        for declared in [
+            "impl __rawr_inherent__Tally for Tally {",
+            "impl __rawr_inherent__Tally__1 for Tally {",
+            "pub trait __rawr_inherent__Tally {",
+            "pub trait __rawr_inherent__Tally__1 {",
+        ] {
+            assert!(generic.contains(declared), "{declared}:\n{generic}");
+        }
+    }
 }

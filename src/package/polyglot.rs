@@ -7,7 +7,7 @@
 //! depends on a marked one is refused at load (native code never depends on
 //! marked code).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use crate::project::cargo::features::{Enabled, Operator};
@@ -616,6 +616,9 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
         .filter(|name| reached(name))
         .collect::<Vec<_>>();
     let mut generic = Generic::default();
+    // How many inherent impls of each owner gave generic methods so far:
+    // each is a trait of its own, as two `impl Tally` blocks are.
+    let mut inherent_impls = BTreeMap::<&str, usize>::new();
     for item in &items {
         let header = &tokens[item.header.clone()];
         let whole = match item.keyword {
@@ -661,7 +664,9 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
         };
         // `impl Style {` is `impl __rawr_inherent__Style for Style {`, and
         // the trait declares each method's signature.
-        let trait_name = super::crate_source::inherent(owner);
+        let earlier = inherent_impls.entry(owner).or_default();
+        let trait_name = super::crate_source::inherent(owner, *earlier);
+        *earlier += 1;
         let header_bytes = item.bytes.start..tokens[item.header.end].1 + 1;
         let owner_text = text[tokens[item.header.start].1..tokens[item.header.end].1].trim();
         generic.replaced.push((

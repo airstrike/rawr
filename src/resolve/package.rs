@@ -2892,7 +2892,8 @@ impl<'a> Resolver<'a> {
     /// The crate's path to the item `name` names in a program module of a
     /// crate module's generic items, when the module's `use` binds it to
     /// a native item of the crate (`use crate::framed::Shown;`), as
-    /// [`Self::crate_source_spelled`] spells the `use`'s path.
+    /// [`Self::crate_source_spelled`] spells the `use`'s path, or when the
+    /// crate module declares it natively (`Diffed` in its own module).
     fn crate_source_imported(
         &self,
         context: &Context,
@@ -2902,11 +2903,55 @@ impl<'a> Resolver<'a> {
         if self.tables.declaration(&address).is_some() {
             return None;
         }
-        let import = self
+        if let Some(import) = self
             .tables
             .alias(&address)
-            .or_else(|| self.tables.export(&address))?;
-        self.crate_source_spelled(&import.context, &import.path)
+            .or_else(|| self.tables.export(&address))
+        {
+            // `crate::framed::Shown`, or the native module's own path its
+            // glob writes (`events::tinted::Diffed`).
+            return self
+                .crate_source_spelled(&import.context, &import.path)
+                .or_else(|| {
+                    let first = import.path.first()?;
+                    if matches!(
+                        first.as_str(),
+                        "crate" | "self" | "super" | "std" | "core" | "alloc"
+                    ) {
+                        return None;
+                    }
+                    host_target(
+                        self.host,
+                        &import.path,
+                        Span::NONE,
+                        #[cfg(feature = "rust-import")]
+                        None,
+                    )
+                    .ok()?;
+                    Some(import.path.to_vec())
+                });
+        }
+        // A trait the crate module declares itself, which the program
+        // module's glob of the native module binds.
+        let module = context.namespace.modules.first()?;
+        if context.namespace.modules.len() != 1 || !crate::package::crate_source::is_name(module) {
+            return None;
+        }
+        let spelled = self.tables.crate_source_path(
+            context.package,
+            module,
+            0,
+            std::slice::from_ref(name),
+        )?;
+        host_target(
+            self.host,
+            &spelled,
+            Span::NONE,
+            #[cfg(feature = "rust-import")]
+            None,
+        )
+        .ok()?;
+        Some(spelled)
     }
 
     /// `path` in a program module of a crate module's generic items when it

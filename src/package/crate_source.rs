@@ -60,9 +60,13 @@ pub(crate) fn is_inherent(trait_name: &str) -> bool {
 }
 
 /// The trait that holds the generic inherent methods of `owner`, a type's
-/// name, which a crate-source module gives it.
-pub(crate) fn inherent(owner: &str) -> String {
-    format!("{INHERENT}{owner}")
+/// name, which a crate-source module gives it, of the module's impl of it
+/// after `earlier` others that gave some.
+pub(crate) fn inherent(owner: &str, earlier: usize) -> String {
+    match earlier {
+        0 => format!("{INHERENT}{owner}"),
+        earlier => format!("{INHERENT}{owner}__{earlier}"),
+    }
 }
 
 /// The crate modules [`VARIABLE`] names, each as its path from the crate's
