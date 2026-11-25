@@ -3884,7 +3884,7 @@ fn a_crate_modules_generic_code_runs_from_its_source_with_no_instance_built() {
 /// runner build.
 #[test]
 fn a_crate_generic_type_at_the_programs_arguments_crosses_as_a_trait_object() {
-    let root = lane(Some("framed.rs"));
+    let root = lane(Some("framed_types.rs"));
     let run = |root: &std::path::Path| {
         let output = |mut command: Command| {
             let run = command

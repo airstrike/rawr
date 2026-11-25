@@ -1,5 +1,5 @@
 // rawr
-// `framed.rs` edited: `Framed` at arguments no earlier run built, a frame
+// `framed_types.rs` edited: `Framed` at arguments no earlier run built, a frame
 // of a frame and a frame of a new program type.
 
 use events::framed::{self, Label, Shown};
