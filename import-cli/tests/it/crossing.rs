@@ -4201,6 +4201,35 @@ fn a_program_impls_bound_fixes_what_a_crate_value_in_it_leaves_open() {
     assert_eq!(rawr, "|%teal| #|%rust|# ~calm \n");
 }
 
+/// A program's value boxed as a crate trait's object the runner has no
+/// stand-in for, as iced's `Widget` while its `operate(&mut dyn
+/// Operation)` can't cross, is refused at check, rustc-style at the value,
+/// where it once panicked in the runner.
+#[test]
+fn a_program_value_boxed_as_a_crate_object_with_no_stand_in_fails_at_check() {
+    let root = lane(Some("framed_walked.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: coercing `Mood` to the native trait object `dyn events::held::Walked` is not \
+             supported yet"
+        ) && stderr.contains("--> src/main.rs:"),
+        "{stderr}"
+    );
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();

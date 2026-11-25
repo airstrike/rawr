@@ -58,3 +58,39 @@ pub fn drawings(items: &[Drawing<'_, Canvas>]) -> String {
     }
     canvas.marks().to_owned()
 }
+
+/// What a walk shows each cell's text to, as iced's `widget::Operation`.
+pub trait Visitor {
+    /// Sees `text`.
+    fn visit(&mut self, text: &str);
+}
+
+/// A cell a visitor walks, as iced's `Widget::operate` takes `&mut dyn
+/// Operation`: the runner has no stand-in for it, as it can't lend a
+/// program's value a `&mut dyn Visitor` yet.
+pub trait Walked {
+    /// Shows the cell's texts to `visitor`.
+    fn walk(&self, visitor: &mut dyn Visitor);
+}
+
+impl Walked for crate::framed::Label {
+    fn walk(&self, visitor: &mut dyn Visitor) {
+        visitor.visit(&self.0);
+    }
+}
+
+/// Each of `items` walked by one visitor, by the crate's concrete code.
+#[must_use]
+pub fn walked_all(items: &[Box<dyn Walked>]) -> String {
+    struct Collected(Vec<String>);
+    impl Visitor for Collected {
+        fn visit(&mut self, text: &str) {
+            self.0.push(text.to_owned());
+        }
+    }
+    let mut collected = Collected(Vec::new());
+    for item in items {
+        item.walk(&mut collected);
+    }
+    collected.0.join(" ")
+}

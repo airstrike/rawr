@@ -556,6 +556,7 @@ impl<'a> Parser<'a> {
             // the running build has one (#1264).
             #[cfg(feature = "rust-import")]
             if self.models.native_trait(&trait_name)
+                && self.native_stand_in(&trait_name)
                 && matches!(
                     target,
                     Ty::Boxed(_) | Ty::Counted(..) | Ty::Reference { mutable: false, .. }
@@ -604,6 +605,21 @@ impl<'a> Parser<'a> {
                 )
                 && let Some((owner, written)) = self.native_object_owner(&concrete, &trait_name)
             {
+                // Only a marked type of a native root has a stand-in of its
+                // own, in rawr's copy of its crate; any other value would
+                // reach native code as no type it takes.
+                #[cfg(feature = "rust-import")]
+                if !self.models.native_root {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: crate::resolve::Unsupported::said(format!(
+                            "coercing `{}` to the native trait object `dyn {trait_name}` is not \
+                             supported yet: rawr's runner has no stand-in for the trait, as a \
+                             method of it takes or gives a type the runner can't cross",
+                            concrete.name(&self.models)
+                        )),
+                        source: value.span,
+                    });
+                }
                 let source = std::mem::take(&mut value.source);
                 value.source = self.prelude_op(
                     PreludeOp::NativeObject,

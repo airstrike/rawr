@@ -200,6 +200,9 @@ struct Resolver<'a> {
     /// the crate's name (`Graph::island_mirrors`, #1249).
     #[cfg(feature = "rust-import")]
     mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    /// Whether the crate root is native Rust (`Graph::native_root`).
+    #[cfg(feature = "rust-import")]
+    native_root: bool,
     /// The roots of the facades of the program's own crate and its
     /// binary's (`Program::own`).
     #[cfg(feature = "rust-import")]
@@ -326,6 +329,8 @@ impl<'a> Resolver<'a> {
         let hosted = graph.hosted();
         #[cfg(feature = "rust-import")]
         let mirrors = graph.island_mirrors();
+        #[cfg(feature = "rust-import")]
+        let native_root = graph.native_root();
         #[cfg(feature = "rust-import")]
         let statics = graph.native_statics();
         #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
@@ -467,6 +472,8 @@ impl<'a> Resolver<'a> {
             expanded,
             #[cfg(feature = "rust-import")]
             mirrors,
+            #[cfg(feature = "rust-import")]
+            native_root,
             #[cfg(feature = "rust-import")]
             own,
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
@@ -1385,6 +1392,8 @@ impl<'a> Resolver<'a> {
             entry_crate,
             #[cfg(feature = "rust-import")]
             mirrors: self.mirrors,
+            #[cfg(feature = "rust-import")]
+            native_root: self.native_root,
             #[cfg(feature = "rust-import")]
             own: self.own,
             crates: prelude,

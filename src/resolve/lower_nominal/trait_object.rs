@@ -513,6 +513,18 @@ impl Parser<'_> {
         Ok(Some(members))
     }
 
+    /// Whether the runner has its one stand-in for the native trait
+    /// `trait_name` (`object::Pointer::StandIn`), which holds a program's
+    /// value of any type: none where a method names a type the runner
+    /// can't give or take, as `&mut dyn Visitor`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn native_stand_in(&self, trait_name: &str) -> bool {
+        crate::host::path::Path::parse(trait_name)
+            .ok()
+            .and_then(|path| self.models.host.trait_header(&path))
+            .is_some_and(|header| header.object.is_some())
+    }
+
     /// The functions of the program's impls for the type `owner` of each
     /// trait `names` holds of as the impl writes it, by name.
     #[cfg(feature = "rust-import")]

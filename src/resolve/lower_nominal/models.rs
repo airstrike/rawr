@@ -112,6 +112,10 @@ pub(super) struct Tables {
     /// of the crate, by package and path (#1249).
     #[cfg(feature = "rust-import")]
     pub(super) mirrors: BTreeSet<Box<[ImmutableString]>>,
+    /// Whether the crate root is native Rust (`resolve::Program::
+    /// native_root`), so a marked type has a stand-in of its own.
+    #[cfg(feature = "rust-import")]
+    pub(super) native_root: bool,
     /// Each marked type by its mirror's identity, which the native crate's
     /// signatures name it by: `fn base(theme: &Theme)` in a native module
     /// takes the marked `Theme`.
@@ -1045,6 +1049,8 @@ impl Models {
             entry_crate: program.entry_crate.clone(),
             #[cfg(feature = "rust-import")]
             mirrors: program.mirrors.keys().cloned().collect(),
+            #[cfg(feature = "rust-import")]
+            native_root: program.native_root,
             #[cfg(feature = "rust-import")]
             mirrored,
             crates: program.crates.clone(),

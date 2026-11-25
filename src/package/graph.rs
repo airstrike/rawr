@@ -907,6 +907,14 @@ impl Graph {
         )
     }
 
+    /// Whether the crate root is native Rust whose marked modules rawr
+    /// interprets (D501): only then does rawr's copy of the crate declare a
+    /// stand-in for a marked type native code holds as a trait object.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn native_root(&self) -> bool {
+        self.entry_package().native_root().is_some()
+    }
+
     /// The marked types the runner holds as their mirrors in rawr's copy
     /// of the crate where a crate's generic takes one (`island::mirrors`,
     /// #1249); none when the shadow crate stands no trampolines.

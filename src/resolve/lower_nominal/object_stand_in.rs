@@ -253,16 +253,12 @@ impl Parser<'_> {
                 span,
             } = pending;
             let ty = self.inference.resolve(&ty);
-            // A marked type's is the stand-in rawr's copy of its crate
-            // declares for it (#1264); any other type of the program's is
-            // the trait's one stand-in, so a new one builds no runner.
-            let Ty::Script(id, _) = ty else {
-                continue;
-            };
-            if matches!(
-                self.models.holder(id),
-                rawr_import::classify::representability::convert::Holder::Mirror
-            ) && self.native_object_owner(&ty, &trait_name).is_some()
+            // A marked type of a native root's is the stand-in rawr's copy
+            // of its crate declares for it (#1264); any other type of the
+            // program's is the trait's one stand-in, so a new one builds no
+            // runner.
+            if !matches!(ty, Ty::Script(..))
+                || self.models.native_root && self.native_object_owner(&ty, &trait_name).is_some()
             {
                 continue;
             }

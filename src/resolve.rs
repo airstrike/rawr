@@ -133,6 +133,11 @@ pub struct Program {
     /// crate's name (#1249).
     #[cfg(feature = "rust-import")]
     mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    /// Whether the crate root is native Rust whose marked modules rawr
+    /// interprets (D501), whose copy declares a stand-in for each marked
+    /// type native code holds as a trait object (#1264).
+    #[cfg(feature = "rust-import")]
+    native_root: bool,
     /// The roots of the facades of the program's own crate and its
     /// binary's: the crate rawr builds from the program's marked sources,
     /// whose facade a save that changes what native code sees changes.
@@ -820,6 +825,8 @@ fn resolve_with_evidence_and_namespace(
         entry_crate: None,
         #[cfg(feature = "rust-import")]
         mirrors: BTreeMap::new(),
+        #[cfg(feature = "rust-import")]
+        native_root: false,
         #[cfg(feature = "rust-import")]
         own: Box::new([]),
         crates: None,
