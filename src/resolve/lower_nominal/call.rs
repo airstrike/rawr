@@ -1023,6 +1023,37 @@ impl<'a> Parser<'a> {
         self.host_callable_of(value, false)
     }
 
+    /// `&mut f` or `&f` of a named function or closure where the host takes
+    /// a borrow of a callable, as `operation.traverse(&mut |operation| ..)`
+    /// gives iced's `&mut dyn FnMut(&mut dyn Operation)`: the host callable
+    /// it is, borrowed by the binding for the call alone.
+    pub(super) fn borrowed_host_callable(
+        &mut self,
+        value: &mut ParsedExpr,
+        nullary: bool,
+    ) -> Result<(), Error> {
+        let Ty::Reference { mutable, target } = self.inference.resolve(&value.ty) else {
+            return Ok(());
+        };
+        if !matches!(self.inference.resolve(&target), Ty::FnItem { .. }) {
+            return Ok(());
+        }
+        let mut item = value.clone();
+        item.ty = *target;
+        self.host_callable_of(&mut item, nullary)?;
+        if !matches!(item.ty, Ty::Callable { .. }) {
+            return Ok(());
+        }
+        value.source = item.source;
+        value.prelude = item.prelude;
+        value.ty = Ty::Reference {
+            mutable,
+            target: Box::new(item.ty),
+        };
+        value.lvalue = None;
+        Ok(())
+    }
+
     /// [`host_callable`](Self::host_callable), where a function of no
     /// inputs is a callable too when `nullary`: an imported item takes
     /// Freya's `fn app()` as the closure that calls it (D551.6).

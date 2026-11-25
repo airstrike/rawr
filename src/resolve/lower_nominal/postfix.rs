@@ -1159,8 +1159,20 @@ impl<'a> Parser<'a> {
                     if let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) {
                         let owner = self.models.item_owner(&path).cloned();
                         let start = value.span.start();
+                        // An argument may be `&mut place` or `&mut |..| ..`,
+                        // as `operation.traverse(&mut |operation| ..)`, whose
+                        // closure takes the parameter types the method
+                        // gives it. The item's first input is the receiver.
+                        self.hint_closures(&items, None);
+                        self.deferred_hints = None;
+                        if !self.closure_hints.is_empty() {
+                            self.closure_hints.remove(0);
+                        }
+                        if !self.closure_outputs.is_empty() {
+                            self.closure_outputs.remove(0);
+                        }
                         let (arguments, end) =
-                            self.parse_call_arguments("trait object method arguments")?;
+                            self.parse_borrowing_arguments("trait object method arguments")?;
                         let mut inputs = Vec::with_capacity(arguments.len() + 1);
                         // A `Box<dyn Trait>` is lent as the `&dyn Trait`
                         // the method takes, as rustc derefs it.

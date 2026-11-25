@@ -535,8 +535,11 @@ impl Definition {
             .iter()
             .any(|parameter| match parameter.shape() {
                 host::type_ref::Shape::Callable { .. } => true,
-                // An `Option` of a closure, as `on_toggle_maybe(Option<F>)`.
-                host::type_ref::Shape::Option(inner) => {
+                // An `Option` of a closure, as `on_toggle_maybe(Option<F>)`,
+                // or a borrow of one, as a borrowed callable's object is read
+                // (`&mut dyn FnMut(..)` of iced's `Operation::traverse`).
+                host::type_ref::Shape::Option(inner)
+                | host::type_ref::Shape::Reference { target: inner, .. } => {
                     matches!(inner.shape(), host::type_ref::Shape::Callable { .. })
                 }
                 _ => false,

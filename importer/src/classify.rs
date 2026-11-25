@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 296;
+const CLASSIFIER_VERSION: u32 = 306;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10469,6 +10469,12 @@ impl<'graph> Context<'graph> {
             .map_or((signature, generics), |(signature, generics)| {
                 (signature, generics)
             });
+        let borrowed = self.borrowed_callables(signature, generics);
+        let (signature, generics) = borrowed
+            .as_ref()
+            .map_or((signature, generics), |(signature, generics)| {
+                (signature, generics)
+            });
         let objects = object_inputs(signature, generics, |trait_id, arguments| {
             blanket_call(self.graph, trait_id, arguments).is_some()
         });
@@ -10575,6 +10581,170 @@ impl<'graph> Context<'graph> {
             },
             other => other.clone(),
         }
+    }
+
+    /// `signature` and `generics` with each input that borrows a callable's
+    /// object, `&mut dyn FnMut(A..) -> B` or `&dyn Fn(A..) -> B`, as iced's
+    /// `Operation::traverse(&mut self, operate: &mut dyn FnMut(&mut dyn
+    /// Operation<T>))` takes, read as a borrow of a parameter `impl FnMut(A..)
+    /// -> B` of its own, with no `'static` bound: the call borrows it for
+    /// itself alone, and the bridge's borrow of the closure it makes coerces
+    /// to the object, as rustc coerces `&mut |..| ..`. `None` when there is
+    /// none.
+    fn borrowed_callables<'g>(
+        &self,
+        signature: &'g model::Signature,
+        generics: &model::Generics,
+    ) -> Option<(model::Signature, model::Generics)> {
+        // The object's callable trait, its inputs' tuple, the bound's
+        // binders and its output.
+        let callable = |ty: &'g model::Type| -> Option<BorrowedCallable<'g>> {
+            let model::Type::Reference {
+                lifetime,
+                mutability,
+                ty,
+            } = ty
+            else {
+                return None;
+            };
+            let model::Type::TraitObject { bounds, .. } = ty.as_ref() else {
+                return None;
+            };
+            let mut called = None;
+            let mut output = None;
+            for bound in bounds.iter() {
+                match bound {
+                    model::ObjectBound::Trait(model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        binders,
+                    }) if called.is_none() => {
+                        let name = match mutability {
+                            model::Mutability::Mutable => "FnMut",
+                            model::Mutability::Shared => "Fn",
+                        };
+                        if !self.is_core_trait(trait_id, name) {
+                            return None;
+                        }
+                        let [model::Argument::Type(inputs @ model::Type::Tuple(_))] =
+                            arguments.as_ref()
+                        else {
+                            return None;
+                        };
+                        called = Some((trait_id, inputs, binders));
+                    }
+                    model::ObjectBound::ProjectionEquality { associated, ty, .. }
+                        if output.is_none() =>
+                    {
+                        output = Some((associated, ty));
+                    }
+                    _ => return None,
+                }
+            }
+            let (trait_id, inputs, binders) = called?;
+            let (associated, output) = output?;
+            Some((
+                lifetime,
+                *mutability,
+                trait_id,
+                inputs,
+                &binders[..],
+                (associated, output.clone()),
+            ))
+        };
+        let (.., (associated, _)) = signature.inputs().find_map(callable)?;
+        // `FnOnce::Output`, which the object binds, and its trait: the graph
+        // holds them where the crate names `FnMut` alone.
+        let once = match self
+            .graph
+            .definition_index(associated)
+            .and_then(|index| self.graph.definition_at(index))
+            .map(model::Definition::owner)
+        {
+            Some(model::Owner::Definition(owner)) => owner.clone(),
+            _ => self.callable_traits()?.1,
+        };
+        let output_id = associated.clone();
+        let mut next = generics
+            .parameters()
+            .map(model::Parameter::index)
+            .filter(|index| *index & representability::signature::FUTURE_OUTPUT == 0)
+            .max()
+            .map_or(0, |index| index + 1);
+        let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
+        let mut predicates = generics.predicates().cloned().collect::<Vec<_>>();
+        let mut inputs = Vec::new();
+        for input in signature.inputs() {
+            let Some((lifetime, mutability, trait_id, arguments, binders, (_, output))) =
+                callable(input)
+            else {
+                inputs.push(input.clone());
+                continue;
+            };
+            // A parameter is read by its index alone, so one an item with
+            // no parameters of its own declares is owned by the trait.
+            let owner = generics
+                .parameters()
+                .next()
+                .map_or_else(|| trait_id.clone(), |parameter| parameter.owner().clone());
+            let index = next;
+            next += 1;
+            let parameter = model::Type::Parameter {
+                owner: owner.clone(),
+                index,
+            };
+            parameters.push(model::Parameter::new(
+                owner,
+                index,
+                format!("impl FnMut#{index}").into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            ));
+            predicates.push(model::Predicate::Bound {
+                ty: parameter.clone(),
+                bound: model::Bound::Trait {
+                    trait_id: trait_id.clone(),
+                    arguments: Box::from([model::Argument::Type(arguments.clone())]),
+                    polarity: model::Polarity::Positive,
+                    binders: binders.into(),
+                },
+            });
+            predicates.push(model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection {
+                    trait_id: once.clone(),
+                    associated: output_id.clone(),
+                    arguments: Box::from([
+                        model::Argument::Type(parameter.clone()),
+                        model::Argument::Type(arguments.clone()),
+                    ]),
+                },
+                ty: output,
+            });
+            inputs.push(model::Type::Reference {
+                lifetime: lifetime.clone(),
+                mutability,
+                ty: Box::new(parameter),
+            });
+        }
+        let rewritten = model::Signature::new(
+            signature.safety(),
+            signature.const_function(),
+            signature.async_function(),
+            signature.abi().into(),
+            signature.variadic(),
+            signature.binders().cloned().collect(),
+            signature.receiver().clone(),
+            inputs.into_boxed_slice(),
+            signature.output().clone(),
+        )
+        .with_guard(signature.guard().cloned());
+        Some((
+            rewritten,
+            model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice()),
+        ))
     }
 
     /// `signature` and `generics` with each input that is a safe Rust
@@ -11215,7 +11385,8 @@ impl<'graph> Context<'graph> {
         // `VirtualScrollView<D, B>::auto_hide_scrollbars(self, bool) -> Self`
         // names it in its receiver and output.
         // A closure Rawr makes may also come as an `Option` of one, as
-        // iced's `on_toggle_maybe(Option<F>)` takes it.
+        // iced's `on_toggle_maybe(Option<F>)` takes it, or as a borrow of
+        // one, as a borrowed callable's object is read (`borrowed_callables`).
         let made = call.as_ref().map(|(callable, ..)| *callable);
         for callable in made
             .iter()
@@ -11228,7 +11399,9 @@ impl<'graph> Context<'graph> {
                 .filter(|input| {
                     **input != closure
                         && !(made == Some(callable)
-                            && matches!(input, representability::convert::Type::Option(inner)
+                            && matches!(input,
+                                representability::convert::Type::Option(inner)
+                                | representability::convert::Type::Borrowed { ty: inner, .. }
                                 if **inner == closure))
                 })
                 .chain([&output])
@@ -14887,6 +15060,18 @@ fn object_inputs(
     ))
 }
 
+/// A borrowed callable's object input (`Context::borrowed_callables`): its
+/// borrow's lifetime and mutability, its `Fn*` trait, its inputs' tuple,
+/// the bound's binders, and `FnOnce::Output` with the type it binds.
+type BorrowedCallable<'g> = (
+    &'g model::Lifetime,
+    model::Mutability,
+    &'g api::identity::Definition,
+    &'g model::Type,
+    &'g [model::Binder],
+    (&'g api::identity::Definition, model::Type),
+);
+
 fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
     let mut binders = signature.binders();
     match signature.receiver() {
@@ -17033,6 +17218,38 @@ fn substitute_parameters(
             id: id.clone(),
             bounds: bounds.clone(),
             captures: captures.iter().map(argument).collect(),
+        },
+        // A trait object's arguments and bindings, as `T` of the trait's
+        // `traverse(&mut self, &mut dyn FnMut(&mut dyn Visit<T>))` at its
+        // default.
+        model::Type::TraitObject { bounds, lifetime } => model::Type::TraitObject {
+            bounds: bounds
+                .iter()
+                .map(|bound| match bound {
+                    model::ObjectBound::Trait(model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity,
+                        binders,
+                    }) => model::ObjectBound::Trait(model::Bound::Trait {
+                        trait_id: trait_id.clone(),
+                        arguments: arguments.iter().map(argument).collect(),
+                        polarity: *polarity,
+                        binders: binders.clone(),
+                    }),
+                    model::ObjectBound::ProjectionEquality {
+                        associated,
+                        arguments,
+                        ty,
+                    } => model::ObjectBound::ProjectionEquality {
+                        associated: associated.clone(),
+                        arguments: arguments.iter().map(argument).collect(),
+                        ty: substitute_parameters(ty, substitutions),
+                    },
+                    other @ model::ObjectBound::Trait(_) => other.clone(),
+                })
+                .collect(),
+            lifetime: lifetime.clone(),
         },
         other => other.clone(),
     }

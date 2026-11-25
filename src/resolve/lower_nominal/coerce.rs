@@ -163,6 +163,14 @@ impl<'a> Parser<'a> {
             self.option_host_callable(value)?;
             source = self.inference.resolve(&value.ty);
         }
+        if let Ty::Reference {
+            target: borrowed, ..
+        } = &target
+            && matches!(self.inference.resolve(borrowed), Ty::Callable { .. })
+        {
+            self.borrowed_host_callable(value, false)?;
+            source = self.inference.resolve(&value.ty);
+        }
         // std's range where an iterator is taken (`-> impl Iterator`,
         // `Box<dyn Iterator>`): the iterator over its items, as the range
         // is its own `Iterator`. A box is its value at runtime.

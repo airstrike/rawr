@@ -731,6 +731,8 @@ fn resolve_path(
                 span: binding.span,
             })));
         }
+        #[cfg(feature = "rust-import")]
+        defaulted_trait_arguments(&name, &mut arguments, host, span);
         return Ok(Path {
             name: format!("{DYN_PREFIX}{name}").into(),
             target: Target::Builtin,
@@ -1150,6 +1152,54 @@ fn defaulted_arguments(
         filled.push(ty);
     }
     arguments.extend(filled.drain(written..).map(Argument::Type));
+}
+
+/// The defaulted arguments a native trait's object is written without, as
+/// rustc fills them: `dyn Operation` is `dyn Operation<()>`, as the crate's
+/// signatures name it. `arguments` holds the written ones first, then the
+/// `=Name<T>` bindings. Nothing is filled unless every missing argument
+/// has a default Rawr can name.
+#[cfg(feature = "rust-import")]
+fn defaulted_trait_arguments(
+    trait_name: &str,
+    arguments: &mut Vec<Argument>,
+    host: &host::Registry,
+    span: Span,
+) {
+    if !is_native_trait(trait_name) {
+        return;
+    }
+    let Some(header) = host::path::Path::parse(trait_name)
+        .ok()
+        .and_then(|path| host.trait_header(&path))
+    else {
+        return;
+    };
+    let bound = |argument: &Argument| {
+        matches!(argument, Argument::Type(Type::Path(binding))
+            if binding.name.starts_with(item::type_ref::BINDING_PREFIX))
+    };
+    let mut filled = arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            Argument::Type(ty) if !bound(argument) => Some(ty.clone()),
+            Argument::Type(_) | Argument::Lifetime(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let written = filled.len();
+    let owner = host.type_owner(trait_name);
+    for index in written..header.parameters.len() {
+        let Some(Some(default)) = header.defaults.get(index) else {
+            return;
+        };
+        let parameters = &header.parameters[..index];
+        let Some(ty) = host_type(default, parameters, &filled, owner, None, host, span) else {
+            return;
+        };
+        filled.push(ty);
+    }
+    let at = arguments.iter().position(bound).unwrap_or(arguments.len());
+    arguments.splice(at..at, filled.drain(written..).map(Argument::Type));
 }
 
 /// A host signature type as a header names it, with `parameters` read as

@@ -322,6 +322,7 @@ impl<'a> Parser<'a> {
             self.iterator_argument(items, index, argument)?;
             self.host_callable_of(argument, !facade)?;
             self.option_host_callable(argument)?;
+            self.borrowed_host_callable(argument, !facade)?;
             // A `T: Into<Length>` passed where the library takes a `Length`:
             // the caller converted it (`convert_into_host`), so it is one.
             if facade

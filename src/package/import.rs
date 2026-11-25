@@ -4424,7 +4424,7 @@ fn writes_declared(
     let closure = |input: &Type| {
         calls().any(|filled| *input == Type::Parameter(filled.parameter()))
             || call.is_some_and(|call| {
-                matches!(input, Type::Option(inner)
+                matches!(input, Type::Option(inner) | Type::Borrowed { ty: inner, .. }
                     if **inner == Type::Parameter(call.parameter()))
             })
     };
@@ -5170,8 +5170,23 @@ fn callable_signature(
             matches!(input, representability::convert::Type::Option(inner)
                 if **inner == representability::convert::Type::Parameter(call.parameter()))
         });
+        // A borrow of the closure, as a borrowed callable's object is read
+        // (`&mut dyn FnMut(..)` of iced's `Operation::traverse`).
+        let borrowed = call.and_then(|call| match input {
+            representability::convert::Type::Borrowed { mutable, ty }
+                if **ty == representability::convert::Type::Parameter(call.parameter()) =>
+            {
+                Some((call, *mutable))
+            }
+            _ => None,
+        });
         if let Some(call) = found {
             builder.try_parameter(closure(call, allocation)?)?;
+        } else if let Some((call, mutable)) = borrowed {
+            builder.try_parameter(host::type_ref::Type::reference(
+                mutable,
+                closure(call, allocation)?,
+            ))?;
         } else if let Some(call) = optional {
             builder.try_parameter(host::type_ref::Type::option(closure(call, allocation)?))?;
         } else {

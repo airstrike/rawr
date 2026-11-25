@@ -20246,6 +20246,27 @@ fn render_function_arguments(
                         "    let argument_{position}{named} = take_native::<{rust}>(arguments, {runtime})?;"
                     )
                     .map_err(request::unwritable)?;
+                } else if let Some((call, mutable)) =
+                    call.and_then(|call| borrowed_closure(ty, call))
+                {
+                    // A borrow of the closure, as a borrowed callable's
+                    // object is read (`&mut dyn FnMut(..)` of iced's
+                    // `Operation::traverse`): the call's borrow of the
+                    // closure made here, which rustc coerces to the object.
+                    render_take_callable(
+                        position,
+                        runtime,
+                        call,
+                        signature,
+                        substitutions,
+                        output,
+                    )?;
+                    let borrow = if mutable { "&mut " } else { "&" };
+                    writeln!(
+                        output,
+                        "    #[allow(unused_mut)]\n    let mut argument_{position} = argument_{position};\n    let argument_{position} = {borrow}argument_{position};"
+                    )
+                    .map_err(request::unwritable)?;
                 } else if let Some(call) = call
                     .filter(|call| *ty == convert::Type::Parameter(call.parameter()))
                     .or_else(|| crossed.closure_at(position, ty))
@@ -20351,7 +20372,9 @@ fn function_argument_list(
             // A script closure, made a Rust closure (D513.7 b), or an
             // `Option` of one.
             _ if callable_parameter(ty, signature)
-                || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature)) =>
+                || matches!(ty,
+                    convert::Type::Option(inner) | convert::Type::Borrowed { ty: inner, .. }
+                    if callable_parameter(inner, signature)) =>
             {
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
@@ -21904,6 +21927,23 @@ fn boxed_callable(ty: &convert::Type) -> Option<&convert::Type> {
         | convert::Type::Borrowed { ty: inner, .. }
         | convert::Type::Sequence { element: inner, .. } => boxed_callable(inner),
         convert::Type::Result(ok, err) => boxed_callable(ok).or_else(|| boxed_callable(err)),
+        _ => None,
+    }
+}
+
+/// The closure `call` fills and whether it is borrowed `&mut`, where `ty`
+/// borrows it, as a borrowed callable's object is read (`&mut dyn
+/// FnMut(..)` of iced's `Operation::traverse`).
+fn borrowed_closure<'c>(
+    ty: &convert::Type,
+    call: &'c crate::classify::representability::callable::Call,
+) -> Option<(&'c crate::classify::representability::callable::Call, bool)> {
+    match ty {
+        convert::Type::Borrowed { mutable, ty }
+            if **ty == convert::Type::Parameter(call.parameter()) =>
+        {
+            Some((call, *mutable))
+        }
         _ => None,
     }
 }

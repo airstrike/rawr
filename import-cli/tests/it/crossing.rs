@@ -4500,8 +4500,11 @@ fn a_call_through_a_generic_bodys_bound_keeps_the_trait_method_at_each_instance(
 /// Visit`, through the trait's stand-in, as iced's `UserInterface` lends
 /// a widget's `operate` its `&mut dyn Operation<()>`: the program calls
 /// the object's `&mut self` method, which native code dispatches by the
-/// object's vtable, and passes the object on to the item's impl, as cargo
-/// runs it.
+/// object's vtable, and its `traverse(&mut |visit| ..)` with a closure
+/// that passes the object native code lends it on to the item's impl, as
+/// iced's `Container::operate` does. The closure's parameter takes the
+/// method's `&mut dyn Visit` (`dyn Visit<()>`, its default), as rustc
+/// reads it. The output is `cargo run`'s.
 #[test]
 fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     let root = lane(Some("tinted_visited.rs"));
@@ -4529,7 +4532,7 @@ fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "[\"tallied\", \"calm\"]\n[\"tallied\", \"tallied\", \"deep\"]\n"
+        "[\"tallied\", \"-calm\"]\n[\"tallied\", \"-tallied\", \"--deep\"]\n"
     );
 }
 

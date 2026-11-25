@@ -4422,6 +4422,16 @@ fn callable_signature(
             representability::convert::Type::Option(inner) if let Some(call) = made(inner) => {
                 Type::Option(Box::new(closure(call)?))
             }
+            // A borrow of one, as a borrowed callable's object is read
+            // (`&mut dyn FnMut(..)` of iced's `Operation::traverse`).
+            representability::convert::Type::Borrowed { mutable, ty: inner }
+                if let Some(call) = made(inner) =>
+            {
+                Type::Reference {
+                    mutable: *mutable,
+                    target: Box::new(closure(call)?),
+                }
+            }
             input => item_input_ty(input, all)?,
         });
     }

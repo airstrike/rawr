@@ -286,10 +286,11 @@ where
         self.item.width() + 2
     }
 
-    /// Notes itself, then the item, as iced's `Container::operate` passes
-    /// its content the operation.
+    /// Notes itself, then the item one level deeper, as iced's
+    /// `Container::operate` passes its content the operation through
+    /// `operation.traverse(&mut |operation| ..)`.
     fn operate(&mut self, visit: &mut dyn crate::visits::Visit) {
         visit.visit("tallied");
-        self.item.operate(visit);
+        visit.traverse(&mut |visit| self.item.operate(visit));
     }
 }
