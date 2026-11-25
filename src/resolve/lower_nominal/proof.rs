@@ -277,6 +277,8 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             Op::StandIn(coercion) => ExecutableOp::StandIn(coercion),
             #[cfg(feature = "rust-import")]
+            Op::BoxedCallable => ExecutableOp::BoxedCallable,
+            #[cfg(feature = "rust-import")]
             Op::CallableObject { call, span } => {
                 let call = self.inference.resolve(&call);
                 ExecutableOp::CallableObject(callable_object::Coercion::new(
@@ -754,6 +756,17 @@ impl<'a> Parser<'a> {
             }
             Ty::Reverse(_) | Ty::Cow(_) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
+            }
+            // A crate's `Box<dyn Fn(A) -> B>`, as iced's `Catalog::default`
+            // gives a `StyleFn`: the box native code made, or the program's
+            // closure, a function type as a crate value's closure is (T417).
+            Ty::Boxed(inner)
+                if matches!(
+                    self.inference.resolve(&inner),
+                    Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. }
+                ) =>
+            {
+                intrinsic::Type::Object(crate::item::type_ref::FN_TYPE.into())
             }
             // A `Box` is its value at runtime (D492.3), which a crate's
             // `Box<T>` boxes where it takes it.

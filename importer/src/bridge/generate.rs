@@ -20673,6 +20673,36 @@ fn render_take_input(
     // does beside a `&T` native code lent (`LENT_ARGUMENTS`), whose values
     // a copy would take out of their slots for good.
     let lent = substituted(ty, signature, substitutions)?;
+    // `&Box<dyn Fn(A..) -> B>`, as iced's `Catalog::style(&self, class:
+    // &StyleFn<'_, Theme>)` takes the class a container holds: the box
+    // native code made, lent from its slot, or a closure calling the
+    // program's callable, boxed for the call (#2698).
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: boxed,
+    } = &lent
+        && let Some(rust) = dyn_callable_type(boxed)
+    {
+        let made = render_dyn_callable(boxed, &format!("argument_{local}_value"))?;
+        return writeln!(
+            output,
+            "    let argument_{local}_value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten();
+    #[allow(unused_mut)]
+    let mut argument_{local}_held: PlaceHeld<{rust}>;
+    let argument_{local}_made: {rust};
+    let argument_{local}: &{rust} = match argument_{local}_value.clone().try_cast_result::<NativeHandle>() {{
+        Ok(handle) => {{
+            argument_{local}_held = arguments.arena.lease_place(handle)?;
+            &*argument_{local}_held.get_mut()
+        }}
+        Err(_) => {{
+            argument_{local}_made = {made}?;
+            &argument_{local}_made
+        }}
+    }};"
+        )
+        .map_err(request::unwritable);
+    }
     // `&[Option<&dyn Value>]`, as tracing-core's `value_set_all` takes:
     // the objects native code makes of the program's values, each held for
     // as long as the slice lends it (#1591).
@@ -22036,6 +22066,21 @@ fn render_callable_closure(
             lends.push(lend);
             continue;
         }
+        // A native value the closure borrows shared whose type isn't
+        // `Clone`, as a palette's `Fn(&P) -> char` class takes `&P`: lent
+        // for the call alone, as a `&mut` one is, since no copy of it can
+        // cross.
+        if let convert::Type::Borrowed { mutable: false, ty } = input
+            && lent_mutably(ty)
+            && !clones(ty)
+        {
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("closure input type"))?;
+            parameters.push(format!("input_{position}: &{rust}"));
+            let lend = LentInput::new(position, false, rust);
+            values.push(lend.value());
+            lends.push(lend);
+            continue;
+        }
         // One whose type carries lifetimes, as ratatui's `draw(impl
         // FnOnce(&mut Frame))` lends `Frame<'_>` (#1457): lent for the call
         // too, at every lifetime its family takes, as a script function's
@@ -22918,6 +22963,8 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
+        // A boxed closure: native code's own, or the program's callable.
+        ty if dyn_callable(ty).is_some() => write!(output, "{}", render_dyn_callable(ty, value)?),
         // Rawr's `Box`, which holds its value as itself, as Rust's `Box`.
         ty if let Some(element) = boxed_element(ty) => {
             let mut converted = String::new();
@@ -23262,6 +23309,12 @@ fn render_to_dynamic(
         convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
             write!(output, "{frame}.give_{slot}(arguments.arena, {value})")
         }
+        // A boxed closure native code made, held as itself, which native
+        // code takes back as it is.
+        ty if dyn_callable(ty).is_some() => write!(
+            output,
+            "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
+        ),
         // Rust's `Box`, as rawr's, which holds its value as itself.
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
@@ -23768,6 +23821,61 @@ fn std_time(ty: &convert::Type) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+/// The inputs and output of `ty` when it is a crate's `Box<dyn Fn(A..) ->
+/// B>`, as iced's `StyleFn<'a, Theme>` is: the box native code makes or
+/// takes as it is, which a program's closure fills (#2698).
+fn dyn_callable(ty: &convert::Type) -> Option<(&[convert::Type], &convert::Type)> {
+    let convert::Type::Nominal { definition, .. } = boxed_element(ty)? else {
+        return None;
+    };
+    if *definition != crate::surface::identity::Definition::callable() {
+        return None;
+    }
+    let convert::Type::Nominal { arguments, .. } = boxed_element(ty)? else {
+        return None;
+    };
+    let (output, inputs) = arguments.split_last()?;
+    Some((inputs, output))
+}
+
+/// `Box<dyn Fn(A..) -> B>` of `ty`, a [`dyn_callable`], spelled.
+fn dyn_callable_type(ty: &convert::Type) -> Option<String> {
+    let (inputs, output) = dyn_callable(ty)?;
+    let inputs = inputs
+        .iter()
+        .map(concrete_type)
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!(
+        "Box<dyn Fn({}) -> {}>",
+        inputs.join(", "),
+        concrete_type(output)?
+    ))
+}
+
+/// A generated `Result<Box<dyn Fn(..) -> ..>, Error>` expression of the
+/// [`dyn_callable`] `ty` from the `Dynamic` named `value`: the box native
+/// code gave, moved out of its slot, or a closure calling the program's
+/// callable `value` holds, boxed.
+fn render_dyn_callable(ty: &convert::Type, value: &str) -> Result<String, request::Error> {
+    use crate::classify::representability::{callable, signature};
+    let unwritten = || request::drift("a boxed closure's type");
+    let (inputs, output) = dyn_callable(ty).ok_or_else(unwritten)?;
+    let rust = dyn_callable_type(ty).ok_or_else(unwritten)?;
+    let call = callable::Call::new(0, inputs.into(), output.clone());
+    let signature = signature::Signature::new(Box::default(), inputs.into(), output.clone());
+    let closure = render_callable_closure(
+        Witnesses::Coerced(value),
+        &format!("{value}.clone()"),
+        &call,
+        &signature,
+        &[],
+        None,
+    )?;
+    Ok(format!(
+        "match {value}.clone().try_cast_result::<NativeHandle>() {{ Ok(handle) => arguments.arena.take::<{rust}>(handle), Err(_) => (|| -> Result<{rust}, Error> {{ let made = {closure}; Ok(Box::new(made)) }})() }}"
+    ))
 }
 
 /// `T` of Rust's `Box<T>`, which crosses as rawr's `Box`: the value it
@@ -28515,6 +28623,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         ty if let Some(element) = range_inclusive_element(ty) => {
             format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
+        ty if let Some(rust) = dyn_callable_type(ty) => rust,
         ty if let Some(element) = boxed_element(ty) => format!("Box<{}>", concrete_type(element)?),
         ty if let Some((rust, element)) = std_generic(ty) => {
             format!("{rust}<{}>", concrete_type(element)?)

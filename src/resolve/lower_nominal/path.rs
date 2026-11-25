@@ -634,6 +634,27 @@ impl<'a> Parser<'a> {
                 Some(self.models.definition(id).clone())
             }
             Some(ty) if qualified_model.is_none() => {
+                // A crate type's function of a crate trait the parameter's
+                // bound names, as iced's `Theme::default()` of `Theme:
+                // Catalog` at iced's `Theme`: the crate's item at the type's
+                // path, as `Ink::default()` written out is (#2698).
+                if let Ty::Host { proof, .. } = &ty
+                    && owner_id(&ty).is_none_or(|id| self.models.method(id, &member).is_none())
+                {
+                    let path = format!("{}::{member}", proof.definition.path());
+                    if let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) {
+                        let item_owner = self.models.item_owner(&path).cloned();
+                        let items = value_or_call(
+                            items,
+                            matches!(self.peek(), Token::LeftParen | Token::Unit),
+                        );
+                        return self.parse_host_function_or_item(
+                            items.into_boxed_slice(),
+                            item_owner,
+                            path_span,
+                        );
+                    }
+                }
                 let Some(definition) = owner_id(&ty)
                     .and_then(|id| self.models.method(id, &member))
                     .cloned()

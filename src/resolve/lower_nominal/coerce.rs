@@ -890,10 +890,71 @@ impl<'a> Parser<'a> {
         expected: &Ty,
         argument: &mut ParsedExpr,
     ) -> Result<Option<String>, Error> {
+        #[cfg(feature = "rust-import")]
+        self.boxed_callable_argument(expected, argument)?;
         let outer = std::mem::replace(&mut self.crate_argument, true);
         let coerced = self.coerce_expr(expected, argument);
         self.crate_argument = outer;
         coerced
+    }
+
+    /// A crate call's `Box<dyn Fn(A..) -> B>` argument, or a borrow of one,
+    /// as `theme.style(&self.class)` lends a container's class (#2698): the
+    /// box native code gave, as it is, or the program's function pointer as
+    /// the callable that calls it, which the runner boxes. Which one it is
+    /// is known only at runtime (`op::boxed_callable`).
+    #[cfg(feature = "rust-import")]
+    fn boxed_callable_argument(
+        &mut self,
+        expected: &Ty,
+        argument: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        let boxed_function = |this: &Self, ty: &Ty| {
+            let ty = match this.inference.resolve(ty) {
+                Ty::Reference {
+                    mutable: false,
+                    target,
+                } => this.inference.resolve(&target),
+                ty => ty,
+            };
+            let Ty::Boxed(inner) = ty else {
+                return None;
+            };
+            Some(this.inference.resolve(&inner))
+        };
+        let (Some(Ty::Callable { .. }), Some(function @ Ty::Fn { .. })) = (
+            boxed_function(self, expected),
+            boxed_function(self, &argument.ty),
+        ) else {
+            return Ok(());
+        };
+        let given = self.temporary("boxed");
+        let mut callable = self.operator_expr(
+            origin::Fragment::plain(given.as_str()),
+            function,
+            argument.span,
+        );
+        self.host_callable(&mut callable)?;
+        if !matches!(self.inference.resolve(&callable.ty), Ty::Callable { .. }) {
+            return Ok(());
+        }
+        let helper = self.push_op(Op::BoxedCallable);
+        let mut rendered = origin::Fragment::plain(format!("{{ let {given} = "));
+        rendered.push(argument.rendered_source());
+        rendered.push_text("; ");
+        rendered.push(self.op_call(
+            &helper,
+            [
+                origin::Fragment::plain(given.as_str()),
+                callable.rendered_source(),
+            ],
+        ));
+        rendered.push_text(" }");
+        argument.prelude = origin::Fragment::default();
+        argument.source = rendered;
+        argument.source.cover(argument.span);
+        argument.lvalue = None;
+        Ok(())
     }
 
     /// iced's `impl IntoIterator<Item = Element>`, a facade slice of

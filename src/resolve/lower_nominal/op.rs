@@ -48,6 +48,9 @@ pub(super) enum Op {
     /// stand-in (#2698), passed on as the trait's object when it does.
     #[cfg(feature = "rust-import")]
     StandIn(super::object_stand_in::Coercion),
+    /// A crate call's `Box<dyn Fn>` argument (`boxed_callable`).
+    #[cfg(feature = "rust-import")]
+    BoxedCallable,
     #[cfg(feature = "rust-import")]
     Imported {
         path: ImmutableString,
@@ -2156,6 +2159,8 @@ pub(super) enum ExecutableOp {
     #[cfg(feature = "rust-import")]
     StandIn(super::object_stand_in::Coercion),
     #[cfg(feature = "rust-import")]
+    BoxedCallable,
+    #[cfg(feature = "rust-import")]
     Imported {
         proof: crate::host::structural::Proof,
     },
@@ -2446,7 +2451,7 @@ impl ExecutableOp {
             #[cfg(feature = "rust-import")]
             Self::CallableObject(coercion) => coercion.dependencies(),
             #[cfg(feature = "rust-import")]
-            Self::StandIn(_) => BTreeSet::new(),
+            Self::StandIn(_) | Self::BoxedCallable => BTreeSet::new(),
             Self::Witnessed(op) => op.placeholder.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof.dependencies(),
@@ -2475,7 +2480,8 @@ impl ExecutableOp {
             Self::Imported { .. }
             | Self::Sequence(_)
             | Self::CallableObject(_)
-            | Self::StandIn(_) => None,
+            | Self::StandIn(_)
+            | Self::BoxedCallable => None,
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
             | Self::Struct { .. }
@@ -2498,7 +2504,10 @@ impl ExecutableOp {
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
             #[cfg(feature = "rust-import")]
-            Self::Sequence(_) | Self::CallableObject(_) | Self::StandIn(_) => None,
+            Self::Sequence(_)
+            | Self::CallableObject(_)
+            | Self::StandIn(_)
+            | Self::BoxedCallable => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
             Self::Symbolic { .. }
             | Self::Projection { .. }
@@ -2532,6 +2541,8 @@ impl ExecutableOp {
             Self::CallableObject(coercion) => return coercion.name(),
             #[cfg(feature = "rust-import")]
             Self::StandIn(coercion) => return coercion.name(),
+            #[cfg(feature = "rust-import")]
+            Self::BoxedCallable => return "\0rawr.boxed_callable".to_owned(),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
             }
@@ -2604,6 +2615,8 @@ impl ExecutableOp {
             Self::CallableObject(_) => vec![TypeId::of::<Dynamic>()],
             #[cfg(feature = "rust-import")]
             Self::StandIn(_) => vec![TypeId::of::<Dynamic>()],
+            #[cfg(feature = "rust-import")]
+            Self::BoxedCallable => vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()],
             // A bare generic operand takes any value; the proof checks it.
             Self::Witnessed(op) => {
                 let parameter = intrinsic::Type::witness_parameter(0).runtime();
@@ -2691,6 +2704,8 @@ impl ExecutableOp {
             Self::CallableObject(coercion) => coercion.invoke(context.as_ref(), args),
             #[cfg(feature = "rust-import")]
             Self::StandIn(coercion) => coercion.invoke(args),
+            #[cfg(feature = "rust-import")]
+            Self::BoxedCallable => boxed_callable(args),
             Self::Witnessed(op) => op.invoke(context, args, models),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {
@@ -3130,4 +3145,20 @@ fn stored_type_id(ty: &Ty, models: &Models) -> TypeId {
         Ty::Reference { mutable: true, .. } => TypeId::of::<Dynamic>(),
         ty => ty.type_id(models),
     }
+}
+
+/// The value a crate call's `Box<dyn Fn>` argument `arguments[0]` crosses
+/// as: the program's function pointer as the callable `arguments[1]` that
+/// calls it, which native code calls through the box the runner makes of
+/// it, and else the box native code gave, as it is (#2698).
+#[cfg(feature = "rust-import")]
+fn boxed_callable(arguments: &mut FnCallArgs) -> RawrResult {
+    let [given, callable] = arguments else {
+        return Err(invariant("a boxed closure's argument lost its operands"));
+    };
+    Ok(if given.is_fnptr() {
+        callable.take()
+    } else {
+        given.take()
+    })
 }

@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 289;
+const CLASSIFIER_VERSION: u32 = 293;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6035,8 +6035,10 @@ fn type_nameable(
                 return (false, assumed);
             }
             // Rawr declares a future, a duration, an instant and the like
-            // itself; no Rust definition names them.
+            // itself; no Rust definition names them. A boxed closure is
+            // `Box<dyn Fn(A..) -> B>` of its arguments.
             if crate::surface::identity::Definition::is_projected(definition.as_bytes())
+                || *definition == crate::surface::identity::Definition::callable()
                 || names.opaque.contains(definition.as_bytes())
             {
                 return (true, assumed);
@@ -11506,6 +11508,54 @@ impl<'graph> Context<'graph> {
         )))
     }
 
+    /// `Box<dyn Fn(A..) -> B>` of the object `bounds`, with no bound beside
+    /// core's `Fn` and its `Output`: a `Box` of core's callable at its
+    /// inputs, as a closure takes them, and its output, which the runner
+    /// spells as the box it is (#2698). `None` for any other object, or one
+    /// whose inputs or output rawr can't give.
+    fn boxed_callable(
+        &self,
+        bounds: &[model::ObjectBound],
+    ) -> Option<representability::convert::Type> {
+        let mut inputs = None;
+        let mut output = None;
+        for bound in bounds {
+            match bound {
+                model::ObjectBound::Trait(model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    polarity: model::Polarity::Positive,
+                    ..
+                }) if self.is_core_trait(trait_id, "Fn") && inputs.is_none() => {
+                    let [model::Argument::Type(model::Type::Tuple(written))] = arguments.as_ref()
+                    else {
+                        return None;
+                    };
+                    inputs = Some(written.clone());
+                }
+                model::ObjectBound::ProjectionEquality { ty, .. } if output.is_none() => {
+                    output = Some(ty.clone());
+                }
+                _ => return None,
+            }
+        }
+        let converted = inputs?
+            .iter()
+            .map(|input| self.convert_closure_input(input))
+            .collect::<Option<Vec<_>>>()?;
+        let output = match output {
+            Some(output) => self.convert_value(&output).ok()?,
+            None => representability::convert::Type::Unit,
+        };
+        Some(representability::convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::boxed(),
+            arguments: Box::new([representability::convert::Type::Nominal {
+                definition: crate::surface::identity::Definition::callable(),
+                arguments: converted.into_iter().chain([output]).collect(),
+            }]),
+        })
+    }
+
     /// The methods of the trait `definition`'s vtable, each trait parameter
     /// other than `Self` by its position (`by_position`), as the runner's
     /// one stand-in for the trait implements them by calling a program's
@@ -12058,6 +12108,17 @@ impl<'graph> Context<'graph> {
                         owned: true,
                         length: None,
                     },
+                    // A `Box<dyn Fn(A..) -> B + 'a>`, as iced's `StyleFn<'a,
+                    // Theme>` a `Catalog`'s class is: the boxed closure rawr
+                    // makes of a program's callable, or native code's own,
+                    // which the program holds and calls (#2698).
+                    Some(Std::Box)
+                        if let Some(model::Type::TraitObject { bounds, .. }) =
+                            std_binding::type_argument(arguments, 0)
+                            && let Some(callable) = self.boxed_callable(bounds) =>
+                    {
+                        callable
+                    }
                     // A `Box<dyn Trait>` of a crate's trait (D872).
                     Some(Std::Box)
                         if let Some(model::Type::TraitObject { bounds, lifetime }) =

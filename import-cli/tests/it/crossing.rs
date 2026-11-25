@@ -4201,6 +4201,48 @@ fn a_program_impls_bound_fixes_what_a_crate_value_in_it_leaves_open() {
     assert_eq!(rawr, "|%teal| #|%rust|# ~calm \n");
 }
 
+/// `rawr-import run` with `events::framed` opened, and `cargo run`, on the
+/// project at `root`: each one's stdout, once each has succeeded.
+fn framed_and_cargo(root: &std::path::Path) -> (String, String) {
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    (output(rawr), output(cargo))
+}
+
+/// A crate generic type's field of its palette's class, a crate's
+/// `Box<dyn Fn(&P) -> char + 'a>`, as iced's `Container` holds its
+/// `StyleFn`: `P::default()` through the crate-bounded parameter at the
+/// crate's `Ink` is the crate's item, as iced's `Theme::default()` is; the
+/// box native code makes crosses back to native code's `paint(&self,
+/// &EdgeFn)` as itself, and so does the program's closure, boxed by the
+/// runner, which lends the closure the crate's `&Ink`. The output is
+/// `cargo run`'s.
+#[test]
+fn a_crate_boxed_closure_crosses_from_native_code_and_from_the_program() {
+    let root = lane(Some("framed_classed.rs"));
+    let (rawr, cargo) = framed_and_cargo(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "+\n#\n");
+}
+
 /// A program's value boxed as a crate trait's object the runner has no
 /// stand-in for, as iced's `Widget` while its `operate(&mut dyn
 /// Operation)` can't cross, is refused at check, rustc-style at the value,

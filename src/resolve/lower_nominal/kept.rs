@@ -1240,7 +1240,7 @@ impl ExecutableOp {
             },
             Self::Sequence(constructor) => Self::Sequence(constructor.renewed(&schema)?),
             Self::CallableObject(coercion) => Self::CallableObject(coercion.renewed(&schema)?),
-            Self::StandIn(_) => self.clone(),
+            Self::StandIn(_) | Self::BoxedCallable => self.clone(),
             Self::Witnessed(op) => Self::Witnessed(Box::new(super::op::WitnessedOp::new(
                 op.template.renewed(models)?,
                 op.witnesses,

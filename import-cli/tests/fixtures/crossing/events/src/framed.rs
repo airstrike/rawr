@@ -94,8 +94,14 @@ pub trait Palette {
     /// A frame's class, as iced's `Catalog::Class<'a>`.
     type Class<'a>;
 
+    /// The class a frame starts with, as iced's `Catalog::default`.
+    fn default<'a>() -> Self::Class<'a>;
+
     /// The edge this palette paints.
     fn edge(&self) -> char;
+
+    /// The edge `class` paints by this palette, as iced's `Catalog::style`.
+    fn paint(&self, class: &Self::Class<'_>) -> char;
 }
 
 /// The crate's palette.
@@ -108,8 +114,16 @@ pub type EdgeFn<'a, P> = Box<dyn Fn(&P) -> char + 'a>;
 impl Palette for Ink {
     type Class<'a> = EdgeFn<'a, Self>;
 
+    fn default<'a>() -> EdgeFn<'a, Self> {
+        Box::new(|_| '+')
+    }
+
     fn edge(&self) -> char {
         '|'
+    }
+
+    fn paint(&self, class: &EdgeFn<'_, Self>) -> char {
+        class(self)
     }
 }
 
@@ -138,6 +152,18 @@ where
             class,
             classed: false,
         }
+    }
+
+    /// `item` painted by `palette` with its default class, as iced's
+    /// `Container::new` takes `Theme::default()`.
+    pub fn plain(item: S, palette: P) -> Self {
+        Self::new(item, palette, P::default())
+    }
+
+    /// The edge the frame's class paints, as iced's `Container::draw`
+    /// styles it by `theme.style(&self.class)`.
+    pub fn painted(&self) -> char {
+        self.palette.paint(&self.class)
     }
 
     /// The frame with the class `edge`, as iced's `Container::style` sets
