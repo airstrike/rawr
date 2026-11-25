@@ -39,6 +39,22 @@ impl Visit for Collect {
     }
 }
 
+/// A label the crate's own concrete code visits, as iced_core's `Text`,
+/// whose `Widget` impl the crate compiles: its `operate` takes the visit
+/// a program's impl was lent and passes on.
+#[derive(Debug, Clone)]
+pub struct Mark(pub String);
+
+impl<M> crate::tinted::Diffed<M> for Mark {
+    fn label(&mut self) -> String {
+        self.0.clone()
+    }
+
+    fn operate(&mut self, visit: &mut dyn Visit) {
+        visit.visit(&format!("{}!", self.0));
+    }
+}
+
 /// The labels `item`'s `operate` notes, as iced's `UserInterface::operate`
 /// lends the root widget it owns a `&mut dyn Operation`. The crate
 /// compiles it.

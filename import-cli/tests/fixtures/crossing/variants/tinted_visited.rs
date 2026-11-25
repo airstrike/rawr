@@ -2,7 +2,9 @@
 // Native code lends a program's impl a crate trait's object, `&mut dyn
 // Visit`, as iced's `UserInterface::operate` lends a widget's `operate` a
 // `&mut dyn Operation`: the program calls its `&mut self` methods and
-// passes it on to the item's impl, which runs from source too.
+// passes it on to the item's impl, which runs from source too, or to a
+// crate item's native impl, as iced's `Container` passes its `operation` on
+// to a native `Text`'s `operate`.
 
 use events::framed::Label;
 use events::tinted::{self, Diffed};
@@ -26,5 +28,9 @@ fn main() {
     println!(
         "{:?}",
         visited(tinted::tallied(tinted::tallied(Label("deep".into()))))
+    );
+    println!(
+        "{:?}",
+        visited(tinted::tallied(visits::Mark("leaf".into())))
     );
 }

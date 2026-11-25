@@ -4504,7 +4504,10 @@ fn a_call_through_a_generic_bodys_bound_keeps_the_trait_method_at_each_instance(
 /// that passes the object native code lends it on to the item's impl, as
 /// iced's `Container::operate` does. The closure's parameter takes the
 /// method's `&mut dyn Visit` (`dyn Visit<()>`, its default), as rustc
-/// reads it. The output is `cargo run`'s.
+/// reads it. The object the closure was lent goes on to a crate item's
+/// native `operate` as the native object it is, beside the item's own
+/// `&mut self`, as a native `Text`'s `operate` takes the operation iced's
+/// `Container` passes on. The output is `cargo run`'s.
 #[test]
 fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     let root = lane(Some("tinted_visited.rs"));
@@ -4532,7 +4535,8 @@ fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "[\"tallied\", \"-calm\"]\n[\"tallied\", \"-tallied\", \"--deep\"]\n"
+        "[\"tallied\", \"-calm\"]\n[\"tallied\", \"-tallied\", \"--deep\"]\n\
+         [\"tallied\", \"-leaf!\"]\n"
     );
 }
 
@@ -4573,7 +4577,8 @@ fn a_crate_iterator_over_a_lent_slice_lends_each_item_to_the_program() {
     assert_eq!(
         rawr,
         "[\"0:tallied@0\", \"1:calm@1\", \"tallied\", \"-calm\", \"[calm11]\"]\n\
-         [\"0:tallied@0\", \"1:tallied@1\", \"2:deep@2\", \"tallied\", \"-tallied\", \"--deep\", \"[[deep11]1]\"]\n"
+         [\"0:tallied@0\", \"1:tallied@1\", \"2:deep@2\", \"tallied\", \"-tallied\", \"--deep\", \"[[deep11]1]\"]\n\
+         [\"0:tallied@0\", \"tallied\", \"[1]\"]\n"
     );
 }
 

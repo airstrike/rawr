@@ -4,7 +4,8 @@
 // `Layout`: the impl walks the node's children through the crate's
 // `Spot::iter_mut` and `Spot::iter`, whose items borrow the children, and
 // passes each child's node on to the item's impl, which runs from source
-// too.
+// too, or, for the program's `Note`, the trait's provided `walk` natively
+// through its stand-in, given the visit native code lent the closure.
 
 use events::framed::Label;
 use events::tinted::{self, Diffed};
@@ -29,4 +30,5 @@ fn main() {
         "{:?}",
         walked(tinted::tallied(tinted::tallied(Label("deep".into()))))
     );
+    println!("{:?}", walked(tinted::tallied(Note)));
 }

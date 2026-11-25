@@ -12490,15 +12490,17 @@ pub(super) fn {name}_opaque() -> OpaqueTable {{
         call = Some(sliced);
     }
     // A trait object native code lent a script closure, reached around the
-    // body, which takes it as `object_{index}` (#28).
-    let object = if lent.is_empty() && call.is_none() {
+    // body, which takes it as `object_{index}` (#28). The call's other lent
+    // arguments are reached inside it, as iced's `Container::operate` lends
+    // a native content's `operate` both its `&mut self` and the operation.
+    let object = if call.is_none() {
         lent_object_input(plan)?
     } else {
         None
     };
     let _object = LentObject::enter(object.as_ref().map(|(index, ..)| *index));
     match (lent.is_empty(), call, &object) {
-        (true, None, Some((index, rust, mutable))) => {
+        (lent_free, None, Some((index, rust, mutable))) => {
             // A `&mut dyn` lent mutably is reborrowed for the body.
             let (reached, given) = if *mutable {
                 (format!("&mut {rust}"), "&mut **object")
@@ -12518,10 +12520,28 @@ pub(super) fn {name}_opaque() -> OpaqueTable {{
         .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
     result.unwrap_or(Err(Error::TypeMismatch))
 }}
+"
+            )
+            .map_err(encoding)?;
+            if lent_free {
+                writeln!(
+                    output,
+                    "#[allow(unused_variables)]
+fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{"
+                )
+            } else {
+                writeln!(
+                    output,
+                    "fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{
+    let mut object_{index} = object_{index};
+    with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| {name}_lent(arguments, lent, object_{index}.take()))
+}}
 
 #[allow(unused_variables)]
-fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{"
-            )
+fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{
+    let _ = &mut *lent;"
+                )
+            }
         }
         (true, None, None) => writeln!(
             output,
