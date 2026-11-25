@@ -20,7 +20,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 83;
+const SCHEMA: u32 = 84;
 
 /// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
 /// outcome is of.
@@ -870,6 +870,10 @@ struct ItemBody {
     /// declares it (`classify::Outcome::member`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     member: Option<super::identity::Definition>,
+    /// The trait whose impl the item is a member of, when it is a trait
+    /// impl's (`classify::Outcome::trait_of`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trait_of: Option<super::identity::Definition>,
 }
 
 /// Which of the opaque types that items at `path` give `identity` is, in
@@ -2404,6 +2408,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
             },
             values: None,
             member: None,
+            trait_of: None,
         }),
     };
     let plan = Plan {
@@ -3609,6 +3614,11 @@ impl Item {
     pub fn member(&self) -> Option<super::identity::Definition> {
         self.body.member
     }
+    /// Return the trait whose impl the item is a member of, when it is a
+    /// trait impl's.
+    pub fn trait_of(&self) -> Option<super::identity::Definition> {
+        self.body.trait_of
+    }
     /// The item apart from its path: equal for this item at each of its
     /// paths, so whatever is made of one body serves them all.
     #[must_use]
@@ -4175,6 +4185,7 @@ fn written_item(
             signature,
             values,
             member: outcome.member(),
+            trait_of: outcome.trait_of(),
         }),
     }))
 }

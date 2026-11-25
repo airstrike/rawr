@@ -4230,7 +4230,9 @@ fn framed_and_cargo(root: &std::path::Path) -> (String, String) {
 /// A crate generic type's field of its palette's class, a crate's
 /// `Box<dyn Fn(&P) -> char + 'a>`, as iced's `Container` holds its
 /// `StyleFn`: `P::default()` through the crate-bounded parameter at the
-/// crate's `Ink` is the crate's item, as iced's `Theme::default()` is; the
+/// crate's `Ink` is the crate's item, as iced's `Theme::default()` is, and
+/// of the two impls' `default`s of `Ink` (`Palette`'s and `Marking`'s) the
+/// one of the trait `P: Palette` names, as rustc selects it; the
 /// box native code makes crosses back to native code's `paint(&self,
 /// &EdgeFn)` as itself, and so does the program's closure, boxed by the
 /// runner, which lends the closure the crate's `&Ink`. The output is

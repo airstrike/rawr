@@ -396,6 +396,60 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The members at `path` of the pending family whose impl is of a
+    /// trait the body's param-env bounds `ty` by, when exactly one is: a
+    /// path call through a bound selects through the bound, as iced's
+    /// `Theme::default()` under `Theme: Catalog` is container's
+    /// `Catalog::default` and not button's or `Base::default`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn bound_family_items(
+        &mut self,
+        ty: &Ty,
+        path: &str,
+    ) -> Option<Vec<crate::host::item::Definition>> {
+        let traits = self.param_env_traits(ty);
+        let family = self.models.host.pending_family(path)?;
+        let fitting = family
+            .methods()
+            .iter()
+            .filter(|item| {
+                item.trait_of()
+                    .is_some_and(|identity| traits.contains(identity))
+            })
+            .collect::<Vec<_>>();
+        match <[_; 1]>::try_from(fitting) {
+            Ok([item]) => Some(vec![item.clone()]),
+            Err(_) => None,
+        }
+    }
+
+    /// The identities of the crate traits the body's param-env bounds
+    /// `ty` by.
+    #[cfg(feature = "rust-import")]
+    fn param_env_traits(&mut self, ty: &Ty) -> Vec<[u8; 32]> {
+        let Some(key) = self.callable.as_ref() else {
+            return Vec::new();
+        };
+        let Some(bounds) = self.models.instances.bounds.get(key).cloned() else {
+            return Vec::new();
+        };
+        let ty = self.inference.resolve(ty);
+        let bounding = bounds
+            .iter()
+            .filter(|(bounded, _)| {
+                let bounded = Ty::from_resolved(bounded);
+                !contains_inference(&bounded) && self.unifies(&bounded, &ty)
+            })
+            .collect::<Vec<_>>();
+        bounding
+            .into_iter()
+            .filter_map(|(_, bound)| {
+                let path = crate::host::path::Path::parse(bound.opaque_trait()?).ok()?;
+                Some(self.models.host.trait_header(&path)?.identity)
+            })
+            .collect()
+    }
+
     /// Unify `arguments`, a crate trait's at a bound on `ty` that a call
     /// leaves open, with those the body's param-env gives the bound.
     #[cfg(feature = "rust-import")]

@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 315;
+const CLASSIFIER_VERSION: u32 = 317;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -86,6 +86,10 @@ pub(crate) struct OutcomeRecord {
     /// `into` of `Degrees` that core's blanket `Into` gives through a
     /// crate's `From<Degrees>` is `Into::into`, whatever its selector.
     member: Option<crate::surface::identity::Definition>,
+    /// The trait a trait impl's member belongs to, the impl's own or the
+    /// trait's: iced's `Catalog::default` of `impl Catalog for Theme`.
+    /// A path call through a bound keeps only the bound trait's (#2698).
+    trait_of: Option<crate::surface::identity::Definition>,
     /// A trait's methods' opaque outputs, with how a value behind a box of
     /// the runner's implements their traits (#2013).
     outputs: Option<Box<representability::signature::Outputs>>,
@@ -278,6 +282,8 @@ struct StoredOutcome {
     variant: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     member: Option<crate::surface::identity::Definition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trait_of: Option<crate::surface::identity::Definition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     outputs: Option<Box<representability::signature::Outputs>>,
 }
@@ -4110,6 +4116,13 @@ impl<'contract> Outcome<'contract> {
         self.record.member
     }
 
+    /// The trait whose impl this member is of, when it is a trait impl's:
+    /// the identity its `ImplHeader` names the trait by.
+    #[must_use]
+    pub const fn trait_of(&self) -> Option<crate::surface::identity::Definition> {
+        self.record.trait_of
+    }
+
     /// A trait's methods' opaque outputs (`signature::Outputs`), when it
     /// is a trait some of whose methods give one.
     #[must_use]
@@ -4710,7 +4723,7 @@ impl Serialize for Laid<'_, OutcomeRecord> {
         S: Serializer,
     {
         let record = self.records;
-        let mut state = serializer.serialize_struct("Outcome", 10)?;
+        let mut state = serializer.serialize_struct("Outcome", 11)?;
         state.serialize_field("export", &record.export)?;
         state.serialize_field("identity", &record.identity)?;
         state.serialize_field("name", &record.name)?;
@@ -4743,6 +4756,10 @@ impl Serialize for Laid<'_, OutcomeRecord> {
         match &record.member {
             Some(member) => state.serialize_field("member", member)?,
             None => state.skip_field("member")?,
+        }
+        match &record.trait_of {
+            Some(trait_of) => state.serialize_field("trait_of", trait_of)?,
+            None => state.skip_field("trait_of")?,
         }
         match &record.outputs {
             Some(outputs) => state.serialize_field("outputs", outputs)?,
@@ -5306,6 +5323,7 @@ impl StoredOutcome {
             implementations: implementations.into_boxed_slice(),
             variant: self.variant,
             member: self.member,
+            trait_of: self.trait_of,
             outputs: self.outputs,
         })
     }
@@ -6244,6 +6262,7 @@ impl<'graph> Context<'graph> {
                     implementations: Box::default(),
                     variant: None,
                     member: None,
+                    trait_of: None,
                     outputs: None,
                 })
             }
@@ -6266,6 +6285,7 @@ impl<'graph> Context<'graph> {
                     implementations: Box::default(),
                     variant: None,
                     member: None,
+                    trait_of: None,
                     outputs: None,
                 })
             }
@@ -6359,6 +6379,7 @@ impl<'graph> Context<'graph> {
                     implementations,
                     variant,
                     member: None,
+                    trait_of: None,
                     outputs: self.trait_outputs(definition)?.map(Box::new),
                 })
             }
@@ -6673,6 +6694,10 @@ impl<'graph> Context<'graph> {
                     variant: None,
                     member: trait_member(implementation, definition)
                         .then(|| self.graph.surface_definition(definition.id())),
+                    trait_of: match implementation.trait_ref() {
+                        model::Trait::Trait { id, .. } => Some(self.graph.surface_definition(id)),
+                        _ => None,
+                    },
                     outputs: None,
                 });
             }
@@ -7009,6 +7034,7 @@ impl<'graph> Context<'graph> {
                         implementations: Box::default(),
                         variant: None,
                         member: None,
+                        trait_of: None,
                         outputs: None,
                     });
                 }
@@ -7190,6 +7216,7 @@ impl<'graph> Context<'graph> {
                 implementations,
                 variant: None,
                 member: None,
+                trait_of: None,
                 outputs: None,
             });
         }
@@ -7362,6 +7389,7 @@ impl<'graph> Context<'graph> {
                 implementations: Box::default(),
                 variant: None,
                 member: None,
+                trait_of: None,
                 outputs: None,
             });
         }
@@ -7617,6 +7645,7 @@ impl<'graph> Context<'graph> {
             implementations,
             variant: None,
             member: None,
+            trait_of: None,
             outputs: None,
         }))
     }
@@ -9076,7 +9105,9 @@ impl<'graph> Context<'graph> {
             model::Kind::Function {
                 signature,
                 generics,
-            } => self.function(signature, generics),
+            } => self
+                .function(signature, generics)
+                .map(|representability| self.through_implemented(definition, representability)),
             model::Kind::Module => Err(Failure::Reject(reject::Kind::Module)),
             model::Kind::Union { .. } => Err(Failure::Reject(reject::Kind::Union)),
             model::Kind::Static {
@@ -9106,6 +9137,60 @@ impl<'graph> Context<'graph> {
             }
             Err(Failure::Operational(error)) => Err(error),
         }
+    }
+
+    /// An associated function a trait's impl gives, called through the
+    /// trait at the impl's arguments, as rustc selects the impl: iced's
+    /// `Theme` implements a `Catalog` for each widget, and each gives
+    /// `default`, so `Theme::default()` is E0034 and `<Theme as
+    /// Catalog>::default()` is the one. Only a plan that is the function's
+    /// own (`classified_alone`) and has no trait yet; anything else, or an
+    /// argument Rawr can't write, is unchanged.
+    fn through_implemented(
+        &self,
+        definition: &model::Definition,
+        representability: representability::Representability,
+    ) -> representability::Representability {
+        use representability::{function, Representability};
+        let Representability::Function(plan) = &representability else {
+            return representability;
+        };
+        let signature = plan.signature();
+        if signature.through().is_some() || signature.instance().is_some() {
+            return representability;
+        }
+        let model::Owner::Implementation(owner) = definition.owner() else {
+            return representability;
+        };
+        let Some(implementation) = self
+            .graph
+            .implementation_index(owner)
+            .and_then(|index| self.graph.implementation_at(index))
+            .filter(|implementation| lifetime_only(implementation.generics()))
+        else {
+            return representability;
+        };
+        let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+            return representability;
+        };
+        let Some(arguments) = arguments
+            .iter()
+            .skip(1)
+            .filter_map(|argument| match argument {
+                model::Argument::Type(ty) => Some(self.convert(ty).ok()),
+                _ => None,
+            })
+            .collect::<Option<Box<[_]>>>()
+        else {
+            return representability;
+        };
+        let through = representability::convert::Type::Nominal {
+            definition: self.graph.surface_definition(id),
+            arguments,
+        };
+        Representability::Function(function::Plan::new(
+            signature.clone().with_through(Some(through)),
+        ))
     }
 
     /// The struct at `definition`. With `instance`, the arguments an

@@ -24707,7 +24707,26 @@ fn render_function_path(
     associated: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    if associated {
+    // A trait impl's associated function is called through the trait,
+    // `<Theme as Catalog>::default`, as the type's other impls may give
+    // one of the same name (`classify::through_implemented`).
+    let through = match signature.instance() {
+        None if associated => through_trait(signature, substitutions, None)?,
+        _ => None,
+    };
+    if let Some(through) = through {
+        output.write_all(b"<").map_err(request::unwritable)?;
+        render_container_path(
+            &rust_path(plan),
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            output,
+        )?;
+        write!(output, " as {through}>::{}", plan.name()).map_err(request::unwritable)
+    } else if associated {
         render_container_path(
             &rust_path(plan),
             signature,

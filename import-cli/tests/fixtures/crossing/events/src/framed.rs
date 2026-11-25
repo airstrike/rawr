@@ -123,7 +123,10 @@ pub type EdgeFn<'a, P> = Box<dyn Fn(&P) -> char + 'a>;
 impl Palette for Ink {
     type Class<'a> = EdgeFn<'a, Self>;
 
-    fn default<'a>() -> EdgeFn<'a, Self> {
+    /// Names the class by the trait's projection at its own lifetime, as
+    /// iced's `impl Catalog for Theme` writes `fn default<'a>() ->
+    /// Self::Class<'a>`.
+    fn default<'a>() -> Self::Class<'a> {
         Box::new(|_| '+')
     }
 
@@ -136,6 +139,25 @@ impl Palette for Ink {
     /// to `&EdgeFn<'_, Ink>` at the signature's own lifetime.
     fn paint(&self, class: &Self::Class<'_>) -> char {
         class(self)
+    }
+}
+
+/// A second catalog the crate's palette implements, as iced's `Theme`
+/// implements each widget's `Catalog`: `Ink::default` names two impls'
+/// functions, and `P::default()` under `P: Palette` is `Palette`'s.
+pub trait Marking {
+    /// A mark's class.
+    type Class<'a>;
+
+    /// The class a mark starts with.
+    fn default<'a>() -> Self::Class<'a>;
+}
+
+impl Marking for Ink {
+    type Class<'a> = char;
+
+    fn default<'a>() -> Self::Class<'a> {
+        '.'
     }
 }
 

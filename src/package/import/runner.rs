@@ -1381,6 +1381,7 @@ pub(crate) fn item_definition(
                 .collect(),
         )
         .instancing(item.member().map(|member| *member.as_bytes()))
+        .implementing(item.trait_of().map(|trait_of| *trait_of.as_bytes()))
         .guarded(guard)
         .opening(form.scope()))
 }

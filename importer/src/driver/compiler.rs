@@ -138,7 +138,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // to the impl's value at that lifetime (#2698). `driver.rs`,
 // `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
 // move with it.
-const PROTOCOL_SCHEMA: u32 = 108;
+const PROTOCOL_SCHEMA: u32 = 109;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -4158,7 +4158,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     /// kept, as rustc confirms the one impl that applies: iced's `fn
     /// style(&self, class: &Self::Class<'_>)` in `impl Catalog for Theme`
     /// takes `&StyleFn<'_, Theme>`, the impl's `type Class<'a> =
-    /// StyleFn<'a, Self>` at the signature's late-bound lifetime. A value
+    /// StyleFn<'a, Self>` at the signature's late-bound lifetime, and its
+    /// `fn default<'a>() -> Self::Class<'a>` gives `StyleFn<'a, Theme>` at
+    /// the function's own early-bound one. The projection's own arguments
+    /// may be lifetimes of the signature, never a type or const. A value
     /// the impl doesn't give itself (the trait's default, a specialized
     /// one) and a value that would name an impl's erased lifetime are
     /// none.
@@ -4177,7 +4180,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             .args
             .iter()
             .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)));
-        if ty.has_param() || named_lifetime || trait_ref.has_escaping_bound_vars() {
+        let own_typed = alias.args.iter().skip(own).any(|argument| {
+            !matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)) && argument.has_param()
+        });
+        if trait_ref.has_param()
+            || own_typed
+            || named_lifetime
+            || trait_ref.has_escaping_bound_vars()
+        {
             return None;
         }
         let selected = tcx.codegen_select_candidate(

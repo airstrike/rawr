@@ -642,7 +642,12 @@ impl<'a> Parser<'a> {
                     && owner_id(&ty).is_none_or(|id| self.models.method(id, &member).is_none())
                 {
                     let path = format!("{}::{member}", proof.definition.path());
-                    if let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) {
+                    let items = self.models.host_items(&path).map(<[_]>::to_vec);
+                    // Of a family of several impls' functions, the one of
+                    // the trait the bound names.
+                    #[cfg(feature = "rust-import")]
+                    let items = items.or_else(|| self.bound_family_items(&ty, &path));
+                    if let Some(items) = items {
                         let item_owner = self.models.item_owner(&path).cloned();
                         let items = value_or_call(
                             items,

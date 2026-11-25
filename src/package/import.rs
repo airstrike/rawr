@@ -3611,7 +3611,8 @@ fn imported_item(
         | Representability::Rejected(_) => None,
     };
     let member = outcome.member().map(|member| *member.as_bytes());
-    Ok(item.map(|item| item.instancing(member)))
+    let trait_of = outcome.trait_of().map(|trait_of| *trait_of.as_bytes());
+    Ok(item.map(|item| item.instancing(member).implementing(trait_of)))
 }
 
 /// The inputs of `signature`, by bit, whose borrows the output keeps for
