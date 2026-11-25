@@ -56,9 +56,10 @@ const hi = Math.ceil(Math.max(...open.map((r) => r.start + r.size)) / 5) * 5;
 const span = hi - lo;
 const ticks = Array.from({ length: span / 5 + 1 }, (_, i) => lo + i * 5);
 const pct = (n: number) => `${(n / span) * 100}%`;
-const sum = (state: Row["state"]) => rows.filter((r) => r.state === state).reduce((n, r) => n + r.size, 0);
+const tenths = (n: number) => Math.round(n * 10) / 10;
+const sum = (state: Row["state"]) => tenths(rows.filter((r) => r.state === state).reduce((n, r) => n + r.size, 0));
 const counts = { done: sum("done"), now: sum("now"), next: sum("next") };
-const all = counts.done + counts.now + counts.next;
+const all = tenths(counts.done + counts.now + counts.next);
 const label = { done: "Done", now: "In progress", next: "Next" };
 const hover = (i: Row["issues"][number]) => `${i.title}${i.state === "open" ? "" : ` (${i.state})`}`;
 const count = (r: Row) => {
