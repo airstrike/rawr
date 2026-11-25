@@ -4284,6 +4284,39 @@ fn a_crate_module_reexported_from_another_crate_runs_from_its_source() {
     assert!(!bound.contains("tally::tallied"), "{bound}");
 }
 
+/// A crate type's generic method run from the crate's source whose bound
+/// names a crate trait by the single name the module's `use` binds
+/// (`use crate::framed::Shown;` then `&impl Shown`), as iced's
+/// `Tree::new(widget: &impl Widget<..>)` does, takes a crate label and the
+/// program's own `Shown` type. The output is `cargo run`'s.
+#[test]
+fn a_crate_trait_a_source_module_imports_by_name_bounds_its_generic_method() {
+    let root = lane(Some("tinted_labelled.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "1:calm\n1:BRIGHT\n");
+}
+
 /// A program's value boxed as a crate trait's object the runner has no
 /// stand-in for, as iced's `Widget` while its `operate(&mut dyn
 /// Operation)` can't cross, is refused at check, rustc-style at the value,

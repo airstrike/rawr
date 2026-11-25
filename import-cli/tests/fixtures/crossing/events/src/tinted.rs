@@ -4,6 +4,8 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::framed::Shown;
+
 /// A colour whose channels are public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tint {
@@ -47,6 +49,13 @@ impl Style {
     #[must_use]
     pub fn order(&self) -> usize {
         self.order
+    }
+
+    /// `item`'s text after this style's order, through the crate trait
+    /// the module imports by its single name.
+    #[must_use]
+    pub fn labelled(&self, item: &impl Shown) -> String {
+        format!("{}:{}", self.order, item.shown())
     }
 
     /// The style with `tint`, darkened, in the same order.

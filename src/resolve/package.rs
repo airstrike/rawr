@@ -2889,6 +2889,26 @@ impl<'a> Resolver<'a> {
         Some(spelled)
     }
 
+    /// The crate's path to the item `name` names in a program module of a
+    /// crate module's generic items, when the module's `use` binds it to
+    /// a native item of the crate (`use crate::framed::Shown;`), as
+    /// [`Self::crate_source_spelled`] spells the `use`'s path.
+    fn crate_source_imported(
+        &self,
+        context: &Context,
+        name: &ImmutableString,
+    ) -> Option<Vec<ImmutableString>> {
+        let address = context.address(name);
+        if self.tables.declaration(&address).is_some() {
+            return None;
+        }
+        let import = self
+            .tables
+            .alias(&address)
+            .or_else(|| self.tables.export(&address))?;
+        self.crate_source_spelled(&import.context, &import.path)
+    }
+
     /// `path` in a program module of a crate module's generic items when it
     /// starts at `crate` or `super` and goes through a module of the crate
     /// whose generic items the package holds too: that module's program
@@ -3403,7 +3423,39 @@ impl<'a> Resolver<'a> {
     fn write_outside_paths(&self, context: &Context, item: &mut crate::item::Parsed) {
         use crate::item::type_ref::{Path, Segment, DYN_SEGMENT};
         let app = self.tables.rust_crate(context.package);
-        let path = |path: &mut Path, _: Place| {
+        let path = |path: &mut Path, place: Place| {
+            if let [only] = &path.segments[..]
+                && place == Place::Trait
+                && !path.global
+                && let Some(spelled) = self.crate_source_imported(context, &only.name.text)
+            {
+                // `Shown` after a crate-source module's `use
+                // crate::framed::Shown;` is the crate's trait, spelled
+                // through the program's dependency on the crate.
+                let (at, span) = (only.name.span, only.span);
+                let last = only.clone();
+                let count = spelled.len();
+                path.segments = spelled
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, text)| {
+                        let name = crate::item::Name { text, span: at };
+                        if index + 1 == count {
+                            Segment {
+                                name,
+                                ..last.clone()
+                            }
+                        } else {
+                            Segment {
+                                name,
+                                arguments: Box::default(),
+                                span,
+                            }
+                        }
+                    })
+                    .collect();
+                return;
+            }
             let [first, .., last] = &path.segments[..] else {
                 return;
             };
