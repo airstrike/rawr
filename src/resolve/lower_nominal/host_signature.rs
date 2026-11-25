@@ -2484,6 +2484,10 @@ impl<'a> Parser<'a> {
                         mutable: false,
                         target: object,
                     },
+                    Pointer::Mutable => Ty::Reference {
+                        mutable: true,
+                        target: object,
+                    },
                 }
             }
             // std's map or set in a crate's signature: rawr's (#777).

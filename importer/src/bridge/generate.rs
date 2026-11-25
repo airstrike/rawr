@@ -12473,25 +12473,33 @@ pub(super) fn {name}_opaque() -> OpaqueTable {{
     } else {
         None
     };
-    let _object = LentObject::enter(object.as_ref().map(|(index, _)| *index));
+    let _object = LentObject::enter(object.as_ref().map(|(index, ..)| *index));
     match (lent.is_empty(), call, &object) {
-        (true, None, Some((index, rust))) => writeln!(
-            output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+        (true, None, Some((index, rust, mutable))) => {
+            // A `&mut dyn` lent mutably is reborrowed for the body.
+            let (reached, given) = if *mutable {
+                (format!("&mut {rust}"), "&mut **object")
+            } else {
+                (format!("&{rust}"), "*object")
+            };
+            writeln!(
+                output,
+                "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
     let Some(lent) = lent_value(arguments, {index}) else {{
         return {name}_object(arguments, None);
     }};
     let failed = |error| Error::Lent(lent.name(), error);
-    let access: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = lent.accessor(false).map_err(failed)?;
+    let access: fn(u64, &mut dyn FnMut({reached})) -> Result<(), u8> = lent.accessor({mutable}).map_err(failed)?;
     let mut result = None;
-    access(lent.nonce().bits(), &mut |object| result = Some({name}_object(arguments, Some(*object))))
+    access(lent.nonce().bits(), &mut |object| result = Some({name}_object(arguments, Some({given}))))
         .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
     result.unwrap_or(Err(Error::TypeMismatch))
 }}
 
 #[allow(unused_variables)]
 fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{"
-        ),
+            )
+        }
         (true, None, None) => writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
@@ -12577,7 +12585,7 @@ fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}{parameter
 /// argument index and Rust type. Native code may have lent the object to
 /// the script closure that makes the call, which reaches it around the
 /// adapter's body, as the lend's accessor visits it.
-fn lent_object_input(plan: &Plan) -> Result<Option<(usize, String)>, request::Error> {
+fn lent_object_input(plan: &Plan) -> Result<Option<(usize, String, bool)>, request::Error> {
     let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(None);
     };
@@ -12585,7 +12593,9 @@ fn lent_object_input(plan: &Plan) -> Result<Option<(usize, String)>, request::Er
         if let convert::Type::Object(object) = substituted(input, signature, substitutions)?
             && let Some((rust, _)) = object::lent_family(&object)
         {
-            return Ok(Some((index, rust)));
+            let mutable =
+                object.pointer() == crate::classify::representability::object::Pointer::Mutable;
+            return Ok(Some((index, rust, mutable)));
         }
     }
     Ok(None)
@@ -22106,10 +22116,22 @@ fn render_callable_closure(
             && let Some((rust, family)) = object::lent_family(object)
         {
             parameters.push(format!("input_{position}: {rust}"));
-            borrowed.push_str(&format!(
-                "let input_{position} = &input_{position};\n            "
-            ));
-            let lend = LentInput::scoped(position, false, rust, family);
+            // A `&mut dyn Trait`, as iced lends `operate` its `&mut dyn
+            // Operation`, is lent mutably, so the program's calls of its
+            // `&mut self` methods reach it.
+            let mutable =
+                object.pointer() == crate::classify::representability::object::Pointer::Mutable;
+            if mutable {
+                borrowed.push_str(&format!(
+                    "let mut input_{position} = input_{position};\n            let input_{position} = &mut input_{position};\n            "
+                ));
+                lent.push(position.to_string());
+            } else {
+                borrowed.push_str(&format!(
+                    "let input_{position} = &input_{position};\n            "
+                ));
+            }
+            let lend = LentInput::scoped(position, mutable, rust, family);
             values.push(lend.value());
             lends.push(lend);
             continue;
@@ -22518,7 +22540,11 @@ fn render_take(
         ty if is_future(ty) => "take_script",
         // A crate's trait object (D872): lent for the call, or made.
         convert::Type::Object(object)
-            if object.pointer() == crate::classify::representability::object::Pointer::Shared =>
+            if matches!(
+                object.pointer(),
+                crate::classify::representability::object::Pointer::Shared
+                    | crate::classify::representability::object::Pointer::Mutable
+            ) =>
         {
             return object::render_lent_input(local, index, object, output);
         }
@@ -22816,8 +22842,11 @@ fn render_give(
         // A crate's trait object native code gives (D872): held as itself.
         // A borrowed one lives no longer than its call.
         convert::Type::Object(object)
-            if object.pointer()
-                != crate::classify::representability::object::Pointer::Shared =>
+            if !matches!(
+                object.pointer(),
+                crate::classify::representability::object::Pointer::Shared
+                    | crate::classify::representability::object::Pointer::Mutable
+            ) =>
         {
             writeln!(
                 output,
@@ -22924,6 +22953,12 @@ fn render_from_dynamic(
         // `fn highlighter(&self) -> &dyn Highlighter<Code>` gives, lives as
         // long as the runner: a static's place or a program's function
         // (#1981). One a call takes is lent there.
+        convert::Type::Object(object)
+            if object.pointer()
+                == crate::classify::representability::object::Pointer::Mutable =>
+        {
+            return Err(request::drift("a program's value as a lent `&mut dyn` object"));
+        }
         convert::Type::Object(object)
             if object.pointer()
                 != crate::classify::representability::object::Pointer::Shared =>
@@ -23499,8 +23534,11 @@ fn render_to_dynamic(
         ),
         // A crate's trait object native code gives (D872): held as itself.
         convert::Type::Object(object)
-            if object.pointer()
-                != crate::classify::representability::object::Pointer::Shared =>
+            if !matches!(
+                object.pointer(),
+                crate::classify::representability::object::Pointer::Shared
+                    | crate::classify::representability::object::Pointer::Mutable
+            ) =>
         {
             write!(
                 output,
@@ -24305,6 +24343,23 @@ fn instantiated(
                 ) =>
         {
             substitution(ty, signature, substitutions)?.clone()
+        }
+        // `&mut P` of a `&mut dyn Trait` input is that object lent mutably,
+        // as a widget's `operate` passes on its `&mut dyn Operation`.
+        convert::Type::Borrowed { mutable: true, ty }
+            if matches!(**ty, convert::Type::Parameter(_))
+                && matches!(
+                    substitution(ty, signature, substitutions),
+                    Some(convert::Type::Object(_))
+                ) =>
+        {
+            let Some(convert::Type::Object(object)) = substitution(ty, signature, substitutions)
+            else {
+                unreachable!("matched an object");
+            };
+            convert::Type::Object(Box::new(
+                object.behind(crate::classify::representability::object::Pointer::Mutable),
+            ))
         }
         convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
             mutable: *mutable,
@@ -27528,6 +27583,24 @@ fn render_impl_function(
                 values.push(lend.value());
                 lends.push(lend);
             }
+            // A crate trait's object native code lends, as iced lends
+            // `operate` its `&mut dyn Operation`: lent for the call, as a
+            // script closure's is (#28).
+            convert::Type::Object(object)
+                if let Some((target, family)) = object::lent_family(object) =>
+            {
+                let lent_mutably =
+                    object.pointer() == crate::classify::representability::object::Pointer::Mutable;
+                if lent_mutably {
+                    if let Some(parameter) = parameters.last_mut() {
+                        *parameter = format!("mut {parameter}");
+                    }
+                    mutable.push(at.to_string());
+                }
+                let lend = LentInput::object(position, lent_mutably, target, family);
+                values.push(lend.value());
+                lends.push(lend);
+            }
             // One whose type carries lifetimes, as iced's `update(..,
             // shell: &mut Shell<'_, Message>)` takes: lent for the call too,
             // at every lifetime its family takes, and never copied (#957).
@@ -27817,6 +27890,9 @@ struct LentInput {
     /// Native code keeps the borrow as long as the slot's output, which
     /// borrows it (`Lent::kept`).
     kept: bool,
+    /// The value is `input_{position}` itself, a trait object's pointer,
+    /// lent by a borrow of its parameter (`LentInput::object`).
+    placed: bool,
 }
 
 impl LentInput {
@@ -27831,6 +27907,7 @@ impl LentInput {
             rust,
             reads: true,
             kept: false,
+            placed: false,
         }
     }
 
@@ -27852,6 +27929,18 @@ impl LentInput {
             family,
             reads: false,
             kept: false,
+            placed: false,
+        }
+    }
+
+    /// A crate trait's object native code lends a script impl function, as
+    /// iced lends `operate` its `&mut dyn Operation`: the parameter holds
+    /// the object's pointer `rust`, which is lent by a borrow of the
+    /// parameter, at every lifetime `family` names.
+    fn object(position: usize, mutable: bool, rust: String, family: String) -> Self {
+        Self {
+            placed: true,
+            ..Self::scoped(position, mutable, rust, family)
         }
     }
 
@@ -27908,6 +27997,7 @@ fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
         rust: target,
         family,
         reads,
+        placed,
         ..
     } in lends.iter().rev()
     {
@@ -27916,8 +28006,13 @@ fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
         } else {
             "lend_ref"
         };
+        let given = match (*placed, *borrowed_mutably) {
+            (false, _) => format!("input_{position}"),
+            (true, false) => format!("&input_{position}"),
+            (true, true) => format!("&mut input_{position}"),
+        };
         call = format!(
-            "__rawr_internal::scope::{lend}::<Lend{position}, _>(input_{position}, |lent_{position}| {{
+            "__rawr_internal::scope::{lend}::<Lend{position}, _>({given}, |lent_{position}| {{
         {call}
         }})"
         );

@@ -415,6 +415,21 @@ pub(super) fn imported_surface_type(
         } if lends_object(inference, models, target) => {
             imported_surface_type(inference, models, target, operation, imported)?
         }
+        // A `&mut dyn Trait` native code lent the program, as iced lends a
+        // widget's `operate` its `&mut dyn Operation`: the object's mutable
+        // pointer, lent for the call.
+        Ty::Reference {
+            mutable: true,
+            target,
+        } if lends_object(inference, models, target) => {
+            match imported_surface_type(inference, models, target, operation, imported)? {
+                Type::Object(object) => Type::Object(Box::new(
+                    object
+                        .behind(rawr_import::classify::representability::object::Pointer::Mutable),
+                )),
+                other => other,
+            }
+        }
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
         // (D558 tier 1).
         Ty::Reference { mutable: false, .. }
@@ -1367,9 +1382,11 @@ pub(super) fn holds_crate_value(
         | Type::ConstArray { element, .. } => holds_crate_value(element),
         Type::Result(ok, err) => holds_crate_value(ok) || holds_crate_value(err),
         // An object native code gave is held as itself (D872).
-        Type::Object(object) => {
-            object.pointer() != rawr_import::classify::representability::object::Pointer::Shared
-        }
+        Type::Object(object) => !matches!(
+            object.pointer(),
+            rawr_import::classify::representability::object::Pointer::Shared
+                | rawr_import::classify::representability::object::Pointer::Mutable
+        ),
         Type::Script { .. }
         | Type::Borrowed { .. }
         | Type::Range(_)

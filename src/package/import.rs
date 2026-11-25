@@ -4082,6 +4082,7 @@ fn written(
             match object.pointer() {
                 Pointer::Lasting => format!("&'static dyn {name}"),
                 Pointer::Shared => format!("&dyn {name}"),
+                Pointer::Mutable => format!("&mut dyn {name}"),
                 Pointer::Boxed => format!("Box<dyn {name}>"),
                 Pointer::Rc => format!("Rc<dyn {name}>"),
                 Pointer::Arc => format!("Arc<dyn {name}>"),

@@ -54,6 +54,7 @@ pub mod styled;
 pub mod tinted;
 pub mod tuned;
 pub mod viewed;
+pub mod visits;
 
 pub use made::*;
 /// The crate its frames' colors come from, by std's name, as iced_widget

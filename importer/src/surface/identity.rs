@@ -1789,6 +1789,7 @@ impl Framed {
                     Pointer::Rc => 3,
                     Pointer::Arc => 4,
                     Pointer::StandIn => 5,
+                    Pointer::Mutable => 6,
                 });
                 self.bytes(object.principal().as_bytes());
                 self.count(object.auto().len());

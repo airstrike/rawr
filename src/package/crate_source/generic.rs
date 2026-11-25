@@ -186,4 +186,29 @@ mod tests {
             assert!(generic.contains(declared), "{declared}:\n{generic}");
         }
     }
+
+    /// A crate trait's generic impl for a crate type runs from source, and
+    /// one for a reference or a primitive stays native, as iced's `impl<..>
+    /// Widget<..> for &str` beside `Text`'s.
+    #[test]
+    fn a_trait_impl_runs_from_source_only_for_a_named_type() {
+        let text = "impl<M> Diffed<M> for Label {\n\
+                    fn label(&mut self) -> String { String::new() }\n\
+                    }\n\
+                    impl<M> Diffed<M> for &str {\n\
+                    fn label(&mut self) -> String { String::new() }\n\
+                    }\n";
+        let generic = super::text(
+            text,
+            &["events", "tinted"],
+            super::Bindings::Left,
+            &[],
+            &|_| true,
+        );
+        assert!(
+            generic.contains("impl<M> Diffed<M> for Label {"),
+            "{generic}"
+        );
+        assert!(!generic.contains("for &str"), "{generic}");
+    }
 }

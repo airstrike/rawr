@@ -262,6 +262,15 @@ impl Parser<'_> {
             {
                 continue;
             }
+            // The body's own bound on the value's type fixes what the call
+            // leaves open, as `item: impl Diffed<Note>` gives `M` of
+            // `visited<M>(item: impl Diffed<M>)`.
+            if let Some(header) = crate::host::path::Path::parse(&trait_name)
+                .ok()
+                .and_then(|path| self.models.host.trait_header(&path).cloned())
+            {
+                self.fix_by_param_env(&ty, header.identity, &arguments);
+            }
             let arguments = arguments
                 .iter()
                 .map(|argument| self.inference.resolve(argument))

@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 293;
+const CLASSIFIER_VERSION: u32 = 295;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5964,6 +5964,9 @@ fn enforce_outcome_nameability(
 /// cycle assumed nameable), which keeps it out of the settled table.
 type Verdict = (bool, bool);
 
+/// Each parameter, by its owner and index, at the type it takes.
+type Substitutions = [((api::identity::Definition, u32), model::Type)];
+
 fn all_nameable<'t>(
     types: impl IntoIterator<Item = &'t representability::convert::Type>,
     root: &str,
@@ -7202,12 +7205,16 @@ impl<'graph> Context<'graph> {
         }])
     }
 
-    /// The `&self` methods the trait `definition` declares, each a
-    /// function of the trait's object `&dyn Trait` (`surface::object`), as
-    /// marked code calls `held.0.area()` on a crate's `&'static dyn Shape`
-    /// (#1593). A trait with type parameters, a method generic over a
-    /// type, and one whose signature names `Self` beyond its receiver are
-    /// not called on an object here.
+    /// The `&self` and `&mut self` methods the trait `definition`
+    /// declares, each a function of the trait's object `&dyn Trait` or
+    /// `&mut dyn Trait` (`surface::object`), as marked code calls
+    /// `held.0.area()` on a crate's `&'static dyn Shape` (#1593) and a
+    /// widget's `operate` calls `operation.container(..)` on the `&mut dyn
+    /// Operation` native code lends it. A trait's type parameters take
+    /// their defaults, as `dyn Operation` is `dyn Operation<()>`; a trait
+    /// with a parameter that has none, a method generic over a type, and
+    /// one whose signature names `Self` beyond its receiver are not called
+    /// on an object here.
     fn object_member_implementations(
         &self,
         export: &ledger::Export,
@@ -7226,10 +7233,26 @@ impl<'graph> Context<'graph> {
                 .parameters()
                 .any(|parameter| parameter.name() != "Self" && !is_lifetime_parameter(parameter))
         };
-        if typed(generics) {
-            return Ok(Vec::new());
-        }
         let trait_id = definition.id();
+        // Each type parameter of the trait at its default, by its index.
+        let mut defaults = Vec::new();
+        for parameter in generics.parameters() {
+            if parameter.name() == "Self" || is_lifetime_parameter(parameter) {
+                continue;
+            }
+            let model::ParameterKind::Type {
+                default: model::Default::Present(default),
+                ..
+            } = parameter.kind()
+            else {
+                return Ok(Vec::new());
+            };
+            defaults.push(((trait_id.clone(), parameter.index()), default.clone()));
+        }
+        let arguments = defaults
+            .iter()
+            .map(|(_, default)| model::Argument::Type(default.clone()))
+            .collect::<Box<[_]>>();
         let mut outcomes = Vec::new();
         for method_id in associated.iter() {
             let Some(method) = self
@@ -7248,12 +7271,13 @@ impl<'graph> Context<'graph> {
             };
             let model::Receiver::Reference {
                 lifetime,
-                mutability: model::Mutability::Shared,
+                mutability,
                 ty: model::Type::SelfType(owner),
             } = signature.receiver()
             else {
                 continue;
             };
+            let signature = &substituted_signature(signature, &defaults);
             // `Self` beyond the receiver, or a `where Self: Sized` method,
             // which no object has.
             let names_self = |ty: &model::Type| self_as_parameter(ty, trait_id) != *ty;
@@ -7276,7 +7300,7 @@ impl<'graph> Context<'graph> {
             let object = model::Type::TraitObject {
                 bounds: Box::new([model::ObjectBound::Trait(model::Bound::Trait {
                     trait_id: trait_id.clone(),
-                    arguments: Box::default(),
+                    arguments: arguments.clone(),
                     polarity: model::Polarity::Positive,
                     binders: Box::default(),
                 })]),
@@ -7284,7 +7308,7 @@ impl<'graph> Context<'graph> {
             };
             let receiver = model::Type::Reference {
                 lifetime: lifetime.clone(),
-                mutability: model::Mutability::Shared,
+                mutability: *mutability,
                 ty: Box::new(object),
             };
             let free = model::Signature::new(
@@ -7311,7 +7335,17 @@ impl<'graph> Context<'graph> {
             self.retain_span(method.span())?;
             let origin =
                 representability::origin::Set::new(export.span().clone(), method.span().clone());
-            let evidence = self.classify_object_member(trait_id, &free, method_generics, method)?;
+            let pointer = match mutability {
+                model::Mutability::Shared => representability::object::Pointer::Shared,
+                model::Mutability::Mutable => representability::object::Pointer::Mutable,
+            };
+            let evidence = self.classify_object_member(
+                (trait_id, &defaults),
+                pointer,
+                &free,
+                method_generics,
+                method,
+            )?;
             outcomes.push(OutcomeRecord {
                 export: export.key().clone(),
                 identity,
@@ -7347,7 +7381,8 @@ impl<'graph> Context<'graph> {
     /// through the trait at the object (`surface::object`).
     fn classify_object_member(
         &self,
-        trait_id: &api::identity::Definition,
+        (trait_id, defaults): (&api::identity::Definition, &Substitutions),
+        pointer: representability::object::Pointer,
         free: &model::Signature,
         generics: &model::Generics,
         method: &model::Definition,
@@ -7360,15 +7395,19 @@ impl<'graph> Context<'graph> {
             let Representability::FunctionItem(item) = self.function(free, generics)? else {
                 return Err(reject::Kind::TraitObject.into());
             };
+            let arguments = defaults
+                .iter()
+                .map(|(_, default)| self.convert(default))
+                .collect::<Result<Box<[_]>, _>>()?;
             let object = representability::convert::Type::Object(Box::new(object::Object::new(
-                object::Pointer::Shared,
+                pointer,
                 self.graph.surface_definition(trait_id),
-                Box::default(),
+                arguments.clone(),
                 Vec::new(),
             )));
             let through = representability::convert::Type::Nominal {
                 definition: self.graph.surface_definition(trait_id),
-                arguments: Box::default(),
+                arguments,
             };
             Ok(Representability::FunctionItem(
                 item.with_instance(object).with_through(Some(through)),
@@ -9191,10 +9230,13 @@ impl<'graph> Context<'graph> {
         // A crate trait's object native code lends for the call, as iced's
         // `window::run(id, impl FnOnce(&dyn Window) -> T)` lends the window
         // (#28): the closure reaches it while the call runs.
-        if !mutable && let model::Type::TraitObject { bounds, .. } = ty.as_ref() {
-            return self
-                .convert_object(representability::object::Pointer::Shared, bounds)
-                .ok();
+        if let model::Type::TraitObject { bounds, .. } = ty.as_ref() {
+            let pointer = if mutable {
+                representability::object::Pointer::Mutable
+            } else {
+                representability::object::Pointer::Shared
+            };
+            return self.convert_object(pointer, bounds).ok();
         }
         // A lent value whose own lifetimes are the bound's, as ratatui's
         // `draw(f: impl FnOnce(&mut Frame))` lends a `Frame<'_>` (#1457):
@@ -13916,6 +13958,18 @@ impl<'graph> Context<'graph> {
                 mutable: true,
                 ty: Box::new(string),
             });
+        }
+        // `&mut dyn Operation`, as a widget's `operate` passes on the one
+        // native code lent it: lent mutably for the call.
+        if let model::Type::Reference {
+            mutability: model::Mutability::Mutable,
+            lifetime,
+            ty: target,
+        } = ty
+            && *lifetime != model::Lifetime::Static
+            && let model::Type::TraitObject { bounds, .. } = target.as_ref()
+        {
+            return self.convert_object(representability::object::Pointer::Mutable, bounds);
         }
         // `&[T]` or `&(A, B)`, as voronator's `from_tuple(&(f64, f64),
         // &(f64, f64), &[(f64, f64)])` and image's `save_buffer(path, &[u8],

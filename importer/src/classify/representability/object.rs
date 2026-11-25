@@ -19,6 +19,9 @@ pub enum Pointer {
     Lasting,
     /// `&'a dyn Trait`, lent for a call.
     Shared,
+    /// `&'a mut dyn Trait`, lent for a call, as iced lends a widget's
+    /// `operate` its `&mut dyn Operation`.
+    Mutable,
     /// `Box<dyn Trait>`, which owns its value.
     Boxed,
     /// `Rc<dyn Trait>`, which shares its value (#1304).

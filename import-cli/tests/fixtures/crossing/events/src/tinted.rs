@@ -236,6 +236,10 @@ pub trait Diffed<M> {
     fn width(&self) -> usize {
         0
     }
+
+    /// Notes the holder's labels in `visit`, as iced's `Widget::operate`
+    /// takes a `&mut dyn Operation`.
+    fn operate(&mut self, _visit: &mut dyn crate::visits::Visit) {}
 }
 
 /// A crate label diffs at any `M`, as iced's `impl<Message, ..> Widget<
@@ -247,6 +251,10 @@ impl<M> Diffed<M> for crate::framed::Label {
 
     fn width(&self) -> usize {
         self.0.len()
+    }
+
+    fn operate(&mut self, visit: &mut dyn crate::visits::Visit) {
+        visit.visit(&self.0);
     }
 }
 
@@ -276,5 +284,12 @@ where
     /// iced's `Container::diff` reads `self.content.size()`.
     fn width(&self) -> usize {
         self.item.width() + 2
+    }
+
+    /// Notes itself, then the item, as iced's `Container::operate` passes
+    /// its content the operation.
+    fn operate(&mut self, visit: &mut dyn crate::visits::Visit) {
+        visit.visit("tallied");
+        self.item.operate(visit);
     }
 }

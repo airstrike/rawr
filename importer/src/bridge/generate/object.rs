@@ -435,7 +435,11 @@ fn owner(pointer: Pointer) -> &'static str {
     match pointer {
         Pointer::Rc => "std::rc::Rc::new",
         Pointer::Arc => "std::sync::Arc::new",
-        Pointer::Boxed | Pointer::Lasting | Pointer::Shared | Pointer::StandIn => "Box::new",
+        Pointer::Boxed
+        | Pointer::Lasting
+        | Pointer::Shared
+        | Pointer::Mutable
+        | Pointer::StandIn => "Box::new",
     }
 }
 
@@ -449,6 +453,7 @@ pub(super) fn rust_type(object: &Object) -> Option<String> {
     Some(match object.pointer() {
         Pointer::Lasting => format!("&'static ({dynamic})"),
         Pointer::Shared => format!("&({dynamic})"),
+        Pointer::Mutable => format!("&mut ({dynamic})"),
         Pointer::Boxed => format!("Box<{dynamic}>"),
         Pointer::Rc => format!("std::rc::Rc<{dynamic}>"),
         Pointer::Arc => format!("std::sync::Arc<{dynamic}>"),
@@ -456,16 +461,20 @@ pub(super) fn rust_type(object: &Object) -> Option<String> {
     })
 }
 
-/// The Rust type of a `&dyn Trait` native code lends a script closure for
-/// the call (#28), and the scope family of it at each lifetime `'x`, which
-/// the object's own lifetime is too. `None` for an object behind another
-/// pointer.
+/// The Rust type of a `&dyn Trait` or `&mut dyn Trait` native code lends a
+/// script closure for the call (#28), and the scope family of it at each
+/// lifetime `'x`, which the object's own lifetime is too. `None` for an
+/// object behind another pointer.
 pub(super) fn lent_family(object: &Object) -> Option<(String, String)> {
-    if object.pointer() != Pointer::Shared {
-        return None;
-    }
     let dynamic = object_type(object)?;
-    Some((format!("&({dynamic})"), format!("&'x ({dynamic} + 'x)")))
+    match object.pointer() {
+        Pointer::Shared => Some((format!("&({dynamic})"), format!("&'x ({dynamic} + 'x)"))),
+        Pointer::Mutable => Some((
+            format!("&mut ({dynamic})"),
+            format!("&'x mut ({dynamic} + 'x)"),
+        )),
+        _ => None,
+    }
 }
 
 /// A generated `Result<T, Error>` expression making the object `object`, a
@@ -523,7 +532,11 @@ pub(super) fn render_owned(
                 "if arguments.arena.index::<{boxed}>(&handle).is_ok() {{ arguments.arena.take::<{boxed}>(handle).map(<{rust}>::from) }} else {{ arguments.arena.take::<{rust}>(handle) }}"
             )
         }
-        Pointer::Lasting | Pointer::Shared | Pointer::Boxed | Pointer::StandIn => {
+        Pointer::Lasting
+        | Pointer::Shared
+        | Pointer::Mutable
+        | Pointer::Boxed
+        | Pointer::StandIn => {
             format!("arguments.arena.take::<{rust}>(handle)")
         }
     };
@@ -653,6 +666,9 @@ pub(super) fn render_lent_input(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     use std::io::Write as _;
+    if object.pointer() == Pointer::Mutable {
+        return render_lent_mutable(local, index, object, output);
+    }
     let unwritten = || request::drift("a trait object's type");
     let rust = rust_type(object).ok_or_else(unwritten)?;
     let lasting = rust_type(&object.behind(Pointer::Lasting)).ok_or_else(unwritten)?;
@@ -757,6 +773,53 @@ pub(super) fn render_lent_input(
                 argument_{local}_lasting = arguments.arena.take::<{lasting}>(handle)?;
                 argument_{local}_lasting
             }}
+        }}
+    }};"
+    )
+    .map_err(request::unwritable)
+}
+
+/// The statements that make `argument_{local}`, the `&mut dyn Trait`
+/// input `object` of the call's argument `index`: the object native code
+/// lent the script closure that makes the call, reached around the
+/// adapter's body (#28), a `Box<dyn>` native code gave, borrowed from its
+/// slot for the call, or a program's value in the trait's stand-in, boxed
+/// for the call (#2698).
+fn render_lent_mutable(
+    local: usize,
+    index: usize,
+    object: &Object,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    use std::io::Write as _;
+    let unwritten = || request::drift("a trait object's type");
+    let rust = rust_type(object).ok_or_else(unwritten)?;
+    let boxed = rust_type(&object.behind(Pointer::Boxed)).ok_or_else(unwritten)?;
+    let arms = match stand_in(object)? {
+        Some(name) => format!(
+            "{PROGRAM:?} => {{ argument_{local}_made = Box::new({name}(__rawr_internal::crossing::Object::new(inner))); &mut *argument_{local}_made }}, "
+        ),
+        None => String::new(),
+    };
+    let lent = if super::lent_object_at(index) {
+        format!("object_{index}")
+    } else {
+        "None".to_owned()
+    };
+    writeln!(
+        output,
+        "    let argument_{local}_value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take();
+    #[allow(unused_variables, unused_mut)]
+    let mut argument_{local}_made: {boxed};
+    #[allow(unused_variables, unused_mut)]
+    let mut argument_{local}_held: PlaceHeld<{boxed}>;
+    let argument_{local}: {rust} = match (__rawr_internal::object::Coerced::of(&argument_{local}_value), {lent}) {{
+        (Some((inner, tag)), _) => match tag.as_str() {{ {arms}_ => return Err(Error::TypeMismatch) }},
+        (None, Some(object)) => object,
+        (None, None) => {{
+            let handle = argument_{local}_value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+            argument_{local}_held = arguments.arena.lease_place::<{boxed}>(handle)?;
+            &mut **argument_{local}_held.get_mut()
         }}
     }};"
     )

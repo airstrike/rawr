@@ -640,7 +640,10 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
             // Label`: the program runs it from source at its own arguments.
             "impl" => impl_owner(header).is_some_and(|owner| {
                 generic_types.contains(&owner)
-                    || item.generic && is_trait_impl(header) && !declared_generic.contains(&owner)
+                    || item.generic
+                        && is_trait_impl(header)
+                        && named_owner(header)
+                        && !declared_generic.contains(&owner)
             }),
             _ => false,
         };
@@ -727,6 +730,50 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
 /// The name of the type an impl whose header is `header` is for: the last
 /// word of the path after its `for`, or of its own path, before its
 /// arguments.
+/// Whether a trait impl's header is for a type a path names, as
+/// `impl<M> Diffed<M> for Label`, rather than a reference, slice, tuple or
+/// primitive, as iced's `impl<..> Widget<..> for &str`: the program runs
+/// only the first kind from source, as members of a crate type.
+fn named_owner(header: &[(Token<'_>, usize)]) -> bool {
+    let mut depth = 0_usize;
+    let after = header.iter().enumerate().find_map(|(index, (token, _))| {
+        match token {
+            Token::Punct(b'<') => depth += 1,
+            Token::Punct(b'>') if index > 0 && header[index - 1].0 == Token::Punct(b'-') => {}
+            Token::Punct(b'>') => depth = depth.saturating_sub(1),
+            Token::Ident("for", _) if depth == 0 => return header.get(index + 1),
+            _ => {}
+        }
+        None
+    });
+    matches!(after, Some((Token::Ident(name, _), _))
+        if !matches!(*name, "dyn" | "impl" | "fn") && !is_primitive(name))
+}
+
+/// Whether `name` is one of Rust's primitive types.
+fn is_primitive(name: &str) -> bool {
+    matches!(
+        name,
+        "bool"
+            | "char"
+            | "str"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "f32"
+            | "f64"
+    )
+}
+
 /// Whether an impl's header is a trait's impl: a `for` outside its
 /// parameters, as `impl<M> Diffed<M> for Label`.
 fn is_trait_impl(header: &[(Token<'_>, usize)]) -> bool {

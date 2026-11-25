@@ -4496,6 +4496,43 @@ fn a_call_through_a_generic_bodys_bound_keeps_the_trait_method_at_each_instance(
     assert_eq!(rawr, "6\n8\n6\n[x  ]\n");
 }
 
+/// Native code lends a program's impl a crate trait's object, `&mut dyn
+/// Visit`, through the trait's stand-in, as iced's `UserInterface` lends
+/// a widget's `operate` its `&mut dyn Operation<()>`: the program calls
+/// the object's `&mut self` method, which native code dispatches by the
+/// object's vtable, and passes the object on to the item's impl, as cargo
+/// runs it.
+#[test]
+fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
+    let root = lane(Some("tinted_visited.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"tallied\", \"calm\"]\n[\"tallied\", \"tallied\", \"deep\"]\n"
+    );
+}
+
 /// A crate call whose trait argument the call leaves open and none of its
 /// item's inputs or output names fails at check, at the call: the
 /// runner's rustc couldn't infer it either, and its build once failed.
