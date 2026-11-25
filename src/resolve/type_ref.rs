@@ -784,9 +784,15 @@ fn resolve_path(
         .join("::")
         .into();
     // A path into std, core or alloc is std's, as rustc resolves it: one std
-    // doesn't have, or an unstable item, is refused here (D711).
+    // doesn't have, or an unstable item, is refused here (D711). A path
+    // through a module a `use` binds by std's name, as iced's `use
+    // crate::core;`, is the module's, which the scope holds it by.
     let std = match parsed.segments.first() {
-        Some(first) if !parsed.global && !types.contains_key(first.name.text.as_str()) => {
+        Some(first)
+            if !parsed.global
+                && !types.contains_key(first.name.text.as_str())
+                && !types.contains_key(name.as_str()) =>
+        {
             super::std_path::check(&name, crate::std_table::Namespace::Type, "type", span)?
         }
         _ => None,

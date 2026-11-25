@@ -3984,7 +3984,8 @@ fn a_crate_generic_types_field_of_its_traits_associated_type_is_the_programs() {
 /// module of the type it returns: `events::framed` is both the module and
 /// `made`'s generic `framed`, whose body calls the `framed` module's
 /// generic code, so a frame of the program's type is the program's
-/// `Framed`. The output is `cargo run`'s, and an edit that frames a new
+/// `Framed`, and whose `reddened` names a type through the crate it calls
+/// `core`, as iced's names iced_core. The output is `cargo run`'s, and an edit that frames a new
 /// program type three deep prints `cargo run`'s output with no new runner
 /// build.
 #[test]
@@ -4015,7 +4016,7 @@ fn a_crate_helper_globbed_into_its_parent_runs_from_its_source() {
     };
     let (rawr, cargo) = run(&root);
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "#calm# ##~deep~##\n<*~lent~*>\n");
+    assert_eq!(rawr, "#calm# ##~deep~##\n<*~lent~*>\n<!~red~!>\n");
     let built = runners(&root.join("target/rawr/store"));
 
     fs::write(
@@ -4025,7 +4026,10 @@ fn a_crate_helper_globbed_into_its_parent_runs_from_its_source() {
     .unwrap();
     let (rawr, cargo) = run(&root);
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "#calm# ##~deep~## ###3 clouds###\n<*~lent~*>\n");
+    assert_eq!(
+        rawr,
+        "#calm# ##~deep~## ###3 clouds###\n<*~lent~*>\n<!~red~!>\n"
+    );
     assert_eq!(runners(&root.join("target/rawr/store")), built);
 }
 

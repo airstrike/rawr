@@ -26,6 +26,8 @@ fn main() {
     ];
     println!("{}", shown_all(&items));
     println!("{}", shown_one(&framed(Mood("lent")).edge('*')));
+    let red = events::core::graphics::color::Color::from([1.0, 0.0, 0.0, 1.0]);
+    println!("{}", shown_one(&events::reddened(Mood("red"), red)));
 }
 
 /// A new program type, framed three deep: a nesting the runner never saw.

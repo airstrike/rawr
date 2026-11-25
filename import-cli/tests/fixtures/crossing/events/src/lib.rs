@@ -52,6 +52,9 @@ pub mod tuned;
 pub mod viewed;
 
 pub use made::*;
+/// The crate its frames' colors come from, by std's name, as iced_widget
+/// re-exports iced_core as `core`.
+pub use parts as core;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
