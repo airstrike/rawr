@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 317;
+const CLASSIFIER_VERSION: u32 = 318;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9139,11 +9139,12 @@ impl<'graph> Context<'graph> {
         }
     }
 
-    /// An associated function a trait's impl gives, called through the
-    /// trait at the impl's arguments, as rustc selects the impl: iced's
-    /// `Theme` implements a `Catalog` for each widget, and each gives
-    /// `default`, so `Theme::default()` is E0034 and `<Theme as
-    /// Catalog>::default()` is the one. Only a plan that is the function's
+    /// An associated function or method a trait's impl gives, called
+    /// through the trait at the impl's arguments, as rustc selects the
+    /// impl: iced's `Theme` implements a `Catalog` for each widget, and
+    /// each gives `default` and `style`, so `Theme::default()` and
+    /// `theme.style(class)` are E0034 and `<Theme as Catalog>::default()`
+    /// and `<_ as Catalog>::style(theme, class)` are the ones. Only a plan that is the function's
     /// own (`classified_alone`) and has no trait yet; anything else, or an
     /// argument Rawr can't write, is unchanged.
     fn through_implemented(
@@ -9151,11 +9152,12 @@ impl<'graph> Context<'graph> {
         definition: &model::Definition,
         representability: representability::Representability,
     ) -> representability::Representability {
-        use representability::{function, Representability};
-        let Representability::Function(plan) = &representability else {
-            return representability;
+        use representability::{function, method, Representability};
+        let signature = match &representability {
+            Representability::Function(plan) => plan.signature(),
+            Representability::Method(plan) => plan.signature(),
+            _ => return representability,
         };
-        let signature = plan.signature();
         if signature.through().is_some() || signature.instance().is_some() {
             return representability;
         }
@@ -9188,9 +9190,13 @@ impl<'graph> Context<'graph> {
             definition: self.graph.surface_definition(id),
             arguments,
         };
-        Representability::Function(function::Plan::new(
-            signature.clone().with_through(Some(through)),
-        ))
+        let signature = signature.clone().with_through(Some(through));
+        match representability {
+            Representability::Method(plan) => {
+                Representability::Method(method::Plan::new(plan.receiver(), signature))
+            }
+            _ => Representability::Function(function::Plan::new(signature)),
+        }
     }
 
     /// The struct at `definition`. With `instance`, the arguments an
