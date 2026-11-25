@@ -624,20 +624,31 @@ fn generic_inherent_methods(text: &str) -> Vec<usize> {
 /// The byte ranges of `text`'s module-level items that a crate's program
 /// module keeps (`crate_source`), each from its first attribute through
 /// its `}` or `;`: its `use` declarations and `macro_rules!` definitions,
-/// and its functions with a type or const parameter (an argument-position
-/// `impl Trait` is one). Of an inherent impl of a concrete type, it keeps
-/// the methods with a type or const parameter, as the impl of the type's
-/// inherent trait. Its types, generic ones too, and their other impls are
-/// native, which this reads only as far as their bounds.
+/// its functions, structs, enums and unions with a type or const
+/// parameter (an argument-position `impl Trait` is one), and the impls of
+/// those types. A generic type is the program's own at the program's
+/// arguments, as rustc compiles it in the program's crate. Of an inherent
+/// impl of a concrete type, it keeps the methods with a type or const
+/// parameter, as the impl of the type's inherent trait. Its concrete types
+/// and their other impls are native, which this reads only as far as
+/// their bounds.
 pub(crate) fn generic_items(text: &str) -> Generic {
     let tokens = placed(text);
     let items = module_items(text, &tokens);
+    let generic_types = items
+        .iter()
+        .filter_map(|item| match item.keyword {
+            "struct" | "enum" | "union" if item.generic => item.name,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let mut generic = Generic::default();
     for item in &items {
         let header = &tokens[item.header.clone()];
         let whole = match item.keyword {
             "use" | "macro_rules" => true,
-            "fn" => item.generic,
+            "fn" | "struct" | "enum" | "union" => item.generic,
+            "impl" => impl_owner(header).is_some_and(|owner| generic_types.contains(&owner)),
             _ => false,
         };
         if whole {
@@ -716,6 +727,50 @@ pub(crate) fn generic_items(text: &str) -> Generic {
             .push_str(&format!("\npub trait {trait_name} {{\n{signatures}}}\n"));
     }
     generic
+}
+
+/// The name of the type an impl whose header is `header` is for: the last
+/// word of the path after its `for`, or of its own path, before its
+/// arguments.
+fn impl_owner<'t>(header: &[(Token<'t>, usize)]) -> Option<&'t str> {
+    let mut depth = 0_usize;
+    let mut start = 0;
+    for (index, (token, _)) in header.iter().enumerate() {
+        match token {
+            Token::Punct(b'<') => depth += 1,
+            Token::Punct(b'>') if index > 0 && header[index - 1].0 == Token::Punct(b'-') => {}
+            Token::Punct(b'>') => depth = depth.saturating_sub(1),
+            Token::Ident("for", _) if depth == 0 => start = index + 1,
+            _ => {}
+        }
+    }
+    // Past an impl's own parameters, `impl<S> Framed<S>`.
+    let rest = &header[start..];
+    let rest = match rest.first() {
+        Some((Token::Punct(b'<'), _)) if start == 0 => {
+            let mut depth = 0_usize;
+            let close = (0..rest.len()).find(|&index| {
+                match rest[index].0 {
+                    Token::Punct(b'<') => depth += 1,
+                    Token::Punct(b'>') if index > 0 && rest[index - 1].0 == Token::Punct(b'-') => {}
+                    Token::Punct(b'>') => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                depth == 0
+            })?;
+            &rest[close + 1..]
+        }
+        _ => rest,
+    };
+    rest.iter()
+        .take_while(|(token, _)| {
+            !matches!(token, Token::Punct(b'<' | b'{') | Token::Ident("where", _))
+        })
+        .filter_map(|(token, _)| match token {
+            Token::Ident(name, _) => Some(*name),
+            _ => None,
+        })
+        .last()
 }
 
 /// What a crate's program module keeps of a crate module's text

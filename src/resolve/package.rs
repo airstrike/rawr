@@ -5381,6 +5381,16 @@ fn each_signature_path(
                 bound(written);
             }
             generic.bounds = bounds.into_boxed_slice();
+            // A default and the types its bounds' equalities name, as
+            // `Theme = crate::Theme`.
+            if let Some(default) = &mut generic.default {
+                ty(default, path);
+            }
+            let mut projections = generic.projections.to_vec();
+            for (.., projected) in &mut projections {
+                ty(projected, path);
+            }
+            generic.projections = projections.into_boxed_slice();
         }
     };
     let function = |function: &mut crate::item::Function| {

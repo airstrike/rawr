@@ -1,48 +1,23 @@
 // rawr
-// iced's `.boxed()` (scrollable, system_information, multi_window): a
-// method of an extension trait that no widget implements itself, reached
-// through its blanket impl over each widget's own `Widget` impl, which
-// fixes the trait's arguments. Both arms of the `if` are one element type.
+// A crate's generic type at the program's arguments, through the crate's
+// trait object: `Framed<S>` of a crate label and of the program's own
+// `Shown` type, boxed as `dyn Shown` for the crate's concrete `shown_all`.
 
-use events::widgets::{button, column, text, Framed, Widget};
+use events::framed::{self, Label, Shown};
 
-#[derive(Default)]
-struct Counter {
-    value: i64,
-}
+/// A mood the program shows.
+struct Mood(&'static str);
 
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    Increment,
-    Decrement,
-}
-
-impl Counter {
-    fn update(&mut self, message: Message) {
-        match message {
-            Message::Increment => {
-                self.value += 1;
-            }
-            Message::Decrement => {
-                self.value -= 1;
-            }
-        }
-    }
-
-    fn view(&self) -> impl Widget<Message> {
-        let shown = if self.value > 1 {
-            text(self.value).size(50).framed()
-        } else {
-            button("Decrement").on_press(Message::Decrement).framed()
-        };
-        column![
-            button("Increment").on_press(Message::Increment).framed(),
-            shown,
-        ]
-        .padding(20)
+impl Shown for Mood {
+    fn shown(&self) -> String {
+        format!("~{}~", self.0)
     }
 }
 
 fn main() {
-    events::widgets::run(Counter::update, Counter::view);
+    let items: Vec<Box<dyn Shown>> = vec![
+        Box::new(framed::framed(Label("calm".into()))),
+        Box::new(framed::framed(Mood("bright")).edge('#')),
+    ];
+    println!("{}", framed::shown_all(&items));
 }
