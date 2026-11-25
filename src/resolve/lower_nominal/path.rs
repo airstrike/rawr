@@ -810,6 +810,23 @@ impl<'a> Parser<'a> {
                     member_span,
                 );
             }
+            // `Tree::new(widget)` of a crate type an opened module's
+            // inherent impl gives the generic `new`: that function from
+            // source at the call's types, as `Self::new` there is.
+            #[cfg(feature = "rust-import")]
+            if let item::Import::Type { definition, owner } = &binding.target
+                && let Some(function) = self.source_inherent_member(
+                    type_def::Id::foreign(&crate::host::defined::Defined::of_type(
+                        definition,
+                        owner.as_ref(),
+                    )),
+                    &member,
+                )
+                && function.receiver().is_none()
+            {
+                let ty = impl_self_ty(&function, &BTreeMap::new());
+                return self.parse_owner_function(ty, function, owner_span, member, member_span);
+            }
             let path = format!("{}::{member}", binding.qualified);
             // `Trait::method(receiver, ..)` through a crate's trait a `use`
             // names (`use iced::widget::Widget;` then `Widget::_boxed(w)`),

@@ -236,6 +236,13 @@ pub(crate) struct Instances {
     /// key its trampoline calls it by.
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) natives: Vec<record::Native>,
+    /// The native uses each template's generic read reaches at types that
+    /// name none of its parameters, which every instance of it makes: the
+    /// runner binds them up front, so a program that reaches a template
+    /// later needs no new runner for them, as iced's `Container::new`
+    /// names `Length::Fit` at every instance (decision 4).
+    #[cfg(feature = "rust-import")]
+    pub(crate) ahead: Vec<crate::resolve::lower_nominal::ImportedUse>,
 }
 
 /// An instance of a script impl of a crate's trait (`Instances::impls`).

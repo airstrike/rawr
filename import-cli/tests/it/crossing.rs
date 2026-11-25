@@ -4498,6 +4498,47 @@ fn a_call_through_a_generic_bodys_bound_keeps_the_trait_method_at_each_instance(
     assert_eq!(rawr, "6\n8\n6\n[x  ]\n");
 }
 
+/// A crate's generic code runs from source at the program's `Note` over a
+/// native `Mark`, whose impl is at any `M`, as iced's `Tree::diff` runs
+/// over a native `Text` at the program's `Message`. `Self::of(item)` in the
+/// opened `impl Tally` is its generic `of` from source at the instance's
+/// types, as iced's `Self::new(new)` is, and so is `Tally::of(item)`
+/// written in a generic function. The instance of `rediff` a call of the
+/// program's makes is read for its own calls. A native `Mark`'s `seen`
+/// takes the program's `Note` from the generic body's bound. The output
+/// is `cargo run`'s.
+#[test]
+fn a_crate_generic_methods_self_call_runs_from_source_at_the_programs_types() {
+    let root = lane(Some("tinted_rediffed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"leaf\"]\n[\"note\"]\n[\"note\"]\n\
+         [\"0:tallied@0\", \"tallied\", \"[leaf!01]\"]\n"
+    );
+}
+
 /// Native code lends a program's impl a crate trait's object, `&mut dyn
 /// Visit`, through the trait's stand-in, as iced's `UserInterface` lends
 /// a widget's `operate` its `&mut dyn Operation<()>`: the program calls

@@ -2544,6 +2544,50 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// In a method of an opened module's inherent impl, the impl's `Self`
+    /// and its function the next path segment names, when the impl's
+    /// trait (`crate_source::inherent`) holds it, as `Self::new` in iced's
+    /// `impl Tree` names its generic `new`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn source_inherent_function(&mut self) -> Option<(Ty, method::Definition)> {
+        let trait_name = self.impl_trait.clone()?;
+        if !crate::package::crate_source::is_inherent(&trait_name) {
+            return None;
+        }
+        let Token::Identifier(member) = self.peek_second() else {
+            return None;
+        };
+        let self_ty = self.self_ty.clone()?;
+        let definition = self
+            .source_inherent_member(owner_id(&self_ty)?, member.as_str())
+            .filter(|definition| definition.trait_name() == Some(&trait_name))?;
+        Some((self_ty, definition))
+    }
+
+    /// The generic function or method `member` an opened module's
+    /// inherent impl (`crate_source::inherent`) gives the crate type
+    /// `owner`, as iced's tree module gives `Tree` its generic `new`: the
+    /// crate's own item of the name is that same function, run from source
+    /// at the call's types. The module's concrete functions aren't the
+    /// impl's.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn source_inherent_member(
+        &self,
+        owner: type_def::Id,
+        member: &str,
+    ) -> Option<method::Definition> {
+        self.models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .iter()
+            .find(|definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|name| crate::package::crate_source::is_inherent(name))
+            })
+            .cloned()
+    }
+
     /// The first step of Rust's method probe (`receiver_rank`) at which
     /// the crate type `ty` has an inherent method `member` of its own, not
     /// one of a trait's impl: Text's builder `size(self, ..)` beside its

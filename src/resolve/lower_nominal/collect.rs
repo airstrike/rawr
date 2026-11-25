@@ -164,6 +164,58 @@ impl<'a> Parser<'a> {
         Ok(format!("{SENTINEL}{index}"))
     }
 
+    /// The native uses a template's generic read reached at types that
+    /// are the crates' alone (`all_native`), which every instance of the
+    /// template makes: its calls collected so far and its structural uses
+    /// whose types are settled. A read stops at the first thing it can't
+    /// lower generically, so what it reached is what it gives.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn all_native_uses(&mut self) -> Vec<ImportedUse> {
+        let ops = std::mem::take(&mut self.ops);
+        for op in &ops {
+            if let Op::Intrinsic { operation } = op
+                && operation.item.imported_identity().is_some()
+            {
+                let _ = self.collect_imported_call(operation);
+            }
+        }
+        let mut unsettled = BTreeSet::new();
+        for (index, instance, span) in std::mem::take(&mut self.pending_structural) {
+            let Some(context) = self.imported.as_mut() else {
+                break;
+            };
+            let types = instance
+                .iter()
+                .map(|ty| imported_surface_type(&self.inference, &self.models, ty, span, context))
+                .collect::<Result<Box<[_]>, _>>();
+            match types {
+                Ok(types) => context.uses[index].types = types,
+                Err(_) => {
+                    unsettled.insert(index);
+                }
+            }
+        }
+        let Some(context) = self.imported.as_mut() else {
+            return Vec::new();
+        };
+        std::mem::take(&mut *context.uses)
+            .into_iter()
+            .enumerate()
+            .filter(|(index, using)| {
+                !unsettled.contains(index)
+                    && using
+                        .types
+                        .iter()
+                        .all(rawr_import::classify::representability::convert::Type::all_native)
+                    && using.functions.is_empty()
+                    && using.mappers.is_empty()
+                    && using.slots.is_empty()
+                    && !using.callable
+            })
+            .map(|(_, using)| using)
+            .collect()
+    }
+
     #[cfg(feature = "rust-import")]
     pub(super) fn finish_structural_instances(&mut self) -> Result<(), Error> {
         self.finish_projections();
@@ -359,6 +411,101 @@ impl<'a> Parser<'a> {
         self.fix_by_param_env(&receiver, header.identity, &arguments);
     }
 
+    /// The parameters a crate impl's own method on `receiver` leaves open
+    /// that none of its inputs or its output names, from the body's
+    /// param-env, as rustc's generic body calls `self.content.draw(..)`
+    /// under `W: Widget<Message, ..>` at the program's `Message` where the
+    /// instance's `W` is iced's `Text`, whose impl is at any `Message`.
+    /// The impl's header gives its trait's arguments at the impl's own
+    /// parameters.
+    #[cfg(feature = "rust-import")]
+    fn fix_impl_member_by_param_env(
+        &mut self,
+        item: &crate::host::item::Definition,
+        ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+        receiver: Option<&Ty>,
+    ) {
+        let (Some(identity), Some(receiver)) = (item.trait_of().copied(), receiver) else {
+            return;
+        };
+        if !ordered
+            .iter()
+            .any(|(_, ty, _)| contains_inference(&self.inference.resolve(ty)))
+        {
+            return;
+        }
+        let mut receiver = self.inference.resolve(receiver);
+        while let Ty::Reference { target, .. } = receiver {
+            receiver = self.inference.resolve(&target);
+        }
+        let Some(given) = self.param_env_arguments(&receiver, identity) else {
+            return;
+        };
+        let headers = self
+            .models
+            .host
+            .owned_impl_headers(identity)
+            .map(|(header, owner)| (header.clone(), owner.cloned()))
+            .collect::<Vec<_>>();
+        let mut fitting = Vec::new();
+        for (header, owner) in headers {
+            let Some(mut parameters) = impl_parameters(&header.parameters, ordered) else {
+                continue;
+            };
+            let Ok(self_type) = self.instantiate_host_type(
+                &header.self_type,
+                &mut parameters,
+                "impl",
+                Span::NONE,
+                owner.as_ref(),
+                None,
+            ) else {
+                continue;
+            };
+            if !self.unifies(&self_type, &receiver) {
+                continue;
+            }
+            let Ok(arguments) = header
+                .arguments
+                .iter()
+                .map(|argument| {
+                    self.instantiate_host_type(
+                        argument,
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        owner.as_ref(),
+                        None,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                continue;
+            };
+            // Each facade that holds the impl gives its header: one impl.
+            let arguments = arguments
+                .iter()
+                .map(|argument| self.inference.resolve(argument))
+                .collect::<Vec<_>>();
+            if !fitting.contains(&arguments) {
+                fitting.push(arguments);
+            }
+        }
+        let Ok([arguments]) = <[_; 1]>::try_from(fitting) else {
+            return;
+        };
+        if given.len() == arguments.len()
+            && given
+                .iter()
+                .zip(&arguments)
+                .all(|(given, argument)| self.unifies(given, argument))
+        {
+            for (given, argument) in given.iter().zip(&arguments) {
+                let _ = self.unify_type(given, argument);
+            }
+        }
+    }
+
     #[cfg(feature = "rust-import")]
     pub(super) fn collect_imported_call(
         &mut self,
@@ -449,7 +596,9 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| unknown_const_argument(item, span))?;
         let ordered = instance_parameters(item, requirements);
         if !self.collecting_instances {
-            self.fix_member_by_param_env(item, &ordered, operands.first().map(|(ty, ..)| ty));
+            let receiver = operands.first().map(|(ty, ..)| ty);
+            self.fix_member_by_param_env(item, &ordered, receiver);
+            self.fix_impl_member_by_param_env(item, &ordered, receiver);
         }
         let mut types = self.imported_entries(ordered.len())?;
         for (name, ty, _) in ordered {
@@ -740,4 +889,36 @@ impl<'a> Parser<'a> {
             })
             .collect()
     }
+}
+
+/// The types an impl member's call gives the parameters of its impl's
+/// header, `declared` in the impl's order, from the member's own
+/// (`ordered`): each by its name, or, where the member's signature names
+/// it by its index (`signature::argument_impl_name`), as a member names a
+/// parameter its receiver's type doesn't give, the next of those by
+/// index. `None` when they don't pair one to one.
+#[cfg(feature = "rust-import")]
+fn impl_parameters(
+    declared: &[ImmutableString],
+    ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+) -> Option<BTreeMap<ImmutableString, Ty>> {
+    let mut unnamed = ordered
+        .iter()
+        .filter_map(|(name, ty, _)| {
+            let index =
+                rawr_import::classify::representability::signature::argument_impl_index(name)?;
+            Some((index, ty))
+        })
+        .collect::<Vec<_>>();
+    unnamed.sort_by_key(|(index, _)| *index);
+    let mut unnamed = unnamed.into_iter().map(|(_, ty)| ty);
+    let mut parameters = BTreeMap::new();
+    for name in declared {
+        let ty = match ordered.iter().find(|(own, ..)| own == name) {
+            Some((_, ty, _)) => ty,
+            None => unnamed.next()?,
+        };
+        parameters.insert(name.clone(), ty.clone());
+    }
+    unnamed.next().is_none().then_some(parameters)
 }

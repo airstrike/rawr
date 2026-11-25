@@ -16844,7 +16844,12 @@ fn render_scoped_input(
         {
             return Ok(());
         }
-        let regional = u32::try_from(position).is_ok_and(|at| signature.regional().contains(&at));
+        // A `&P` of a type parameter takes any value the call fills `P`
+        // with, a region's too, as the trait's method over its `Self`
+        // takes `&Self` at iced's `Text<'a>`.
+        let regional = u32::try_from(position).is_ok_and(|at| signature.regional().contains(&at))
+            || matches!(declared, convert::Type::Borrowed { ty, .. }
+                if matches!(**ty, convert::Type::Parameter(_)));
         if scoped.is_some() || !regional {
             continue;
         }

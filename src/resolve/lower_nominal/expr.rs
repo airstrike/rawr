@@ -1287,6 +1287,19 @@ impl<'a> Parser<'a> {
             let source = origin::Fragment::plain(witness_variable(&name));
             return Ok(self.operator_expr(source, ty, name_span));
         }
+        // `Self::new(new)` in an opened module's inherent impl whose trait
+        // holds `new` is that generic function from source, as rustc's
+        // `Self::new` there is the generic function the module wrote, which
+        // runs from source at the instance's types (decision B).
+        #[cfg(feature = "rust-import")]
+        if name.as_str() == "Self"
+            && matches!(self.peek(), Token::DoubleColon)
+            && let Some((owner, definition)) = self.source_inherent_function()
+        {
+            self.next();
+            let (member, member_span) = self.expect_member_name()?;
+            return self.parse_owner_function(owner, definition, name_span, member, member_span);
+        }
         // `Self::with_text_size(..)` in an impl for a crate's type is the
         // type's own function, by the path the impl writes (#1466), and
         // `Self(..)` its tuple struct's constructor, as iced's `Tag::of`

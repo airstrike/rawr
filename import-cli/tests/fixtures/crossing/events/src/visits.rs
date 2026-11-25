@@ -53,6 +53,10 @@ impl<M> crate::tinted::Diffed<M> for Mark {
     fn operate(&mut self, visit: &mut dyn Visit) {
         visit.visit(&format!("{}!", self.0));
     }
+
+    fn seen(&self, _spot: crate::walks::Spot, node: &crate::walks::Node) -> String {
+        format!("{}!{}", self.0, node.marked())
+    }
 }
 
 /// The labels `item`'s `operate` notes, as iced's `UserInterface::operate`

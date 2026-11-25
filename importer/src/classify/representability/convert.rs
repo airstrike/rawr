@@ -359,6 +359,33 @@ impl Type {
         })
     }
 
+    /// Whether the type is the crates' alone: it names no parameter, no
+    /// type rustc infers where the runner calls the item, and no program
+    /// type, so a use at it is the same in every instance of a generic
+    /// body that makes it.
+    #[must_use]
+    pub fn all_native(&self) -> bool {
+        match self {
+            Self::Parameter(_)
+            | Self::Inferred
+            | Self::Script { .. }
+            | Self::ProfileMessage { .. }
+            | Self::ConstArray { .. } => false,
+            Self::Unit | Self::Never | Self::Builtin(_) | Self::Object(_) | Self::Constant(_) => {
+                true
+            }
+            Self::Nominal { arguments, .. } | Self::Tuple(arguments) => {
+                arguments.iter().all(Self::all_native)
+            }
+            Self::Option(element)
+            | Self::Sequence { element, .. }
+            | Self::Range(element)
+            | Self::Borrowed { ty: element, .. } => element.all_native(),
+            Self::Result(ok, err) => ok.all_native() && err.all_native(),
+            Self::FunctionItem { input, output } => input.all_native() && output.all_native(),
+        }
+    }
+
     /// Whether a value of this type becomes rawr's, or rawr's becomes one,
     /// with no call's arena: it holds no crate value, only rawr's builtins
     /// and std's types rawr holds as its own, as a thread's `io::Result<()>`

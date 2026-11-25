@@ -202,6 +202,13 @@ pub fn diff_children(labels: &mut Vec<String>, items: &mut [impl Shown]) {
     }
 }
 
+/// A tally of `item`'s label alone, through the generic `Tally::of` as
+/// it is written, as iced's `tree::diff_children` makes each new child's
+/// tree with `Tree::new(widget)`.
+pub fn tally_of<M>(item: &mut impl Diffed<M>) -> Tally {
+    Tally::of(item)
+}
+
 /// `item` with a tally of it, as iced's `Container` holds its content.
 pub struct Tallied<S> {
     item: S,
@@ -303,6 +310,22 @@ impl Tally {
         self.labels.clear();
         for item in items.iter_mut() {
             self.labels.push(item.label());
+        }
+    }
+
+    /// A tally of `item`'s label alone, as iced's `Tree::new(widget)`.
+    pub fn of<M>(item: &mut impl Diffed<M>) -> Self {
+        Self {
+            labels: vec![item.label()],
+        }
+    }
+
+    /// The tally made `item`'s alone unless it holds one label, as iced's
+    /// `Tree::diff` makes the tree anew through `Self::new` where the
+    /// widget's tag differs.
+    pub fn rediff<M>(&mut self, item: &mut impl Diffed<M>) {
+        if self.labels.len() != 1 {
+            *self = Self::of(item);
         }
     }
 }

@@ -42,6 +42,16 @@ pub fn argument_impl_name(index: u32) -> Box<str> {
     format!("{RESERVED}impl_{index}").into_boxed_str()
 }
 
+/// The index of the parameter [`argument_impl_name`] names `name`, when
+/// it is such a name.
+#[must_use]
+pub fn argument_impl_index(name: &str) -> Option<u32> {
+    name.strip_prefix(RESERVED)?
+        .strip_prefix("impl_")?
+        .parse()
+        .ok()
+}
+
 /// The name a signature declares a borrowed trait-object input's own
 /// parameter by ([`OBJECT_INPUT`]), apart from a declared `impl Trait`'s:
 /// the object, which is unsized, may fill it.

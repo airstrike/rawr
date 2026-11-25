@@ -181,6 +181,9 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     if let Some(missed) = missed {
         return Err(crate::resolve::ImportedFailure::Lowering(missed));
     }
+    // What the templates' generic reads reach at the crates' own types,
+    // bound up front (`Instances::ahead`).
+    uses.extend(program.instances.ahead.iter().cloned());
     uses.sort_unstable();
     uses.dedup();
     let programs = Programs::of(program);
@@ -397,7 +400,9 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                     }
                 }
                 Added::Method(index) => {
-                    if opaque(Some(program.methods[index].output())) {
+                    if index < crate::resolve::BUILTIN_METHOD_IDS
+                        && opaque(Some(program.methods[index].output()))
+                    {
                         pending.insert(0, Pending::Method(index));
                     }
                 }
@@ -1364,6 +1369,7 @@ fn select_templates(
     models: &Models,
     templates: &BTreeSet<crate::item::Key>,
     allocation: &mut dyn crate::host::ImportAllocation,
+    ahead: &mut Vec<ImportedUse>,
 ) -> Vec<(crate::item::Key, crate::resolve::Selections)> {
     let mut selected = Vec::new();
     for key in templates {
@@ -1425,6 +1431,7 @@ fn select_templates(
                 let _ = parser
                     .expect_output(definition.output.as_ref())
                     .and_then(|()| parser.parse_function_body(definition));
+                ahead.append(&mut parser.all_native_uses());
                 std::mem::take(&mut parser.selections)
             }
             (None, Some(definition)) => {
@@ -1450,6 +1457,7 @@ fn select_templates(
                         let _ = parser
                             .expect_output(Some(definition.output()))
                             .and_then(|()| parser.parse_method_body(definition));
+                        ahead.append(&mut parser.all_native_uses());
                         std::mem::take(&mut parser.selections)
                     }
                     Err(_) => Vec::new(),
@@ -1712,8 +1720,11 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
         if let Some(readings) = readings.as_deref_mut() {
             readings.begin(program, &models);
         }
-        let selections = select_templates(engine, program, &models, &templates, allocation);
+        let mut ahead = Vec::new();
+        let selections =
+            select_templates(engine, program, &models, &templates, allocation, &mut ahead);
         program.instances.selections.extend(selections);
+        program.instances.ahead.append(&mut ahead);
         // Each call, by the body that makes it: the template and its types.
         let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();
         let mut impl_uses = Vec::new();
@@ -2011,6 +2022,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .any(|definition| definition.key() == key)
         });
         let mut builtin_methods = std::mem::take(&mut program.builtin_methods).into_vec();
+        let mut added_builtin_methods = Vec::with_capacity(added_builtin.len());
         for (template, names, types) in added_builtin {
             let definition = builtin_methods
                 .iter()
@@ -2019,6 +2031,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .clone();
             let id =
                 method::Id::from_index(crate::resolve::BUILTIN_METHOD_IDS + builtin_methods.len());
+            added_builtin_methods.push(Added::Method(id.index()));
             let key = keyed.get(&(template.clone(), names.clone())).cloned();
             builtin_methods.push(method_instance(
                 &mut program.instances,
@@ -2156,9 +2169,13 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 ..shell
             });
         }
+        // An instance of a function of an impl for a crate's type is read
+        // for its calls in the next round too, as iced's `Tree::diff` at a
+        // widget's types calls `Self::new` at them.
         let indices = (first..items.len())
             .map(Added::Function)
             .chain(added_methods)
+            .chain(added_builtin_methods)
             .collect();
         program.items = items.into_boxed_slice();
         Ok(indices)
