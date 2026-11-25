@@ -231,6 +231,11 @@ impl<S: Shown> Tallied<S> {
 pub trait Diffed<M> {
     /// The holder's label, made as it diffs.
     fn label(&mut self) -> String;
+
+    /// How many columns the holder takes, as iced's `Widget::size`.
+    fn width(&self) -> usize {
+        0
+    }
 }
 
 /// A crate label diffs at any `M`, as iced's `impl<Message, ..> Widget<
@@ -238,6 +243,10 @@ pub trait Diffed<M> {
 impl<M> Diffed<M> for crate::framed::Label {
     fn label(&mut self) -> String {
         self.0.clone()
+    }
+
+    fn width(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -259,5 +268,13 @@ where
     fn label(&mut self) -> String {
         self.tally.diff_marked(std::slice::from_mut(&mut self.item));
         format!("[{}]", self.tally.labels.join(","))
+    }
+
+    /// The item's columns and two edges, through the item's bound: the
+    /// generic body reads `self.item` as an `S`, so its `width` is
+    /// `Diffed`'s whatever inherent `width` the instance's type has, as
+    /// iced's `Container::diff` reads `self.content.size()`.
+    fn width(&self) -> usize {
+        self.item.width() + 2
     }
 }

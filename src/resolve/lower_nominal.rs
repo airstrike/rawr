@@ -899,6 +899,20 @@ struct Parser<'a> {
     /// Whether this body is a template's generic read, which its instances
     /// lower again at their types (D1115).
     template_read: bool,
+    /// Whether this body is a crate-bounded template's generic read (D629),
+    /// which keeps the bound trait each call on a parameter selects for
+    /// the template's instances (`selections`).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    selecting: bool,
+    /// The crate trait each call of the generic read on a parameter
+    /// selects through the parameter's bound, by the method's position:
+    /// `self.content.size()` of `W: Widget<..>` is `Widget`'s.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    selections: Vec<(Position, ImmutableString)>,
+    /// The crate-trait bounds of each of the body's generic parameters
+    /// (`Generic::crate_bounds`).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    generic_crate_bounds: BTreeMap<ImmutableString, Box<[type_ref::Type]>>,
     /// Whether this body is read only for those calls (`monomorphize`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     collecting_instances: bool,
@@ -1275,6 +1289,9 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             pending_stand_ins: Vec::new(),
             template_read: false,
+            selecting: false,
+            selections: Vec::new(),
+            generic_crate_bounds: BTreeMap::new(),
             reaches_host: false,
             impl_uses: Vec::new(),
             impl_instance: String::new(),
@@ -1400,6 +1417,8 @@ impl<'a> Parser<'a> {
                     .insert(name.clone(), Ty::from_resolved(ty));
             }
         }
+        #[cfg(feature = "rust-import")]
+        parser.seed_selections(definition.key());
         #[cfg(feature = "rust-import")]
         parser.read_instance_conversions(definition.key(), definition.parameters());
         parser.copy_out = method_copied(definition, &parser.models)
@@ -1532,6 +1551,7 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         if let Some(key) = parser.callable.clone() {
             parser.read_instance_conversions(&key, &definition.parameters);
+            parser.seed_selections(&key);
         }
 
         let receiver = this_parameter(definition);

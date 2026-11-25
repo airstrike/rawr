@@ -316,6 +316,49 @@ impl<'a> Parser<'a> {
             .collect_dependencies(dependencies);
     }
 
+    /// The trait's arguments a call of its method over its `Self`
+    /// (`surface::member`) on `receiver` leaves open, from the body's
+    /// param-env, as rustc selects `W: Widget<Message, ..>` for
+    /// `self.content.size()` in an instance at `W = Text`.
+    #[cfg(feature = "rust-import")]
+    fn fix_member_by_param_env(
+        &mut self,
+        item: &crate::host::item::Definition,
+        ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+        receiver: Option<&Ty>,
+    ) {
+        let path = item.path();
+        let (Some((trait_path, _)), Some(receiver)) =
+            (path.rsplit_once("::__rawr_self::"), receiver)
+        else {
+            return;
+        };
+        let Some(header) = crate::host::path::Path::parse(trait_path)
+            .ok()
+            .and_then(|path| self.models.host.trait_header(&path).cloned())
+        else {
+            return;
+        };
+        let Some(arguments) = header
+            .parameters
+            .iter()
+            .map(|name| {
+                ordered
+                    .iter()
+                    .find(|(candidate, ..)| candidate == name)
+                    .map(|(_, ty, _)| ty.clone())
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let mut receiver = self.inference.resolve(receiver);
+        while let Ty::Reference { target, .. } = receiver {
+            receiver = self.inference.resolve(&target);
+        }
+        self.fix_by_param_env(&receiver, header.identity, &arguments);
+    }
+
     #[cfg(feature = "rust-import")]
     pub(super) fn collect_imported_call(
         &mut self,
@@ -405,6 +448,9 @@ impl<'a> Parser<'a> {
             .imported_constants(item, requirements)
             .ok_or_else(|| unknown_const_argument(item, span))?;
         let ordered = instance_parameters(item, requirements);
+        if !self.collecting_instances {
+            self.fix_member_by_param_env(item, &ordered, operands.first().map(|(ty, ..)| ty));
+        }
         let mut types = self.imported_entries(ordered.len())?;
         for (name, ty, _) in ordered {
             if reaches_param(&self.inference.resolve(ty)) {

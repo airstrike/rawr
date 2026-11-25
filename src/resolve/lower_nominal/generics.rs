@@ -65,6 +65,11 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), elaborated(generic)))
             .collect();
         self.generic_traits = generic_traits(generics);
+        self.generic_crate_bounds = generics
+            .iter()
+            .filter(|generic| !generic.crate_bounds.is_empty())
+            .map(|generic| (generic.name.text.clone(), generic.crate_bounds.clone()))
+            .collect();
         self.generic_trait_arguments = generic_trait_arguments(generics);
         self.inference.equalities = generic_equalities(generics);
         self.inference.trait_arguments = self

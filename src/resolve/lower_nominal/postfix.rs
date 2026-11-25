@@ -1259,6 +1259,28 @@ impl<'a> Parser<'a> {
             // the functions of its user trait bounds.
             // An associated type's value likewise has its declared bounds'.
             if let Some(bounded) = bounded_value(&builtin) {
+                // A crate-bounded template's generic read (D629) calls a
+                // method of the parameter's crate-trait bound through the
+                // trait, and keeps the trait it selects for the instances.
+                #[cfg(feature = "rust-import")]
+                if self.selecting
+                    && matches!(self.peek(), Token::LeftParen | Token::Unit)
+                    && self
+                        .bound_trait_function(&bounded, &member, member_span)?
+                        .is_none()
+                    && let Some(trait_path) = self.crate_bound_trait(&bounded, &member)
+                {
+                    self.selections
+                        .push((member_span.start(), trait_path.clone()));
+                    self.spliced_traits.insert(member_span.start(), trait_path);
+                    match self.spliced_trait_call(value, &member, member_span)? {
+                        Ok(called) => {
+                            value = called;
+                            continue;
+                        }
+                        Err(back) => value = back,
+                    }
+                }
                 let name = bounded.name(&self.models);
                 let (arguments, end) =
                     self.parse_borrowing_arguments("generic value method arguments")?;
@@ -1392,6 +1414,22 @@ impl<'a> Parser<'a> {
                     }
                     None => receiver,
                 };
+                // The receiver's own inherent method of the name, std's or
+                // a crate type's, by the probe step that finds it. A call
+                // written through a trait, or selected by a generic body's
+                // bound (`seed_selections`), never reaches one.
+                let spliced = self.spliced_traits.contains_key(&member_span.start());
+                let inherent = (!spliced)
+                    .then(|| std_method::inherent(&receiver, &member))
+                    .flatten()
+                    .map(|found| found.rank)
+                    .or_else(|| {
+                        (!spliced
+                            && matches!(receiver, Ty::Host { .. })
+                            && !self.source_inherent(&receiver, &member))
+                        .then(|| self.host_inherent_rank(&receiver, &member))
+                        .flatten()
+                    });
                 // Rust probes the receiver by value before it autorefs it:
                 // on a value (not a reference), a trait function taking
                 // `self` comes before an inherent one taking `&self`, and
@@ -1409,15 +1447,11 @@ impl<'a> Parser<'a> {
                                     .map(receiver_rank)
                                     .min()
                             })
-                            .is_some_and(|rank| {
-                                std_method::inherent(&receiver, &member)
-                                    .is_some_and(|found| rank < found.rank)
-                            })
+                            .is_some_and(|rank| inherent.is_some_and(|found| rank < found))
                 };
                 if let Some(owner) = owner_id(&receiver)
                     && (owner.builtin_code().is_some() || matches!(receiver, Ty::Host { .. }))
-                    && (std_method::inherent(&receiver, &member).is_none()
-                        || by_value_first(self, owner))
+                    && (inherent.is_none() || by_value_first(self, owner))
                     && self
                         .models
                         .trait_methods

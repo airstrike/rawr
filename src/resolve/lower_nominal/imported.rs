@@ -1343,6 +1343,116 @@ fn method_at(program: &Program, index: usize) -> &method::Definition {
     }
 }
 
+/// The generic read of each of `templates` not read yet (D629): the crate
+/// trait each call on one of its parameters selects through the
+/// parameter's bound, by the method's position (`Instances::selections`).
+/// A read stops at what it can't lower generically; the calls it reached
+/// keep their selection, and the rest are their instances' own.
+#[cfg(feature = "rust-import")]
+fn select_templates(
+    engine: &Engine,
+    program: &Program,
+    models: &Models,
+    templates: &BTreeSet<crate::item::Key>,
+    allocation: &mut dyn crate::host::ImportAllocation,
+) -> Vec<(crate::item::Key, crate::resolve::Selections)> {
+    let mut selected = Vec::new();
+    for key in templates {
+        if program.instances.selections.contains_key(key) {
+            continue;
+        }
+        let mut uses = Vec::new();
+        let mut dependencies = BTreeSet::new();
+        let mut reads = Vec::new();
+        let mut allocation_failure = None;
+        let function = program.items.iter().find_map(|shell| match &shell.kind {
+            item::Kind::Function(definition) if shell.key.as_ref() == Some(key) => {
+                Some((shell, definition))
+            }
+            _ => None,
+        });
+        let method = program
+            .methods
+            .iter()
+            .chain(program.builtin_methods.iter())
+            .find(|definition| definition.key() == key);
+        let source = match (function, method) {
+            (Some((shell, _)), _) => shell.source,
+            (None, Some(definition)) => definition.source(),
+            (None, None) => continue,
+        };
+        let context = ImportedContext {
+            native: None,
+            allocation: &mut *allocation,
+            failure: &mut allocation_failure,
+            source,
+            uses: &mut uses,
+            dependencies: &mut dependencies,
+            reads: &mut reads,
+        };
+        let selections = match (function, method) {
+            (Some((shell, definition)), _) => {
+                let body_source = body_source(
+                    definition
+                        .body
+                        .text
+                        .as_deref()
+                        .unwrap_or_else(|| program.source.text_at(shell.source)),
+                    &definition.body,
+                );
+                let mut parser = Parser::for_function(
+                    engine,
+                    &body_source,
+                    models.for_source(shell.source),
+                    definition,
+                    key.clone(),
+                    0,
+                    0,
+                    Some(context),
+                );
+                parser.symbolic_only = true;
+                parser.collecting_instances = true;
+                parser.selecting = true;
+                let _ = parser
+                    .expect_output(definition.output.as_ref())
+                    .and_then(|()| parser.parse_function_body(definition));
+                std::mem::take(&mut parser.selections)
+            }
+            (None, Some(definition)) => {
+                let body_source = source_span(
+                    definition
+                        .body_text()
+                        .unwrap_or_else(|| program.source.text_at(definition.source())),
+                    definition.body(),
+                );
+                match Parser::for_method(
+                    engine,
+                    &body_source,
+                    models.for_source(definition.source()),
+                    definition,
+                    0,
+                    0,
+                    Some(context),
+                ) {
+                    Ok(mut parser) => {
+                        parser.symbolic_only = true;
+                        parser.collecting_instances = true;
+                        parser.selecting = true;
+                        let _ = parser
+                            .expect_output(Some(definition.output()))
+                            .and_then(|()| parser.parse_method_body(definition));
+                        std::mem::take(&mut parser.selections)
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
+            (None, None) => continue,
+        };
+        selected.push((key.clone(), selections.into_boxed_slice()));
+    }
+    selected
+}
+
 /// The instance `id` of the method template `definition` at `types`, the
 /// types of its generic parameters, whose names are `names`: listed among
 /// the template's instances, its body reading each parameter as its type.
@@ -1593,6 +1703,8 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
         if let Some(readings) = readings.as_deref_mut() {
             readings.begin(program, &models);
         }
+        let selections = select_templates(engine, program, &models, &templates, allocation);
+        program.instances.selections.extend(selections);
         // Each call, by the body that makes it: the template and its types.
         let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();
         let mut impl_uses = Vec::new();

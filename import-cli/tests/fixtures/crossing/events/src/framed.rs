@@ -34,6 +34,15 @@ pub struct Label(pub String);
 
 impl Meta for Label {}
 
+impl Label {
+    /// The label padded to `columns`, as iced's `Text::size` builds a text
+    /// of a size: an inherent builder whose name a trait's method shares.
+    #[must_use]
+    pub fn width(self, columns: usize) -> Self {
+        Self(format!("{:columns$}", self.0))
+    }
+}
+
 impl Shown for Label {
     fn shown(&self) -> String {
         self.0.clone()

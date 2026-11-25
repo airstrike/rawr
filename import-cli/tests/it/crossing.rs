@@ -4462,6 +4462,40 @@ fn a_crate_generic_impl_for_a_crate_type_runs_from_source_at_the_programs_argume
     assert!(!bound.contains("Diffed"), "Diffed is bound:\n{bound}");
 }
 
+/// A crate impl's generic body calls its parameter's bound method,
+/// `self.item.width()` of `S: Diffed<M>`, and the instance's type `Label`
+/// has an inherent builder `width(self, usize)` too: rustc resolves the
+/// call in the generic body, through the bound, so each instance calls
+/// `Diffed::width`, as iced's `Container::diff` calls `Widget::size` of a
+/// `Text`. The program's own `Label(..).width(3)` is the inherent one.
+#[test]
+fn a_call_through_a_generic_bodys_bound_keeps_the_trait_method_at_each_instance() {
+    let root = lane(Some("tinted_widths.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "6\n8\n6\n[x  ]\n");
+}
+
 /// A crate call whose trait argument the call leaves open and none of its
 /// item's inputs or output names fails at check, at the call: the
 /// runner's rustc couldn't infer it either, and its build once failed.

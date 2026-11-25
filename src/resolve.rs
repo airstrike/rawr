@@ -179,6 +179,10 @@ pub struct Program {
 /// takes, in order, and the instance's item key.
 pub(crate) type Instance = (Box<[ImmutableString]>, crate::item::Key);
 
+/// A template's generic read: the crate trait each call on one of its
+/// parameters selects, by the method's position (`Instances::selections`).
+pub(crate) type Selections = Box<[(crate::Position, ImmutableString)]>;
+
 /// The generic functions that touch a crate's types, each compiled once per
 /// instantiation its checked callers use, as Rust monomorphises it (D629).
 /// A template's own body is never lowered; each call binds to its instance.
@@ -198,6 +202,15 @@ pub(crate) struct Instances {
     /// fixes `Message` of the impl generic in it).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) bounds: BTreeMap<crate::item::Key, Box<[(type_ref::Type, type_ref::Type)]>>,
+    /// Each template's generic read: the crate trait each call on one of
+    /// its parameters selects through the parameter's bound, by the
+    /// method's position in the template's body. Each instance calls that
+    /// trait's method there whatever inherent method its type has, as
+    /// rustc resolves the call in the generic body (`self.content.size()`
+    /// of `W: Widget<..>` at `W = Text`, whose builder `size(self, ..)`
+    /// the generic body never sees).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) selections: BTreeMap<crate::item::Key, Selections>,
     /// Each instance's parameters whose template writes them as a generic
     /// parameter bounded by `Into<U>`, each with its `U` at the instance:
     /// rustc reads the generic body's `path.into()` as a `U`.

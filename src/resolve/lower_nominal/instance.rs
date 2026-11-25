@@ -577,6 +577,29 @@ impl Parser<'_> {
         self.trait_parameters.extend(substitution);
     }
 
+    /// In the instance `key` of a crate-bounded template (D629), call each
+    /// method its template's generic read selected through a parameter's
+    /// crate-trait bound as that trait's, as `Trait::method(x)` is
+    /// (`spliced_traits`): the generic body never sees an inherent method
+    /// of the instance's type.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn seed_selections(&mut self, key: &crate::item::Key) {
+        let Some(template) = self
+            .models
+            .instances
+            .templates
+            .iter()
+            .find(|(_, instances)| instances.iter().any(|(_, instance)| instance == key))
+            .map(|(template, _)| template)
+        else {
+            return;
+        };
+        let Some(selections) = self.models.instances.selections.get(template) else {
+            return;
+        };
+        self.spliced_traits.extend(selections.iter().cloned());
+    }
+
     /// Keep the generic read's call of `function`, a method of the bound
     /// of the parameter `bounded` on the receiver `receiver` of type
     /// `written`, for the template's instances (D1115).

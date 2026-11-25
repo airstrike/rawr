@@ -2523,6 +2523,53 @@ impl<'a> Parser<'a> {
             })
     }
 
+    /// Whether the method `member` of the crate type `ty` is one an opened
+    /// module runs from source as the type's inherent method
+    /// (`crate_source::is_inherent`): the crate's own item of the name is
+    /// that same method.
+    pub(super) fn source_inherent(&self, ty: &Ty, member: &str) -> bool {
+        owner_id(ty).is_some_and(|owner| {
+            self.models
+                .trait_methods
+                .get(&(owner, member.into()))
+                .is_some_and(|definitions| {
+                    definitions.iter().any(|definition| {
+                        definition
+                            .trait_name()
+                            .is_some_and(|name| crate::package::crate_source::is_inherent(name))
+                    })
+                })
+        })
+    }
+
+    /// The first step of Rust's method probe (`receiver_rank`) at which
+    /// the crate type `ty` has an inherent method `member` of its own, not
+    /// one of a trait's impl: Text's builder `size(self, ..)` beside its
+    /// `Widget::size(&self)`.
+    pub(super) fn host_inherent_rank(&self, ty: &Ty, member: &str) -> Option<u8> {
+        #[cfg(feature = "rust-import")]
+        {
+            let resolved = self.inference.resolve(ty);
+            let member = crate::tokenizer::unraw(member);
+            let definition = resolved
+                .host_alias()
+                .cloned()
+                .or_else(|| self.imported_member_owner(&resolved, member))?;
+            self.models
+                .host_items(&format!("{}::{member}", definition.path()))?
+                .iter()
+                .filter(|item| item.trait_member().is_none())
+                .filter_map(crate::host::item::Definition::receiver)
+                .map(super::op::receiver_rank)
+                .min()
+        }
+        #[cfg(not(feature = "rust-import"))]
+        {
+            let _ = (ty, member);
+            None
+        }
+    }
+
     /// The first alias of an imported type with no alias of its own whose
     /// struct has the field `member`.
     #[cfg(feature = "rust-import")]

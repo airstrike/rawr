@@ -1675,6 +1675,29 @@ impl<'a> Parser<'a> {
         value.lvalue = None;
     }
 
+    /// The crate trait among the crate-trait bounds of the generic
+    /// parameter `bounded` (`Generic::crate_bounds`) that has the method
+    /// `member` over its `Self` (`surface::member`), when one does: rustc
+    /// resolves `x.member()` of an `x: W` through `W`'s bounds alone.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn crate_bound_trait(&self, bounded: &Ty, member: &str) -> Option<ImmutableString> {
+        let Ty::Param(name, super::ty::Parameter::Declared) = bounded else {
+            return None;
+        };
+        let mut found = self
+            .generic_crate_bounds
+            .get(name)?
+            .iter()
+            .filter_map(type_ref::Type::opaque_trait)
+            .filter(|trait_path| {
+                self.models
+                    .host_items(&rawr_import::surface::member::path(trait_path, member))
+                    .is_some()
+            });
+        let trait_path = found.next()?;
+        found.next().is_none().then(|| trait_path.into())
+    }
+
     /// The path of the trait's method over its `Self` (`surface::member`)
     /// for `Trait::method(value, ..)` spliced as `value.method(..)` at
     /// `member_span`, when the trait has it.
