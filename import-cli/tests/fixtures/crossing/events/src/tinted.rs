@@ -240,6 +240,22 @@ pub trait Diffed<M> {
     /// Notes the holder's labels in `visit`, as iced's `Widget::operate`
     /// takes a `&mut dyn Operation`.
     fn operate(&mut self, _visit: &mut dyn crate::visits::Visit) {}
+
+    /// Marks the holder's node and walks its child's, as iced's
+    /// `Widget::operate` takes the widget's `&mut Tree` and `Layout`.
+    fn walk(
+        &mut self,
+        _spot: crate::walks::Spot,
+        _node: &mut crate::walks::Node,
+        _visit: &mut dyn crate::visits::Visit,
+    ) {
+    }
+
+    /// What the holder sees of its node, as iced's `Widget::draw` takes
+    /// the widget's `&Tree` and `Layout`.
+    fn seen(&self, _spot: crate::walks::Spot, _node: &crate::walks::Node) -> String {
+        String::new()
+    }
 }
 
 /// A crate label diffs at any `M`, as iced's `impl<Message, ..> Widget<
@@ -255,6 +271,20 @@ impl<M> Diffed<M> for crate::framed::Label {
 
     fn operate(&mut self, visit: &mut dyn crate::visits::Visit) {
         visit.visit(&self.0);
+    }
+
+    fn walk(
+        &mut self,
+        spot: crate::walks::Spot,
+        node: &mut crate::walks::Node,
+        visit: &mut dyn crate::visits::Visit,
+    ) {
+        node.mark(&format!("{}@{}", self.0, spot.depth()));
+        visit.visit(&self.0);
+    }
+
+    fn seen(&self, _spot: crate::walks::Spot, node: &crate::walks::Node) -> String {
+        format!("{}{}", self.0, node.marked())
     }
 }
 
@@ -292,5 +322,29 @@ where
     fn operate(&mut self, visit: &mut dyn crate::visits::Visit) {
         visit.visit("tallied");
         visit.traverse(&mut |visit| self.item.operate(visit));
+    }
+
+    /// Marks its node, then walks the one child's node with the child's
+    /// spot, one level deeper, as iced's `Container::operate` walks
+    /// `layout.iter_mut(&mut tree.children)` in `operation.traverse`.
+    fn walk(
+        &mut self,
+        spot: crate::walks::Spot,
+        node: &mut crate::walks::Node,
+        visit: &mut dyn crate::visits::Visit,
+    ) {
+        node.mark(&format!("tallied@{}", spot.depth()));
+        visit.visit("tallied");
+        visit.traverse(&mut |visit| {
+            let (spot, node) = spot.iter_mut(&mut node.children).next().unwrap();
+            self.item.walk(spot, node, visit);
+        });
+    }
+
+    /// What the item sees of the one child's node, and the child's width,
+    /// as iced's `Container::draw` walks `layout.iter(&tree.children)`.
+    fn seen(&self, spot: crate::walks::Spot, node: &crate::walks::Node) -> String {
+        let (spot, node) = spot.iter(&node.children).next().unwrap();
+        format!("[{}{}]", self.item.seen(spot, node), spot.width())
     }
 }

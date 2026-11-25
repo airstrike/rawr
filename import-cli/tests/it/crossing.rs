@@ -4536,6 +4536,47 @@ fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     );
 }
 
+/// Native code lends a program's impl a node it owns, as iced's
+/// `UserInterface` lends a widget's `operate` its `&mut Tree`: the impl
+/// walks the node's children through the crate's `Spot::iter_mut(&mut
+/// node.children)` inside a `traverse` closure, and `Spot::iter(&node.
+/// children)`, whose items borrow the children, and passes each child on to
+/// the item's impl. The children are lent where they are for the rest of
+/// the scope, and each item's `&mut Node` and `&Node` is lent from the
+/// frame's region, lazily, as rustc runs the iterator. The output is `cargo
+/// run`'s.
+#[test]
+fn a_crate_iterator_over_a_lent_slice_lends_each_item_to_the_program() {
+    let root = lane(Some("tinted_walked.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"0:tallied@0\", \"1:calm@1\", \"tallied\", \"-calm\", \"[calm11]\"]\n\
+         [\"0:tallied@0\", \"1:tallied@1\", \"2:deep@2\", \"tallied\", \"-tallied\", \"--deep\", \"[[deep11]1]\"]\n"
+    );
+}
+
 /// A crate call whose trait argument the call leaves open and none of its
 /// item's inputs or output names fails at check, at the call: the
 /// runner's rustc couldn't infer it either, and its build once failed.

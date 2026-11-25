@@ -619,6 +619,11 @@ pub enum Scope {
     /// The output borrows the receiver, as `BytesStart::name(&self)`'s
     /// does: the frame holds the receiver borrowed.
     Borrows,
+    /// The output keeps slices of crate values borrowed that the program
+    /// lends from places, as iced's `layout.iter_mut(&mut tree.children)`
+    /// does: the frame holds each lend for the rest of the scope, and
+    /// each element an item borrows is lent from the frame's region.
+    Lends,
 }
 
 /// How a method's guard output is reached: read through `Deref`, as

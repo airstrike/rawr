@@ -501,7 +501,8 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
-        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        let mut places = copied_places(&self.inference, &signature.inputs, &arguments);
+        places.retain(|place| !self.mutably_lent_fields.contains(place.source.as_str()));
         move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let opens = opens && !self.lend_static_texts(frame, &mut arguments);
         let runtime_arguments = arguments
@@ -1954,7 +1955,8 @@ impl<'a> Parser<'a> {
         let shared = item.receiver() == Some(receiver::Mode::Shared);
         let guard = item.guard();
         let opens = item.opens();
-        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        let mut places = copied_places(&self.inference, &signature.inputs, &arguments);
+        places.retain(|place| !self.mutably_lent_fields.contains(place.source.as_str()));
         move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let helper = self.push_intrinsic(
             item,
@@ -3348,6 +3350,63 @@ impl<'a> Parser<'a> {
                 ));
             }
             return self.scoped_call(lent, true, &[]);
+        }
+        // `&mut tree.children` of a `Vec` of crate values, as iced's
+        // `layout.iter_mut(&mut tree.children)` takes: the field lent
+        // mutably where it is, for the statement or for the rest of the
+        // block of a `let`, as rustc borrows the place, and the struct
+        // stays whole. So is `&tree.children` of elements that aren't
+        // `Clone`, as `layout.iter(&tree.children)` takes, which no copy
+        // of the field could be.
+        let lent_mut = self.lent_mut_field == Some(receiver.span.start());
+        let elements = match self.inference.resolve(&ty) {
+            Ty::Array { element, .. } => Some(self.inference.resolve(&element)),
+            _ => None,
+        };
+        let lent = elements.as_ref().is_some_and(|element| {
+            matches!(element, Ty::Host { .. })
+                && (lent_mut
+                    || self.lent_field == Some(receiver.span.start())
+                        && !self.type_provides(element, capability::Kind::Clone))
+        });
+        if !shared
+            && lent
+            && definition.parameters().is_empty()
+            && receiver.prelude.is_empty()
+            && variable_name(receiver.source.as_str()).is_some()
+            && !self.frames.is_empty()
+        {
+            let (kind, mode) = if lent_mut {
+                (
+                    crate::host::structural::Kind::LendMut,
+                    crate::receiver::Mode::Mutable,
+                )
+            } else {
+                (
+                    crate::host::structural::Kind::Borrow { field: 0 },
+                    crate::receiver::Mode::Shared,
+                )
+            };
+            let lend = ImportedOperation {
+                kind,
+                operands: vec![(receiver.ty.clone(), receiver.span, true)].into_boxed_slice(),
+                output: ty.clone(),
+                receiver: Some(mode),
+            };
+            let helper = self.push_imported_op(&path, selector, Some(lend), operation)?;
+            let lent = ParsedExpr {
+                prelude: receiver.prelude,
+                source: origin::Fragment::call(&helper, [receiver.source]),
+                ty,
+                span: operation,
+                lvalue: None,
+                outcome: crate::host::usage::Outcome::Conservative,
+                evaluation: crate::host::usage::Evaluation::Required,
+            };
+            let lent = self.scoped_call(lent, true, &[])?;
+            self.mutably_lent_fields
+                .insert(lent.source.as_str().to_owned());
+            return Ok(lent);
         }
         // Any other field a `&` or a `&self` method borrows, as wgpu's
         // `capabilities.formats.iter()` borrows a `Vec<TextureFormat>`, is

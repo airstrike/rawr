@@ -628,6 +628,11 @@ struct Parser<'a> {
     /// field read there, as `&mut pixel.0`, is a place the call writes
     /// through (`read_imported_field`).
     lent_mut_field: Option<Position>,
+    /// The bindings of the scope frames that lend crate values' fields
+    /// mutably for the rest of the scope (`read_imported_field`), as `&mut
+    /// tree.children` lends a `Vec<Tree>`: a call takes the lend where it
+    /// is, and copies nothing in or back out.
+    mutably_lent_fields: std::collections::HashSet<String>,
     /// The `DerefMut` call of a program type's `*w` under `&mut`, which
     /// the `&mut` makes of its `&mut w`, as rustc's `&mut *w` is
     /// `DerefMut::deref_mut(&mut w)`.
@@ -1203,6 +1208,7 @@ impl<'a> Parser<'a> {
             stored_inputs: false,
             lent_field: None,
             lent_mut_field: None,
+            mutably_lent_fields: std::collections::HashSet::new(),
             lent_deref: None,
             bound_iterators: BTreeMap::new(),
             held_iter_mut: BTreeMap::new(),

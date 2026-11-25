@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 306;
+const CLASSIFIER_VERSION: u32 = 314;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -343,6 +343,11 @@ struct Context<'graph> {
     /// its output's late-bound lifetimes are the frame's, as its early
     /// ones are `'static`, and are written by neither.
     scope_lifetimes: Cell<bool>,
+    /// The signature being converted gives a value that keeps slices of
+    /// crate values borrowed, which the program lends from places
+    /// (`lends_slices`): its `&mut [T]` inputs and the borrows its value's
+    /// items carry are read as lent.
+    lent_slices: Cell<bool>,
     /// A trait's method over its `Self` (`surface::member`) is being
     /// classified: its first input is the method's `&self` or `&mut self`,
     /// which the call borrows as the method's receiver.
@@ -1004,6 +1009,7 @@ impl<'graph> Context<'graph> {
             scratch_bytes: Cell::new(0),
             trait_self: Cell::new(None),
             scope_lifetimes: Cell::new(false),
+            lent_slices: Cell::new(false),
             self_receiver: Cell::new(false),
             type_argument: Cell::new(false),
             regional: std::cell::RefCell::new(Box::default()),
@@ -1222,6 +1228,7 @@ impl<'graph> Context<'graph> {
     fn start_item(&self) {
         self.trait_self.set(None);
         self.scope_lifetimes.set(false);
+        self.lent_slices.set(false);
         self.self_receiver.set(false);
         self.type_argument.set(false);
         *self.regional.borrow_mut() = Box::default();
@@ -7620,6 +7627,34 @@ impl<'graph> Context<'graph> {
     /// trait declares the associated type, with the trait's `Self` the
     /// opaque type, as serde's `S::SerializeStruct` is a `SerializeStruct<
     /// Ok = S::Ok, ..>` (#593).
+    /// The type the bounds of the opaque type a member of which is being
+    /// classified bind `Self::Name` to, when `ty` is that projection, as
+    /// `impl Iterator<Item = (Layout, &mut Tree)>` binds `Self::Item`.
+    fn opaque_self_binding(&self, ty: &model::Type) -> Option<model::Type> {
+        let model::Type::Projection {
+            associated,
+            arguments,
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        if !matches!(
+            arguments.first(),
+            Some(model::Argument::Type(model::Type::SelfType(_)))
+        ) {
+            return None;
+        }
+        let opaque = self.opaque_self.borrow().clone();
+        let Some(model::Type::ImplTrait { bounds, .. }) = opaque else {
+            return None;
+        };
+        self.bound_associated(&bounds)
+            .into_iter()
+            .find(|(_, item, _)| item == associated)
+            .map(|(_, _, ty)| ty)
+    }
+
     fn opaque_projection(
         &self,
         opaque: &model::Type,
@@ -8043,6 +8078,7 @@ impl<'graph> Context<'graph> {
         let inherited =
             model::Generics::inherited(container, &own).map_err(|_| Error::Allocation)?;
         let outer = self.opaque_self.replace(Some(opaque.clone()));
+        let outer_slices = self.lent_slices.replace(self.opaque_lends_items());
         let classified = self.function(&signature, &inherited).and_then(|plan| {
             let instance = self.convert(&model::Type::SelfType(trait_id.clone()))?;
             match plan {
@@ -8077,6 +8113,7 @@ impl<'graph> Context<'graph> {
                 _ => Err(Failure::from(reject::Kind::GenericImplementation)),
             }
         });
+        self.lent_slices.set(outer_slices);
         *self.opaque_self.borrow_mut() = outer;
         match classified {
             Ok(plan) => {
@@ -9401,6 +9438,108 @@ impl<'graph> Context<'graph> {
                 .all(place)
     }
 
+    /// Whether a function, or a method that takes its receiver by value,
+    /// gives an opaque type that keeps borrowed slices of crate values it
+    /// takes, and keeps one exclusively or gives items that borrow them, as
+    /// iced's `Layout::iter_mut(self, &mut [Tree]) -> impl Iterator<Item =
+    /// (Self, &mut Tree)>` and `Layout::iter(self, &[Tree])` do. The
+    /// program lends each slice from a place, as `&mut tree.children`, and
+    /// the call opens a scope frame that holds those lends and the value
+    /// for the rest of the scope, as rustc's borrows last (D558 tier 1).
+    fn lends_slices(&self, signature: &model::Signature, generics: &model::Generics) -> bool {
+        let early = output_binders_early(signature, generics);
+        let signature = early.as_ref().unwrap_or(signature);
+        let model::Type::ImplTrait {
+            bounds, captures, ..
+        } = signature.output()
+        else {
+            return false;
+        };
+        if !matches!(
+            signature.receiver(),
+            model::Receiver::None | model::Receiver::Value { .. }
+        ) || !captures.iter().any(|argument| {
+            matches!(
+                argument,
+                model::Argument::Lifetime(model::Lifetime::Early { .. })
+            )
+        }) {
+            return false;
+        }
+        let slice = |input: &model::Type| {
+            matches!(input, model::Type::Reference {
+                lifetime: model::Lifetime::Early { .. },
+                ty,
+                ..
+            } if matches!(&**ty, model::Type::Slice(element) if self.borrows_nothing(element)))
+        };
+        let mut borrowing = signature
+            .inputs()
+            .filter(|input| borrows_at_early_lifetime(input))
+            .peekable();
+        borrowing.peek().is_some()
+            && signature
+                .inputs()
+                .filter(|input| borrows_at_early_lifetime(input))
+                .all(slice)
+            && (signature.inputs().any(borrows_mutably_at_early_lifetime)
+                || self
+                    .bound_associated(bounds)
+                    .iter()
+                    .any(|(_, _, ty)| names_early_lifetime(ty)))
+    }
+
+    /// Whether the opaque type a member of which is being classified gives
+    /// items that borrow crate values at a lifetime it captures, as the
+    /// `impl Iterator<Item = (Layout, &mut Tree)>` of iced's
+    /// `Layout::iter_mut` does: its members read those borrows as lent from
+    /// the frame's region that holds it (`lends_slices`).
+    fn opaque_lends_items(&self) -> bool {
+        let opaque = self.opaque_self.borrow().clone();
+        let Some(model::Type::ImplTrait { bounds, .. }) = opaque else {
+            return false;
+        };
+        self.bound_associated(&bounds)
+            .iter()
+            .any(|(_, _, ty)| self.lends_element(ty))
+    }
+
+    /// Whether `ty` holds a borrow of a crate value at an early lifetime,
+    /// alone or in a tuple.
+    fn lends_element(&self, ty: &model::Type) -> bool {
+        match ty {
+            model::Type::Reference {
+                lifetime: model::Lifetime::Early { .. },
+                ty,
+                ..
+            } => self.borrows_nothing(ty),
+            model::Type::Tuple(members) => members.iter().any(|member| self.lends_element(member)),
+            _ => false,
+        }
+    }
+
+    /// Whether `ty` is a crate struct or enum that declares no lifetime,
+    /// at arguments that borrow nothing at an early lifetime.
+    fn borrows_nothing(&self, ty: &model::Type) -> bool {
+        let model::Type::Definition { id, arguments } = ty else {
+            return false;
+        };
+        let declares = self
+            .graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definition_at(index))
+            .and_then(|definition| match definition.kind() {
+                model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
+                    Some(lifetime_parameters(generics))
+                }
+                _ => None,
+            });
+        declares == Some(0)
+            && !arguments.iter().any(|argument| {
+                matches!(argument, model::Argument::Type(ty) if borrows_at_early_lifetime(ty))
+            })
+    }
+
     /// Whether a function with no receiver gives a struct or enum that
     /// declares a lifetime, and each input that borrows at an early lifetime is a
     /// shared reference to a crate type that declares none, as iced's
@@ -10337,6 +10476,20 @@ impl<'graph> Context<'graph> {
                     length: None,
                 })
             }
+            // `Option<Self::Item>` of an opaque iterator's `next` whose item
+            // is a tuple, as `(Layout, &mut Tree)` of iced's
+            // `Layout::iter_mut`: Rawr's `Option` of its tuple.
+            model::Type::Definition { id, arguments }
+                if let Some(tuple) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definition_at(index))
+                    .and_then(|definition| option_element(definition, arguments))
+                    .and_then(|element| self.opaque_self_binding(element))
+                    && matches!(&tuple, model::Type::Tuple(members) if members.len() >= 2) =>
+            {
+                Ok(Type::Option(Box::new(self.convert_value(&tuple)?)))
+            }
             // An `Option` of a tuple, as iced's pane_grid `State::split` gives
             // `Option<(Pane, Split)>`: Rawr's `Option` of its tuple.
             model::Type::Definition { id, arguments }
@@ -10493,7 +10646,11 @@ impl<'graph> Context<'graph> {
         let outer_scope = self
             .scope_lifetimes
             .replace(opens_copies || borrows_receiver);
+        let outer_slices = self
+            .lent_slices
+            .replace(self.lends_slices(signature, generics) || self.opaque_lends_items());
         let classified = self.function_with(signature, generics, opens_copies, borrows_receiver);
+        self.lent_slices.set(outer_slices);
         self.scope_lifetimes.set(outer_scope);
         *self.regional.borrow_mut() = regional;
         // A plan's signature names only the type parameters it declares, so
@@ -10957,7 +11114,9 @@ impl<'graph> Context<'graph> {
         {
             signature
         } else if let Some(early) = output_binders_early(signature, generics)
-            && (receiver_binder_is_exact(&early) || late_binders_lend_inputs(&early))
+            && (receiver_binder_is_exact(&early)
+                || late_binders_lend_inputs(&early)
+                || self.lent_slices.get())
         {
             // A lifetime of the function's own that its output names, as
             // iced's `markdown::view<'a>(items: &'a [Item], ..) -> impl
@@ -11002,6 +11161,14 @@ impl<'graph> Context<'graph> {
             Some(representability::signature::Scope::Borrows)
         } else if opens_copies {
             Some(representability::signature::Scope::Opens)
+        } else if signature.inputs().any(borrows_at_early_lifetime) && self.lent_slices.get() {
+            lends = signature
+                .inputs()
+                .enumerate()
+                .filter(|(_, input)| borrows_at_early_lifetime(input))
+                .filter_map(|(index, _)| u32::try_from(index).ok())
+                .collect();
+            Some(representability::signature::Scope::Lends)
         } else if signature.inputs().any(borrows_at_early_lifetime) {
             // So does a method that borrows its receiver for the call alone
             // and whose output borrows a `&F` the call fills with a `&str`
@@ -12502,8 +12669,13 @@ impl<'graph> Context<'graph> {
             }
             model::Type::Parameter { index, .. } => Type::Parameter(*index),
             // A trait method's `Self` where it is a member of an opaque type
-            // (`opaque_implementations`).
-            model::Type::SelfType(_) if self.opaque_self.borrow().is_some() => {
+            // (`opaque_implementations`). An impl's `Self` its bounds name,
+            // as `Item = (Self, &mut Tree)` of iced's `Layout::iter_mut`, is
+            // the impl's self type.
+            model::Type::SelfType(id)
+                if self.opaque_self.borrow().is_some()
+                    && self.graph.implementation_index(id).is_none() =>
+            {
                 let opaque = self.opaque_self.borrow().clone();
                 let outer = self.opaque_output.replace(Some(Box::default()));
                 let converted = opaque.as_ref().map(|opaque| self.convert(opaque));
@@ -12551,6 +12723,18 @@ impl<'graph> Context<'graph> {
             {
                 self.convert_borrowed(target)?
             }
+            // An item of a value that keeps a lent slice borrowed, as
+            // `(Self, &'a mut Tree)` of iced's `Layout::iter_mut`: the
+            // element it borrows, lent for as long as the frame that holds
+            // the value (`lends_slices`).
+            model::Type::Reference {
+                lifetime: model::Lifetime::Early { .. },
+                mutability,
+                ty: target,
+            } if self.lent_slices.get() && self.borrows_nothing(target) => Type::Borrowed {
+                mutable: *mutability == model::Mutability::Mutable,
+                ty: Box::new(self.convert(target)?),
+            },
             model::Type::Reference { .. } => {
                 return Err(representability::reject::Kind::ReferenceType.into())
             }
@@ -14306,6 +14490,28 @@ impl<'graph> Context<'graph> {
                 }
                 _ => {}
             }
+        }
+        // `&mut [T]` of crate values a value the call gives keeps borrowed,
+        // as iced's `Layout::iter_mut(self, children: &mut [Tree])` takes:
+        // the program lends it from a place, as `&mut tree.children`
+        // (`lends_slices`).
+        if let model::Type::Reference {
+            mutability: model::Mutability::Mutable,
+            ty,
+            ..
+        } = ty
+            && let model::Type::Slice(element) = &**ty
+            && self.lent_slices.get()
+            && self.borrows_nothing(element)
+        {
+            return Ok(representability::convert::Type::Borrowed {
+                mutable: true,
+                ty: Box::new(representability::convert::Type::Sequence {
+                    element: Box::new(self.convert(element)?),
+                    owned: false,
+                    length: None,
+                }),
+            });
         }
         // `&T` or `&mut T` of a value Rawr holds, leased from its slot for
         // the call (D558.5), as `render_stateful_widget`'s `&mut W::State`.

@@ -17,6 +17,7 @@ pub(crate) mod cached;
 mod family;
 mod frame;
 mod item;
+mod lends;
 mod locked;
 pub(crate) mod member;
 mod object;
@@ -9978,6 +9979,17 @@ fn hidden_segments(source: &[u8]) -> std::collections::BTreeSet<String> {
 /// as `events::widgets::Row::boxed`. A trait's method has one selector on every type,
 /// so the runtime binds the instance of each type's item by this path.
 pub(crate) fn facade_item_path(plan: &Plan) -> String {
+    // A member of an opaque type is the opaque type's own, as each of the
+    // iterators iced's `Layout::iter` and `Layout::iter_mut` give has its
+    // own `next`, which one selector names.
+    if let Operation::Method { signature, .. } = plan.operation()
+        && let Some(convert::Type::Nominal { definition, .. }) = signature.instance()
+        && is_opaque(definition)
+        && let Some(owner) =
+            TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
+    {
+        return format!("{owner}::{}", plan.name());
+    }
     let mut segments = std::iter::once(plan.export().root_alias())
         .chain(plan.export().path())
         .collect::<Vec<_>>();
@@ -10951,6 +10963,13 @@ fn reaches_fields(plan: &Plan) -> bool {
 
 /// Whether a variant's field of type `ty` is lent where a pattern borrows
 /// it: a crate value Rawr doesn't hold as its own, reached by its type.
+/// Whether `ty` is a `Vec` of crate values a field holds, as iced's
+/// `Tree::children` is: lent where it is by its own type, as `&mut
+/// tree.children` lends it to `layout.iter_mut(..)`.
+fn lendable_sequence(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Sequence { element, owned: true, length: None } if lendable(element))
+}
+
 fn lendable(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { .. })
         && !plain_value(ty)
@@ -11910,7 +11929,9 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
         adapter_name(plan)
     )
     .map_err(request::unwritable)?;
-    if !lendable(field.ty()) || container_family(&path, &path).is_some() || carries_lifetimes(&path)
+    if !(lendable(field.ty()) || lendable_sequence(field.ty()))
+        || container_family(&path, &path).is_some()
+        || carries_lifetimes(&path)
     {
         return writeln!(
             output,
@@ -11957,7 +11978,9 @@ fn render_field_lender(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request:
     }
     let path = structural_type(plan);
     let name = lender_name(plan);
-    if !lendable(field.ty()) || container_family(&path, &path).is_some() || carries_lifetimes(&path)
+    if !(lendable(field.ty()) || lendable_sequence(field.ty()))
+        || container_family(&path, &path).is_some()
+        || carries_lifetimes(&path)
     {
         return writeln!(
             output,
@@ -12734,6 +12757,11 @@ fn slice_inputs(plan: &Plan) -> Result<Vec<SliceInput>, request::Error> {
     let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(Vec::new());
     };
+    // A call whose frame holds its lent slices reaches each in the frame
+    // (`render_lends_opening`).
+    if signature.scope() == Some(crate::classify::representability::signature::Scope::Lends) {
+        return Ok(Vec::new());
+    }
     let mut slices = Vec::new();
     for (index, input) in runtime_inputs(signature, offset) {
         let ty = substituted(input, signature, substitutions)?;
@@ -14626,6 +14654,16 @@ fn render_adapter_body(
                 *container_parameters,
                 output,
             )?;
+        }
+        Operation::Method {
+            receiver: Receiver::Owned,
+            signature,
+            substitutions,
+            ..
+        } if signature.scope()
+            == Some(crate::classify::representability::signature::Scope::Lends) =>
+        {
+            lends::render_lends_opening(plan, signature, substitutions, output)?;
         }
         Operation::Method {
             receiver,
@@ -17428,6 +17466,9 @@ fn declare_wrapper(plan: &Plan) -> Result<Option<convert::Type>, request::Error>
     let convert::Type::Nominal { definition, .. } = &returned else {
         return Ok(None);
     };
+    if signature.scope() == Some(crate::classify::representability::signature::Scope::Lends) {
+        return lends::declare_lent_wrapper(plan, returned);
+    }
     if !holds_opaque(&returned) || !carries_lifetime(&returned) {
         return Ok(None);
     }
@@ -23676,6 +23717,36 @@ fn render_to_dynamic(
             }
             write!(output, "])) }})()")
         }
+        // A `&'r mut T` or `&'r T` of a crate value an item of a region's
+        // value borrows, as `(Layout, &mut Tree)` of the iterator iced's
+        // `Layout::iter_mut` gives: the element lent to the program from
+        // the region for as long as it is open (`Region::lend`), as native
+        // code lends a value to a call.
+        convert::Type::Borrowed { mutable, ty: lent }
+            if IN_REGION.get() && matches!(**lent, convert::Type::Nominal { .. }) && lendable(lent) =>
+        {
+            let rust = concrete_type(lent)
+                .ok_or_else(|| request::drift("a lent element's Rust type"))?;
+            let mut family = Vec::new();
+            render_field_family(depth, &rust, *mutable, &mut family)?;
+            let family = String::from_utf8(family).map_err(request::unwritable)?;
+            let lend = if *mutable { "lend" } else { "lend_ref" };
+            write!(
+                output,
+                "{{ {family} let nonce = region.{lend}::<Field{depth}>({value}).map_err(|error| Error::Lent({rust:?}, error))?; Ok::<Dynamic, Error>({}) }}",
+                lent_field(depth, &rust, *mutable)
+            )
+        }
+        // The same out of any region: no frame holds what it borrows.
+        convert::Type::Borrowed { mutable: true, ty: lent }
+            if matches!(**lent, convert::Type::Nominal { .. }) && lendable(lent) =>
+        {
+            write!(
+                output,
+                "{{ let _ = {value}; Err::<Dynamic, Error>(Error::Value({:?}.to_owned())) }}",
+                "a `&mut` of a crate value lives only in the scope frame that holds what it borrows"
+            )
+        }
         // A `&[T]` of crate values a field borrows, as a page's `children:
         // &'static [Block]` (#1283): each element copied by its type's
         // `Clone` where it has one, and else the read is refused, as rustc
@@ -26369,8 +26440,28 @@ fn spelled_scoped(ty: &convert::Type, opaque: &mut Option<OpaqueSpelling<'_>>) -
         convert::Type::Borrowed { mutable: false, ty } if script_slice(ty).is_none() => {
             Some(format!("&'x {}", borrowed_target(ty)?))
         }
+        convert::Type::Tuple(members) if members.iter().any(carries_lifetime_or_borrow) => {
+            let members = members
+                .iter()
+                .map(|member| spelled_scoped(member, opaque))
+                .collect::<Option<Vec<_>>>()?;
+            Some(format!("({},)", members.join(", ")))
+        }
+        // An item's `&mut Tree` of the iterator iced's `Layout::iter_mut`
+        // gives (`lends_slice`).
+        convert::Type::Borrowed { mutable: true, ty }
+            if matches!(**ty, convert::Type::Nominal { .. }) =>
+        {
+            Some(format!("&'x mut {}", borrowed_target(ty)?))
+        }
         ty => concrete_type(ty),
     }
+}
+
+/// Whether `ty` borrows, or carries a lifetime: what a tuple of it is
+/// spelled at `'x` for (`spelled_scoped`).
+fn carries_lifetime_or_borrow(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Borrowed { .. }) || carries_lifetime(ty)
 }
 
 /// `.to_vec()` after a call whose output is a `&[T]` it lends: the copy

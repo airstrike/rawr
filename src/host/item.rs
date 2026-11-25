@@ -640,7 +640,7 @@ impl Definition {
     ) -> Self {
         use rawr_import::classify::representability::signature::Scope;
         self.opens = scope.map(|scope| match scope {
-            Scope::Opens => Frame::Inputs,
+            Scope::Opens | Scope::Lends => Frame::Inputs,
             Scope::Borrows => Frame::Receiver,
         });
         self

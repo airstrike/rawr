@@ -676,8 +676,13 @@ impl Type {
             // A slice native code lends the call (#1292), as a value it
             // lends (`Registry::attest`), is reached only through the
             // accessor its trampoline made, whose exact type each access
-            // checks.
-            Self::Array { length: None, .. } if value.is::<crate::scope::Lent>() => Ok(()),
+            // checks. So is a `Vec` field borrowed of a value native code
+            // lent, as `&tree.children` of a lent `&Tree` (`Projected`).
+            Self::Array { length: None, .. }
+                if value.is::<crate::scope::Lent>() || value.is::<crate::scope::Projected>() =>
+            {
+                Ok(())
+            }
             Self::Array { element, length } => {
                 let elements =
                     value

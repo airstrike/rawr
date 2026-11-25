@@ -18,6 +18,14 @@ pub struct Collect {
     depth: usize,
 }
 
+impl Collect {
+    /// The labels noted so far.
+    #[must_use]
+    pub fn labels(&self) -> Vec<String> {
+        self.labels.clone()
+    }
+}
+
 impl Visit for Collect {
     fn visit(&mut self, label: &str) {
         self.labels

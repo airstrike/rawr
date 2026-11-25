@@ -131,9 +131,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // blanket impl over a parameter `I` bounded `&I: Other`, with each impl of
 // `Other` for `&[T]` (#2079). Schema 78 keeps a crate trait's impl that
 // forwards the associated type a parameter's projection names to its own
-// parameter's, with that item (#2060). `driver.rs`, `cargo/toolchain.rs` and
+// parameter's, with that item (#2060). Schema 107 gives a standard trait
+// whose supertrait is `Iterator` its shape, as `DoubleEndedIterator`
+// (#2698). `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 106;
+const PROTOCOL_SCHEMA: u32 = 107;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3537,11 +3539,26 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     }
 
     /// `def_id` is core's `Iterator` or its `next`, whose signature names
-    /// nothing but the trait's `Self` and `Item`.
+    /// nothing but the trait's `Self` and `Item`, or a standard trait whose
+    /// supertrait `Iterator` is, as `DoubleEndedIterator` and
+    /// `ExactSizeIterator` of iced's `Layout::iter` output are: what an
+    /// `impl DoubleEndedIterator<Item = T>` gives is an iterator through it.
     fn iteration(&self, def_id: DefId) -> bool {
         let iterator = self.tcx.lang_items().iterator_trait();
         match self.tcx.def_kind(def_id) {
-            DefKind::Trait => iterator == Some(def_id),
+            DefKind::Trait => {
+                iterator == Some(def_id)
+                    || iterator.is_some_and(|iterator| {
+                        crate::compat::explicit_super_clauses(self.tcx, def_id)
+                            .skip_binder()
+                            .iter()
+                            .any(|(clause, _)| {
+                                clause
+                                    .as_trait_clause()
+                                    .is_some_and(|bound| bound.def_id() == iterator)
+                            })
+                    })
+            }
             DefKind::AssocFn => {
                 iterator == Some(self.tcx.parent(def_id))
                     && self.tcx.item_name(def_id).as_str() == "next"

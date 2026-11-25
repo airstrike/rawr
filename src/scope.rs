@@ -951,6 +951,52 @@ impl<'r> Region<'r> {
         Ok(unsafe { *place.cast_const().cast::<&'r [T]>() })
     }
 
+    /// Lend `value`, a borrow the region's values hand out for its `'r`,
+    /// to script code for as long as the region is open, as an item `(Layout,
+    /// &'r mut Tree)` of an iterator the region holds gives its `&mut Tree`
+    /// (#2698). It is reached by [`with`] and [`with_ref`] under `F`'s key,
+    /// as [`lend`]'s value is, and its lend ends when the region's [`open`]
+    /// returns or unwinds. [`Error::Expired`] when the region isn't open.
+    pub fn lend<F: Family>(&self, value: &'r mut F::Of<'r>) -> Result<Nonce, Error> {
+        self.lend_place(TypeId::of::<F>(), std::ptr::from_mut(value).cast(), true)
+    }
+
+    /// [`Region::lend`] of a shared borrow: [`with`] on it is
+    /// [`Error::ReadOnly`].
+    pub fn lend_ref<F: Family>(&self, value: &'r F::Of<'r>) -> Result<Nonce, Error> {
+        self.lend_place(
+            TypeId::of::<F>(),
+            std::ptr::from_ref(value).cast_mut().cast(),
+            false,
+        )
+    }
+
+    /// A frame for `place` just above the region's own on this thread's
+    /// stack, so the region's [`open`] pops it, and no frame pushed after
+    /// the region's does: `place` is valid for `'r`, which outlives that
+    /// open.
+    fn lend_place(&self, key: TypeId, place: *mut (), writable: bool) -> Result<Nonce, Error> {
+        FRAMES.with_borrow_mut(|frames| {
+            let at = frames
+                .iter()
+                .rposition(|frame| frame.nonce == self.nonce)
+                .ok_or(Error::Expired)?;
+            let nonce = fresh();
+            frames.insert(
+                at + 1,
+                Frame {
+                    nonce,
+                    key,
+                    place,
+                    writable,
+                    exclusive: false,
+                    shared: 0,
+                },
+            );
+            Ok(nonce)
+        })
+    }
+
     /// Store `value` and give the handle script code holds for it.
     pub fn insert<F: Regional>(&mut self, value: F::Of<'r>) -> Scoped {
         self.slots.push(Some(Box::new(Slot::<'r, F>(value))));
@@ -2437,6 +2483,44 @@ mod tests {
 
     fn depth() -> usize {
         super::FRAMES.with(|frames| frames.borrow().len())
+    }
+
+    struct CountRefF;
+
+    impl Family for CountRefF {
+        type Of<'x> = &'x mut usize;
+    }
+
+    impl super::Regional for CountRefF {
+        fn name() -> &'static str {
+            "&mut usize"
+        }
+    }
+
+    /// A region lends a borrow its value gives for as long as it is open,
+    /// as an item's `&mut Tree` of `layout.iter_mut(..)` (#2698): past a
+    /// lend that starts and ends inside it, and no longer.
+    #[test]
+    fn a_regions_lend_lasts_while_the_region_is_open() {
+        let mut count = 1_usize;
+        let mut region = super::Region::new();
+        let handle = region.insert::<CountRefF>(&mut count);
+        let nonce = region.nonce();
+        let lent = super::open(&mut region, || {
+            let lent = super::with::<super::RegionF, _>(nonce, |region| {
+                let value = region.take::<CountRefF>(handle).unwrap();
+                region.lend::<CountF>(value).unwrap()
+            })
+            .unwrap();
+            let mut other = 0_usize;
+            super::lend::<CountF, _>(&mut other, |_| ());
+            super::with::<CountF, _>(lent, |count| *count += 1).unwrap();
+            lent
+        });
+        assert_eq!(super::with::<CountF, _>(lent, |_| ()), Err(Error::Expired));
+        assert_eq!(depth(), 0);
+        drop(region);
+        assert_eq!(count, 2);
     }
 
     fn next_owned(nonce: Nonce) -> Result<Option<String>, Error> {
