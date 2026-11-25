@@ -607,17 +607,22 @@ pub(crate) fn module_items_public(text: &str) -> String {
 pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Generic {
     let tokens = placed(text);
     let items = module_items(text, &tokens);
-    let declared_generic = items
+    let generic_types = items
         .iter()
         .filter_map(|item| match item.keyword {
             "struct" | "enum" | "union" if item.generic => item.name,
             _ => None,
         })
-        .collect::<Vec<_>>();
-    let generic_types = declared_generic
-        .iter()
-        .copied()
         .filter(|name| reached(name))
+        .collect::<Vec<_>>();
+    // The module's own generic types and aliases, as iced's `StyleFn<'a,
+    // Theme>`, whose impls follow them, kept or not.
+    let declared_generic = items
+        .iter()
+        .filter_map(|item| match item.keyword {
+            "struct" | "enum" | "union" | "type" if item.generic => item.name,
+            _ => None,
+        })
         .collect::<Vec<_>>();
     let mut generic = Generic::default();
     // How many inherent impls of each owner gave generic methods so far:
