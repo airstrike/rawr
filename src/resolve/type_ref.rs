@@ -808,10 +808,15 @@ fn resolve_path(
     };
 
     // `T::Output`, `Self::Output` or `Shape::Output`: an associated type of a
-    // generic parameter or a script type.
+    // generic parameter or a script type. A generic associated type's
+    // lifetimes, as `Theme::Class<'a>` of iced's `Container` names, are
+    // erased as every lifetime is.
     if let [prefix @ .., last] = &parsed.segments[..]
         && !prefix.is_empty()
-        && last.arguments.is_empty()
+        && last
+            .arguments
+            .iter()
+            .all(|argument| matches!(argument, item::type_ref::Argument::Lifetime(_)))
         && declared(types, name.as_str()).is_none()
     {
         let base_name = prefix

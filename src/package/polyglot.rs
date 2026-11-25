@@ -624,10 +624,11 @@ fn generic_inherent_methods(text: &str) -> Vec<usize> {
 /// The byte ranges of `text`'s module-level items that a crate's program
 /// module keeps (`crate_source`), each from its first attribute through
 /// its `}` or `;`: its `use` declarations and `macro_rules!` definitions,
-/// its functions, structs, enums and unions with a type or const
-/// parameter (an argument-position `impl Trait` is one), and the impls of
-/// those types. A generic type is the program's own at the program's
-/// arguments, as rustc compiles it in the program's crate. Of an inherent
+/// its functions, structs, enums, unions and type aliases with a type or
+/// const parameter (an argument-position `impl Trait` is one), as iced's
+/// `StyleFn<'a, Theme>` is one, and the impls of those types. A generic
+/// type is the program's own at the program's arguments, as rustc
+/// compiles it in the program's crate. Of an inherent
 /// impl of a concrete type, it keeps the methods with a type or const
 /// parameter, as the impl of the type's inherent trait. Its concrete types
 /// and their other impls are native, which this reads only as far as
@@ -647,7 +648,7 @@ pub(crate) fn generic_items(text: &str) -> Generic {
         let header = &tokens[item.header.clone()];
         let whole = match item.keyword {
             "use" | "macro_rules" => true,
-            "fn" | "struct" | "enum" | "union" => item.generic,
+            "fn" | "struct" | "enum" | "union" | "type" => item.generic,
             "impl" => impl_owner(header).is_some_and(|owner| generic_types.contains(&owner)),
             _ => false,
         };

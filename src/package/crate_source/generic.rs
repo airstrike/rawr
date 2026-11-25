@@ -67,10 +67,12 @@ fn glob<S: AsRef<str>>(path: &[S]) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// A module's generic function stays at its place with its imports;
-    /// its types, generic ones too, their impls and its concrete items go,
-    /// one rawr can't parse included, the glob of the crate module comes
-    /// after them, and functions that bind the concrete items.
+    /// A module's generic function, generic type with each of its impls,
+    /// and generic type alias stay at their places with its imports; its
+    /// concrete types, their impls, an alias with only lifetime parameters
+    /// and its other concrete items go, one rawr can't parse included, the
+    /// glob of the crate module comes after them, and functions that bind
+    /// the concrete items.
     #[test]
     fn a_module_keeps_its_generic_items_and_imports_at_their_places() {
         let text = "use std::fmt::Debug;\n\
@@ -82,7 +84,9 @@ mod tests {
                     pub struct Panel<M> { items: Vec<M> }\n\
                     impl<M: Debug> Panel<M> { pub fn len(&self) -> usize { self.items.len() } }\n\
                     impl From<[u8; 1]> for Tint { fn from([red]: [u8; 1]) -> Self { Tint { red } } }\n\
-                    impl Panel<u8> { pub fn first(&self) -> u8 { self.items[0] } }\n";
+                    impl Panel<u8> { pub fn first(&self) -> u8 { self.items[0] } }\n\
+                    pub type Shading<'a, T> = Box<dyn Fn(&T) -> Tint + 'a>;\n\
+                    pub type Named<'a> = &'a str;\n";
         let generic = super::text(text, &["events", "tinted"], super::Bindings::Written, &[]);
         let (kept, bound) = generic
             .split_once("\n#[allow(dead_code)]")
@@ -96,10 +100,12 @@ mod tests {
                 "",
                 "",
                 "pub fn shade(tint: impl Into<Tint>) -> Tint { darken(tint.into()) }",
+                "#[derive(Clone)]",
+                "pub struct Panel<M> { items: Vec<M> }",
+                "impl<M: Debug> Panel<M> { pub fn len(&self) -> usize { self.items.len() } }",
                 "",
-                "",
-                "",
-                "",
+                "impl Panel<u8> { pub fn first(&self) -> u8 { self.items[0] } }",
+                "pub type Shading<'a, T> = Box<dyn Fn(&T) -> Tint + 'a>;",
                 "",
                 "",
                 "pub use events::tinted::*;",
