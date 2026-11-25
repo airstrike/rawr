@@ -3983,6 +3983,64 @@ fn resolve_methods(
             }
             continue;
         }
+        // `impl<M> Diffed<M> for Label` in a crate's module the program
+        // opens: a crate trait's generic impl for a crate type, which the
+        // program runs from source at its own arguments (#2698). Its
+        // functions number with the impls for builtin types, as members
+        // `Diffed<M>::label` of the crate type.
+        #[cfg(feature = "rust-import")]
+        if let Some(item::TraitImpl::Native {
+            name, arguments, ..
+        }) = &item.trait_
+            && let Some((defined, path)) = foreign_owner(&item.owner)
+        {
+            let owner =
+                type_def::Definition::foreign(&defined, &path, shell.id, type_span(&item.owner));
+            let instance = trait_instance(&name.text, arguments);
+            for function in &mut item.functions {
+                validate_method_signature(Some(owner.name()), function, true)
+                    .map_err(|error| LocatedError::primary(shell.source, error))?;
+                let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
+                if let Err((previous_source, previous_declaration)) = declarations.declare(
+                    owner.id(),
+                    member.clone(),
+                    &item.owner,
+                    shell.source,
+                    function.name.span,
+                ) {
+                    return Err(LocatedError::related(
+                        shell.source,
+                        previous_source,
+                        Error::DuplicateMethod {
+                            owner: path.clone(),
+                            method: member,
+                            declaration: function.name.span,
+                            previous_declaration,
+                        },
+                    ));
+                }
+                let id = method::Id::from_index(BUILTIN_METHOD_IDS + builtin_methods.len());
+                let kind = if function.receiver.is_some() {
+                    crate::item::Kind::Method
+                } else {
+                    crate::item::Kind::AssociatedFunction
+                };
+                let key = crate::item::Key::associated(owner.key(), member, kind);
+                let definition = method::Definition::new(id, key, &owner, function, shell.source)
+                    .in_generic_impl(
+                        &item.generics,
+                        owner_arguments(&item.owner),
+                        item.owner.span(),
+                    )
+                    .with_trait(name.text.clone())
+                    .with_trait_arguments(arguments.clone())
+                    .for_builtin(item.owner.clone());
+                function.body.lowering = item::Lowering::NominalMethod(id);
+                builtin_methods.push(definition);
+                builtin_self_types.push(item.owner.clone());
+            }
+            continue;
+        }
         let (owner_id, owner_name) =
             impl_owner(&item.owner).map_err(|error| LocatedError::primary(shell.source, error))?;
         let owner = definitions
@@ -3999,20 +4057,7 @@ fn resolve_methods(
             name, arguments, ..
         }) = &item.trait_
         {
-            let instance: ImmutableString = if arguments.is_empty() {
-                name.text.clone()
-            } else {
-                format!(
-                    "{}<{}>",
-                    name.text,
-                    arguments
-                        .iter()
-                        .map(full_type_name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                .into()
-            };
+            let instance = trait_instance(&name.text, arguments);
             for function in &mut item.functions {
                 validate_method_signature(Some(owner.name()), function, true)
                     .map_err(|error| LocatedError::primary(shell.source, error))?;
@@ -4136,6 +4181,20 @@ fn resolve_methods(
 const BUILTIN_METHOD_IDS: usize = 1 << 30;
 
 /// A facade type as a trait impl owner: its path.
+/// The trait at its impl's `arguments`, which names the impl's members:
+/// `Convert<i64>` beside `Convert<String>`, and a trait with none itself.
+fn trait_instance(name: &ImmutableString, arguments: &[type_ref::Type]) -> ImmutableString {
+    if arguments.is_empty() {
+        return name.clone();
+    }
+    let arguments = arguments
+        .iter()
+        .map(full_type_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}<{arguments}>").into()
+}
+
 fn foreign_owner(ty: &type_ref::Type) -> Option<(host::defined::Defined, ImmutableString)> {
     match ty {
         type_ref::Type::Path(path) => match &path.target {

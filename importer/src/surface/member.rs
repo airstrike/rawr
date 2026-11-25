@@ -18,6 +18,17 @@ pub fn path(trait_path: &str, member: &str) -> String {
     format!("{trait_path}::__rawr_self::{member}")
 }
 
+/// The path rustc writes for one `path` gives (`path`):
+/// `Widget::_boxed` for `Widget::__rawr_self::_boxed`. Any other path is
+/// itself.
+#[must_use]
+pub fn written(path: &str) -> String {
+    match path.rsplit_once("::__rawr_self::") {
+        Some((trait_path, member)) => format!("{trait_path}::{member}"),
+        None => path.to_owned(),
+    }
+}
+
 /// Whether `path` is one a facade declares a method of a trait over its
 /// `Self` under (`path`).
 #[must_use]

@@ -410,6 +410,31 @@ impl<'a> Parser<'a> {
             if reaches_param(&self.inference.resolve(ty)) {
                 self.reaches_host = true;
             }
+            // A trait's argument the call of the trait's method leaves open
+            // that none of the method's inputs or its output names, as `M`
+            // of `<Label as Diffed<_>>::label(&mut self)`, is one rustc
+            // can't infer where the runner calls the method either (E0282).
+            if matches!(self.inference.resolve(ty), Ty::Infer(_))
+                && !self.collecting_instances
+                && rawr_import::surface::member::declared(&item.path())
+                && !item
+                    .signature()
+                    .parameters()
+                    .iter()
+                    .chain(std::iter::once(item.signature().output()))
+                    .any(|ty| ty.mentions_parameter(name))
+            {
+                return Err(Error::InvalidHostOperation {
+                    item: rawr_import::surface::member::written(&item.path()).into(),
+                    reason: format!(
+                        "type annotations needed: cannot infer type of the type parameter \
+                         `{}` (E0282)",
+                        item.signature().shown(name)
+                    )
+                    .into(),
+                    operation: span,
+                });
+            }
             let length = self.related_array_length(item, name, ty);
             let convert = if fixed_parameter(item, name) {
                 fixed_surface_type

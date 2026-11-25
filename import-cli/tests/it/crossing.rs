@@ -4423,6 +4423,74 @@ fn a_program_value_boxed_as_a_crate_object_with_no_stand_in_fails_at_check() {
     );
 }
 
+/// A crate's generic impl of its trait for a concrete crate type, `impl<M>
+/// Diffed<M> for Label` in a module the program opens, runs from source at
+/// the program's `Note` over native labels, as cargo runs it, and the
+/// runner binds no instance of it: iced's `impl<Message, ..> Widget<..>
+/// for Text` at the program's message is the same.
+#[test]
+fn a_crate_generic_impl_for_a_crate_type_runs_from_source_at_the_programs_arguments() {
+    let root = lane(Some("tinted_marked.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[\"calm\", \"deep\"]\n[\"note\"]\n[calm]\n[[deep]]\n");
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).into_iter().flatten() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    assert!(!bound.contains("Diffed"), "Diffed is bound:\n{bound}");
+}
+
+/// A crate call whose trait argument the call leaves open and none of its
+/// item's inputs or output names fails at check, at the call: the
+/// runner's rustc couldn't infer it either, and its build once failed.
+#[test]
+fn a_crate_call_with_an_open_trait_argument_fails_at_check() {
+    let root = lane(Some("tinted_unfixed.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env_remove("RAWR_CRATE_SOURCE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: cannot use `events::tinted::Diffed::label` here: type annotations needed: \
+             cannot infer type of the type parameter `M` (E0282)"
+        ) && stderr.contains("--> src/main.rs:14:"),
+        "{stderr}"
+    );
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();

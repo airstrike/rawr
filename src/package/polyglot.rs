@@ -607,12 +607,16 @@ pub(crate) fn module_items_public(text: &str) -> String {
 pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Generic {
     let tokens = placed(text);
     let items = module_items(text, &tokens);
-    let generic_types = items
+    let declared_generic = items
         .iter()
         .filter_map(|item| match item.keyword {
             "struct" | "enum" | "union" if item.generic => item.name,
             _ => None,
         })
+        .collect::<Vec<_>>();
+    let generic_types = declared_generic
+        .iter()
+        .copied()
         .filter(|name| reached(name))
         .collect::<Vec<_>>();
     let mut generic = Generic::default();
@@ -626,7 +630,13 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
             "fn" | "struct" | "enum" | "union" | "type" => {
                 item.generic && item.name.is_some_and(reached)
             }
-            "impl" => impl_owner(header).is_some_and(|owner| generic_types.contains(&owner)),
+            // A crate trait's generic impl for a type that is not one of
+            // this module's generic types, as `impl<M> Diffed<M> for
+            // Label`: the program runs it from source at its own arguments.
+            "impl" => impl_owner(header).is_some_and(|owner| {
+                generic_types.contains(&owner)
+                    || item.generic && is_trait_impl(header) && !declared_generic.contains(&owner)
+            }),
             _ => false,
         };
         if whole {
@@ -712,6 +722,22 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
 /// The name of the type an impl whose header is `header` is for: the last
 /// word of the path after its `for`, or of its own path, before its
 /// arguments.
+/// Whether an impl's header is a trait's impl: a `for` outside its
+/// parameters, as `impl<M> Diffed<M> for Label`.
+fn is_trait_impl(header: &[(Token<'_>, usize)]) -> bool {
+    let mut depth = 0_usize;
+    header.iter().enumerate().any(|(index, (token, _))| {
+        match token {
+            Token::Punct(b'<') => depth += 1,
+            Token::Punct(b'>') if index > 0 && header[index - 1].0 == Token::Punct(b'-') => {}
+            Token::Punct(b'>') => depth = depth.saturating_sub(1),
+            Token::Ident("for", _) => return depth == 0,
+            _ => {}
+        }
+        false
+    })
+}
+
 fn impl_owner<'t>(header: &[(Token<'t>, usize)]) -> Option<&'t str> {
     let mut depth = 0_usize;
     let mut start = 0;
