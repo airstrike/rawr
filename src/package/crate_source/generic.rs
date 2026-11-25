@@ -216,5 +216,14 @@ mod tests {
         // whose self type names its own type parameter stays native.
         assert!(generic.contains("for Text<'a> {}"), "{generic}");
         assert!(!generic.contains("for Option<T>"), "{generic}");
+        // One for a type the program reaches by no name stays native.
+        let unreached = super::text(
+            text,
+            &["events", "tinted"],
+            super::Bindings::Left,
+            &[],
+            &|name| name != "Label",
+        );
+        assert!(!unreached.contains("for Label {"), "{unreached}");
     }
 }

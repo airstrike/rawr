@@ -649,7 +649,9 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
             // this module's generic types, as `impl<M> Diffed<M> for
             // Label`: the program runs it from source at its own arguments.
             // An impl whose self type names its own parameters, as
-            // `impl<T> Meta for Option<T>`, is no such impl.
+            // `impl<T> Meta for Option<T>`, is no such impl, and one for a
+            // type the program reaches by no name stays native, as iced's
+            // `impl Widget for Void`.
             "impl" => impl_owner(header).is_some_and(|owner| {
                 generic_types.contains(&owner)
                     || item.generic
@@ -657,6 +659,7 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
                         && named_owner(header)
                         && !owner_generic(text, header)
                         && !declared_generic.contains(&owner)
+                        && reached(owner)
             }),
             _ => false,
         };
