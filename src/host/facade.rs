@@ -190,7 +190,8 @@ impl TypeAlias {
 /// A crate trait Rawr code names (D604): its qualified path, identity,
 /// type parameters other than `Self`, each one's default, and the callable
 /// a program's function or closure fills it as, through the crate's impl
-/// of it for every callable (#1981).
+/// of it for every callable (#1981), and whether the runner has one
+/// stand-in for it that a program's value of any type fills (#2698).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TraitHeader {
     pub(crate) path: host::path::Path,
@@ -198,6 +199,7 @@ pub(crate) struct TraitHeader {
     pub(crate) parameters: Box<[ImmutableString]>,
     pub(crate) defaults: Box<[Option<host::type_ref::Type>]>,
     pub(crate) call: Option<host::type_ref::Type>,
+    pub(crate) object: bool,
 }
 
 /// One impl of a crate trait (D604): its own type parameters, the trait's
@@ -262,6 +264,7 @@ impl TraitHeader {
                 .as_ref()
                 .map(host::type_ref::Type::try_clone)
                 .transpose()?,
+            object: self.object,
         })
     }
 }
@@ -336,6 +339,7 @@ impl TraitHeader {
             parameters: self.parameters.clone(),
             defaults,
             call,
+            object: self.object,
         })
     }
 }
@@ -810,6 +814,7 @@ impl Builder {
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
         call: Option<host::type_ref::Type>,
+        object: bool,
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         self.trait_headers
@@ -821,6 +826,7 @@ impl Builder {
             parameters,
             defaults,
             call,
+            object,
         });
         Ok(self)
     }

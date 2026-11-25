@@ -960,6 +960,9 @@ fn build(
                 header.parameters().map(ImmutableString::from).collect(),
                 defaults,
                 header.call().and_then(|call| self::ty(call).ok()),
+                header
+                    .outputs()
+                    .is_some_and(|outputs| outputs.object().is_some()),
             )
             .map_err(|source| entry_error(facade.root(), header.path(), source.into()))?;
     }

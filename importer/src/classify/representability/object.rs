@@ -25,6 +25,11 @@ pub enum Pointer {
     Rc,
     /// `Arc<dyn Trait>`, which shares its value across threads (#1304).
     Arc,
+    /// The runner's one stand-in for the trait, a sized type that owns a
+    /// program's value of any type and implements the trait by calling
+    /// the value's impl: what a crate's `T: Trait` is where the program's
+    /// value fills it, so no runner is built for the value's type (#2698).
+    StandIn,
 }
 
 impl Pointer {
@@ -32,7 +37,7 @@ impl Pointer {
     /// rather than borrowing it.
     #[must_use]
     pub const fn owns(self) -> bool {
-        matches!(self, Self::Boxed | Self::Rc | Self::Arc)
+        matches!(self, Self::Boxed | Self::Rc | Self::Arc | Self::StandIn)
     }
 }
 

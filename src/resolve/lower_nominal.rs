@@ -66,6 +66,8 @@ mod moves;
 mod mutability;
 mod names;
 mod naming;
+#[cfg(feature = "rust-import")]
+mod object_stand_in;
 mod obligation;
 mod op;
 #[cfg(feature = "rust-import")]
@@ -890,6 +892,10 @@ struct Parser<'a> {
     /// Each coercion to a trait object whose key waits for the body's
     /// types (D1115.3).
     pending_objects: Vec<trait_object::Pending>,
+    /// Each crate call's argument that may fill its parameter as the
+    /// trait's stand-in, decided once the body's types are known (#2698).
+    #[cfg(feature = "rust-import")]
+    pending_stand_ins: Vec<object_stand_in::Pending>,
     /// Whether this body is a template's generic read, which its instances
     /// lower again at their types (D1115).
     template_read: bool,
@@ -1266,6 +1272,8 @@ impl<'a> Parser<'a> {
             pending_template_calls: Vec::new(),
             instance_uses: instance::Uses::default(),
             pending_objects: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            pending_stand_ins: Vec::new(),
             template_read: false,
             reaches_host: false,
             impl_uses: Vec::new(),

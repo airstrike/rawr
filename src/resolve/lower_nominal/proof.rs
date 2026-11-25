@@ -138,7 +138,11 @@ impl<'a> Parser<'a> {
                     operands,
                     output,
                     span,
+                    stand_ins,
                 } = *operation;
+                // Only a crate's item fills a parameter with a stand-in.
+                #[cfg(not(feature = "rust-import"))]
+                let _ = stand_ins;
                 for (_, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
                     // A parameter no script value fixes is rustc's to infer
@@ -188,7 +192,7 @@ impl<'a> Parser<'a> {
                 #[cfg(feature = "rust-import")]
                 let instance = self.imported_instance_key(
                     &item,
-                    &requirements,
+                    (&requirements, &stand_ins),
                     &self
                         .crossing_slots(
                             &item,
@@ -270,6 +274,8 @@ impl<'a> Parser<'a> {
                 });
                 ExecutableOp::Sequence(sequence::Constructor::checked(concrete.as_ref(), proof))
             }
+            #[cfg(feature = "rust-import")]
+            Op::StandIn(coercion) => ExecutableOp::StandIn(coercion),
             #[cfg(feature = "rust-import")]
             Op::CallableObject { call, span } => {
                 let call = self.inference.resolve(&call);

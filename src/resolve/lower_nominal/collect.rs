@@ -328,6 +328,7 @@ impl<'a> Parser<'a> {
             operands,
             output,
             span,
+            stand_ins,
             ..
         } = operation;
         let span = *span;
@@ -415,7 +416,7 @@ impl<'a> Parser<'a> {
             } else {
                 imported_surface_type
             };
-            let mut surface = convert(
+            let surface = convert(
                 &self.inference,
                 &self.models,
                 ty,
@@ -435,6 +436,7 @@ impl<'a> Parser<'a> {
                 },
                 error => error,
             })?;
+            let mut surface = super::object_stand_in::standing_in(surface, name, stand_ins);
             fix_array_length(&mut surface, length);
             types.push(surface);
         }

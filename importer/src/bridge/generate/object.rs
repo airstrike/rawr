@@ -368,12 +368,16 @@ fn owner(pointer: Pointer) -> &'static str {
     match pointer {
         Pointer::Rc => "std::rc::Rc::new",
         Pointer::Arc => "std::sync::Arc::new",
-        Pointer::Boxed | Pointer::Lasting | Pointer::Shared => "Box::new",
+        Pointer::Boxed | Pointer::Lasting | Pointer::Shared | Pointer::StandIn => "Box::new",
     }
 }
 
-/// The Rust type of `object` behind its pointer.
+/// The Rust type of `object` behind its pointer: the trait's stand-in
+/// itself for [`Pointer::StandIn`], when the runner can write one.
 pub(super) fn rust_type(object: &Object) -> Option<String> {
+    if object.pointer() == Pointer::StandIn {
+        return stand_in(object).ok().flatten();
+    }
     let dynamic = object_type(object)?;
     Some(match object.pointer() {
         Pointer::Lasting => format!("&'static ({dynamic})"),
@@ -381,6 +385,7 @@ pub(super) fn rust_type(object: &Object) -> Option<String> {
         Pointer::Boxed => format!("Box<{dynamic}>"),
         Pointer::Rc => format!("std::rc::Rc<{dynamic}>"),
         Pointer::Arc => format!("std::sync::Arc<{dynamic}>"),
+        Pointer::StandIn => return None,
     })
 }
 
@@ -407,6 +412,14 @@ pub(super) fn render_owned(
     output: &mut String,
 ) -> Result<(), request::Error> {
     let rust = rust_type(object).ok_or_else(|| request::drift("a trait object's type"))?;
+    // The stand-in holds a program's value, which only the program makes.
+    if object.pointer() == Pointer::StandIn {
+        return write!(
+            output,
+            "{{ let value = {value}; match __rawr_internal::object::Coerced::of(&value) {{ Some((inner, tag)) if tag.as_str() == {PROGRAM:?} => Ok::<{rust}, Error>({rust}(__rawr_internal::crossing::Object::new(inner))), _ => Err(Error::TypeMismatch) }} }}"
+        )
+        .map_err(request::unwritable);
+    }
     let mut arms = String::new();
     let implementors = IMPLEMENTORS.with_borrow(|implementors| {
         implementors
@@ -443,7 +456,7 @@ pub(super) fn render_owned(
                 "if arguments.arena.index::<{boxed}>(&handle).is_ok() {{ arguments.arena.take::<{boxed}>(handle).map(<{rust}>::from) }} else {{ arguments.arena.take::<{rust}>(handle) }}"
             )
         }
-        Pointer::Lasting | Pointer::Shared | Pointer::Boxed => {
+        Pointer::Lasting | Pointer::Shared | Pointer::Boxed | Pointer::StandIn => {
             format!("arguments.arena.take::<{rust}>(handle)")
         }
     };

@@ -20,6 +20,7 @@ pub mod framed;
 pub mod framing;
 pub mod grid;
 pub mod handed;
+pub mod held;
 pub mod image;
 pub mod keyed;
 pub mod keys;

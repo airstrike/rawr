@@ -843,6 +843,8 @@ impl<'a> Parser<'a> {
             }
         }
         self.finish_objects()?;
+        #[cfg(feature = "rust-import")]
+        self.finish_stand_ins()?;
         self.finish_template_calls();
         for (id, value, at) in std::mem::take(&mut self.literal_values) {
             let value = Wide::Signed(value.into());

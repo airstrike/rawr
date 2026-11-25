@@ -3,6 +3,7 @@
 // of a frame and a frame of a new program type.
 
 use events::framed::{self, Label, Shown};
+use events::held::Held;
 
 /// A mood the program shows.
 struct Mood(&'static str);
@@ -35,4 +36,10 @@ fn main() {
     println!("{}", framed::shown_one(lent));
     let lent: &dyn Shown = &framed::framed(Mood("lent")).edge('*');
     println!("{}", framed::shown_one(lent));
+    println!(
+        "{}",
+        framed::shown_one(&framed::framed(Mood("given")).edge('+'))
+    );
+    println!("{}", Held::new(framed::framed(Mood("held"))).shown());
+    println!("{}", Held::new(framed::framed(Count(7)).edge('!')).shown());
 }

@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 283;
+const CLASSIFIER_VERSION: u32 = 284;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -3585,10 +3585,15 @@ impl<'graph> Context<'graph> {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                if !cases.is_empty() {
-                    self.retain_array::<Case>(cases.len())?;
-                    relations.push(Relation::new(*index, Box::default(), cases.into()));
-                }
+                // With no case, the bound still names its trait, whose one
+                // stand-in a program's value fills it with (#2698).
+                self.retain_array::<Case>(cases.len())?;
+                let relation = Relation::new(*index, Box::default(), cases.into());
+                relations.push(if relation.cases().is_empty() {
+                    relation.of_trait(*self.graph.surface_definition(trait_id).as_bytes())
+                } else {
+                    relation
+                });
                 continue;
             }
             // A slice, as `[Span<'a, L>]` of iced's `rich_text(impl

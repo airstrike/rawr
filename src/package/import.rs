@@ -3237,6 +3237,17 @@ fn build(
         &opaque,
         &facade.trait_identities,
     );
+    // The traits whose header holds the vtable of the runner's one
+    // stand-in for each (#2698).
+    let objects = contract
+        .outcomes()
+        .filter(|outcome| {
+            outcome
+                .outputs()
+                .is_some_and(|outputs| outputs.object().is_some())
+        })
+        .filter_map(|outcome| Some(*outcome.identity().definition()?.as_bytes()))
+        .collect::<std::collections::BTreeSet<_>>();
     for header in trait_headers {
         if let Some(undeclared) =
             Undeclared::first(header.defaults.iter().flatten(), &header.parameters)
@@ -3282,6 +3293,7 @@ fn build(
                 .collect(),
             defaults,
             call,
+            objects.contains(&header.identity),
         )?;
     }
     for header in impl_headers {
@@ -4063,6 +4075,7 @@ fn written(
                 Pointer::Boxed => format!("Box<dyn {name}>"),
                 Pointer::Rc => format!("Rc<dyn {name}>"),
                 Pointer::Arc => format!("Arc<dyn {name}>"),
+                Pointer::StandIn => format!("impl {name}"),
             }
         }
     }

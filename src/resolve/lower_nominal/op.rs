@@ -44,6 +44,10 @@ pub(super) enum Op {
         call: Ty,
         span: Span,
     },
+    /// A crate call's argument that may fill its parameter as the trait's
+    /// stand-in (#2698), passed on as the trait's object when it does.
+    #[cfg(feature = "rust-import")]
+    StandIn(super::object_stand_in::Coercion),
     #[cfg(feature = "rust-import")]
     Imported {
         path: ImmutableString,
@@ -2150,6 +2154,8 @@ pub(super) enum ExecutableOp {
     #[cfg(feature = "rust-import")]
     CallableObject(callable_object::Coercion),
     #[cfg(feature = "rust-import")]
+    StandIn(super::object_stand_in::Coercion),
+    #[cfg(feature = "rust-import")]
     Imported {
         proof: crate::host::structural::Proof,
     },
@@ -2224,6 +2230,9 @@ pub(super) struct IntrinsicOperation {
     pub(super) operands: Box<[(Ty, Span, bool)]>,
     pub(super) output: Ty,
     pub(super) span: Span,
+    /// The type parameters the call fills with the trait's stand-in, a
+    /// program's value of any type (#2698).
+    pub(super) stand_ins: Box<[ImmutableString]>,
 }
 
 #[cfg(feature = "rust-import")]
@@ -2436,6 +2445,8 @@ impl ExecutableOp {
             Self::Sequence(constructor) => constructor.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::CallableObject(coercion) => coercion.dependencies(),
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(_) => BTreeSet::new(),
             Self::Witnessed(op) => op.placeholder.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof.dependencies(),
@@ -2461,7 +2472,10 @@ impl ExecutableOp {
             Self::Witnessed(op) => op.placeholder.projection_requirement(),
             Self::Projection { proof } => Some((**proof).clone()),
             #[cfg(feature = "rust-import")]
-            Self::Imported { .. } | Self::Sequence(_) | Self::CallableObject(_) => None,
+            Self::Imported { .. }
+            | Self::Sequence(_)
+            | Self::CallableObject(_)
+            | Self::StandIn(_) => None,
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
             | Self::Struct { .. }
@@ -2484,7 +2498,7 @@ impl ExecutableOp {
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
             #[cfg(feature = "rust-import")]
-            Self::Sequence(_) | Self::CallableObject(_) => None,
+            Self::Sequence(_) | Self::CallableObject(_) | Self::StandIn(_) => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
             Self::Symbolic { .. }
             | Self::Projection { .. }
@@ -2516,6 +2530,8 @@ impl ExecutableOp {
             Self::Sequence(constructor) => return constructor.name(),
             #[cfg(feature = "rust-import")]
             Self::CallableObject(coercion) => return coercion.name(),
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(coercion) => return coercion.name(),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
             }
@@ -2586,6 +2602,8 @@ impl ExecutableOp {
             ],
             #[cfg(feature = "rust-import")]
             Self::CallableObject(_) => vec![TypeId::of::<Dynamic>()],
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(_) => vec![TypeId::of::<Dynamic>()],
             // A bare generic operand takes any value; the proof checks it.
             Self::Witnessed(op) => {
                 let parameter = intrinsic::Type::witness_parameter(0).runtime();
@@ -2671,6 +2689,8 @@ impl ExecutableOp {
             Self::Sequence(constructor) => constructor.invoke(context.as_ref(), args),
             #[cfg(feature = "rust-import")]
             Self::CallableObject(coercion) => coercion.invoke(context.as_ref(), args),
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(coercion) => coercion.invoke(args),
             Self::Witnessed(op) => op.invoke(context, args, models),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {

@@ -2475,7 +2475,9 @@ impl<'a> Parser<'a> {
                 ));
                 use rawr_import::classify::representability::object::Pointer;
                 match pointer {
-                    Pointer::Boxed => Ty::Boxed(object),
+                    // A stand-in is what no crate's signature names; it
+                    // holds its value as a box does.
+                    Pointer::Boxed | Pointer::StandIn => Ty::Boxed(object),
                     Pointer::Rc => Ty::Counted(Counter::Rc, object),
                     Pointer::Arc => Ty::Counted(Counter::Arc, object),
                     Pointer::Lasting | Pointer::Shared => Ty::Reference {
@@ -2626,7 +2628,10 @@ impl<'a> Parser<'a> {
     pub(super) fn imported_instance_key(
         &self,
         item: &crate::host::item::Definition,
-        requirements: &[(ImmutableString, Ty, capability::Set)],
+        (requirements, stand_ins): (
+            &[(ImmutableString, Ty, capability::Set)],
+            &[ImmutableString],
+        ),
         slots: &[rawr_import::surface::instance::Slot],
         items: &[(u32, [u8; 32])],
         span: Span,
@@ -2651,9 +2656,10 @@ impl<'a> Parser<'a> {
                 } else {
                     instance_surface_type
                 };
-                let mut surface = convert(&self.inference, &self.models, ty).ok_or_else(|| {
+                let surface = convert(&self.inference, &self.models, ty).ok_or_else(|| {
                     keyless_type_argument(&self.inference, &self.models, item, name, ty, span)
                 })?;
+                let mut surface = super::object_stand_in::standing_in(surface, name, stand_ins);
                 fix_array_length(&mut surface, self.related_array_length(item, name, ty));
                 Ok(surface)
             })

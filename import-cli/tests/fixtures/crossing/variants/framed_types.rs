@@ -4,6 +4,7 @@
 // `Shown` type, boxed as `dyn Shown` for the crate's concrete `shown_all`.
 
 use events::framed::{self, Label, Shown};
+use events::held::Held;
 
 /// A mood the program shows.
 struct Mood(&'static str);
@@ -25,4 +26,9 @@ fn main() {
     println!("{}", framed::shown_one(lent));
     let lent: &dyn Shown = &framed::framed(Mood("lent")).edge('*');
     println!("{}", framed::shown_one(lent));
+    println!(
+        "{}",
+        framed::shown_one(&framed::framed(Mood("given")).edge('+'))
+    );
+    println!("{}", Held::new(framed::framed(Mood("held"))).shown());
 }

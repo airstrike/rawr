@@ -33,6 +33,8 @@ impl<'a> Parser<'a> {
                 count.checked_mul(std::mem::size_of::<(Ty, Span, bool)>()),
             )?;
         }
+        #[cfg(feature = "rust-import")]
+        let stand_ins = self.stand_in_arguments(&item, &requirements, arguments, call)?;
         let mut operands = Vec::with_capacity(arguments.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
             operands.push((receiver.ty.clone(), receiver.span, true));
@@ -67,6 +69,8 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         self.fix_bounds_by_impls(&item, &requirements, &operands, call)?;
         self.keep_host_bounds(&item, &requirements, call);
+        #[cfg(feature = "rust-import")]
+        self.keep_stand_ins(stand_ins, self.ops.len(), usize::from(receiver.is_some()));
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -76,6 +80,7 @@ impl<'a> Parser<'a> {
                 operands: operands.into_boxed_slice(),
                 output,
                 span: call,
+                stand_ins: Box::default(),
             }),
         }))
     }
