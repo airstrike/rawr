@@ -504,6 +504,13 @@ impl<'a> Parser<'a> {
         if place.lvalue.is_none() {
             return Ok(origin::Fragment::default());
         }
+        if let Some(Lvalue::Slice(slice)) = &place.lvalue
+            && let Some(single) = &slice.single
+        {
+            let mut element = place.clone();
+            element.lvalue = Some((**single).clone());
+            return self.store_into(&element, &format!("{value}[0]"));
+        }
         if let Some(Lvalue::Slice(slice)) = &place.lvalue {
             self.require_mutable_binding(&slice.binding, place.span)?;
             let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));

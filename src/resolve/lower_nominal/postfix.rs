@@ -3115,6 +3115,7 @@ impl<'a> Parser<'a> {
                 high: high.clone(),
                 inclusive,
                 open,
+                single: None,
             }))
         });
         let source = self.prelude_op(

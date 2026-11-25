@@ -8120,6 +8120,53 @@ main();
 }
 
 #[test]
+fn slice_from_mut_is_a_view_of_the_one_place() {
+    // `std::slice::from_mut` of a local and of a struct's field, given to
+    // a function taking `&mut [T]`, is the one-element slice of that
+    // place: a write through an index or `iter_mut` reaches the place
+    // itself, as core's `from_mut` does. One kept in a local is refused
+    // at check.
+    let output = printed(
+        r#"
+struct Holder {
+    content: String,
+    count: i32,
+}
+fn bumped(items: &mut [i32]) {
+    items[0] += 4;
+}
+fn diffed(items: &mut [String]) -> usize {
+    for item in items.iter_mut() {
+        item.push('!');
+    }
+    items.len()
+}
+fn main() {
+    let mut n = 1;
+    bumped(std::slice::from_mut(&mut n));
+    println!("{n}");
+    let mut holder = Holder { content: "calm".to_string(), count: 2 };
+    let count = diffed(std::slice::from_mut(&mut holder.content));
+    println!("{count} {} {}", holder.content, holder.count);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "5\n1 calm! 2\n");
+    let report = refused(
+        r#"
+fn main() {
+    let mut n = 1;
+    let s = std::slice::from_mut(&mut n);
+    s[0] += 4;
+}
+main();
+"#,
+    );
+    assert!(report.contains("not supported in Rawr yet"), "{report}");
+}
+
+#[test]
 fn a_kept_iter_mut_reaches_each_element() {
     // A kept `iter_mut()` used other than by `next()`: a local walked by a
     // `for`, `zip`, `rev`, `enumerate`, `filter`, `for_each`, collected into

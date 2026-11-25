@@ -324,7 +324,74 @@ impl<'a> Parser<'a> {
                 self.parse_iterator_source(constructor, &function.written, function.reference)
             }
             Body::Identity => self.parse_identity(&function),
+            Body::SliceFromMut => self.parse_slice_from_mut(&function),
         }
+    }
+
+    /// The call of `core::slice::from_mut`, its path read: the view of the
+    /// one element the borrowed place is (`eval::view::SINGLE`), so a
+    /// write through the slice reaches the place, as core's
+    /// `from_raw_parts_mut(s, 1)` does.
+    fn parse_slice_from_mut(&mut self, function: &StdFunction) -> Result<ParsedExpr, Error> {
+        // Given whole to a call's `&mut [T]` parameter, which stores the
+        // element back when it returns.
+        let argument = self.mutable_borrow == Some(self.expression_stack.len());
+        let (arguments, end) =
+            self.parse_borrowing_arguments(&format!("`{}` arguments", function.written))?;
+        let call = span(function.reference.start(), end);
+        let [value] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|arguments| {
+            Error::argument_count(
+                crate::resolve::Callee::Function,
+                function.written.clone(),
+                1,
+                arguments.len(),
+                call,
+            )
+        })?;
+        let element = self.inference.fresh();
+        let borrowed = Ty::Reference {
+            mutable: true,
+            target: Box::new(element.clone()),
+        };
+        self.require_type(&borrowed, &value.ty, value.span)?;
+        let element = self.inference.resolve(&element);
+        let refused = || Error::UnsupportedNominalSyntax {
+            construct: crate::resolve::Unsupported::said(
+                "`slice::from_mut` of this place other than as a call's argument: not \
+                 supported in Rawr yet",
+            ),
+            source: value.span,
+        };
+        let (binding, base) = match &value.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => {
+                (binding.clone(), origin::Fragment::plain(binding.as_str()))
+            }
+            Some(Lvalue::Place { binding, place, .. }) => (binding.clone(), place.clone()),
+            Some(Lvalue::Field(field)) => (field.binding.clone(), field.place()),
+            _ => return Err(refused()),
+        };
+        if !argument || !matches!(self.peek(), Token::Comma | Token::RightParen) {
+            return Err(refused());
+        }
+        let slice = Ty::sequence(sequence::Kind::Slice, element);
+        let ty = Ty::Reference {
+            mutable: true,
+            target: Box::new(slice.clone()),
+        };
+        let lvalue = Lvalue::Slice(Box::new(lvalue::Slice {
+            binding,
+            ty: slice,
+            base,
+            low: "0".into(),
+            high: "1".into(),
+            inclusive: false,
+            open: function.reference.start(),
+            single: value.lvalue.clone().map(Box::new),
+        }));
+        let source = value.rendered_source().surrounded("[", "]");
+        let mut sliced = self.operator_expr(source, ty, call);
+        sliced.lvalue = Some(lvalue);
+        Ok(sliced)
     }
 
     /// The call of `core::convert::identity`, its path read: `fn
@@ -943,6 +1010,8 @@ enum Use {
 enum Body {
     /// `core::convert::identity`.
     Identity,
+    /// `core::slice::from_mut`.
+    SliceFromMut,
     /// `std::iter::repeat` and std::iter's other iterator sources.
     Iterator(iterator::Constructor),
 }
@@ -952,6 +1021,7 @@ impl Body {
     fn of(definition: &str) -> Option<Self> {
         match definition {
             "core::convert::identity" => Some(Self::Identity),
+            "core::slice::raw::from_mut" => Some(Self::SliceFromMut),
             _ => iterator::Constructor::of(definition).map(Self::Iterator),
         }
     }
