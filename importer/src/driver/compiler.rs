@@ -133,9 +133,12 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // forwards the associated type a parameter's projection names to its own
 // parameter's, with that item (#2060). Schema 107 gives a standard trait
 // whose supertrait is `Iterator` its shape, as `DoubleEndedIterator`
-// (#2698). `driver.rs`, `cargo/toolchain.rs` and
-// `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 107;
+// (#2698). Schema 108 normalizes a projection on a concrete trait reference
+// whose own arguments hold a lifetime, as `<Theme as Catalog>::Class<'_>`,
+// to the impl's value at that lifetime (#2698). `driver.rs`,
+// `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
+// move with it.
+const PROTOCOL_SCHEMA: u32 = 108;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -4150,6 +4153,51 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         (!normalized.has_aliases() && !has_lifetime(normalized)).then_some(normalized)
     }
 
+    /// What the projection `ty` on a trait reference that names no
+    /// parameter and no lifetime normalizes to with its own lifetimes
+    /// kept, as rustc confirms the one impl that applies: iced's `fn
+    /// style(&self, class: &Self::Class<'_>)` in `impl Catalog for Theme`
+    /// takes `&StyleFn<'_, Theme>`, the impl's `type Class<'a> =
+    /// StyleFn<'a, Self>` at the signature's late-bound lifetime. A value
+    /// the impl doesn't give itself (the trait's default, a specialized
+    /// one) and a value that would name an impl's erased lifetime are
+    /// none.
+    fn normalized_through_impl(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+        let tcx = self.tcx;
+        let ty::Alias(_, alias) = ty.kind() else {
+            return None;
+        };
+        let ty::AliasTyKind::Projection { def_id } = alias.kind else {
+            return None;
+        };
+        let trait_id = tcx.parent(def_id);
+        let own = tcx.generics_of(trait_id).count();
+        let trait_ref = ty::TraitRef::new(tcx, trait_id, alias.args.iter().take(own));
+        let named_lifetime = trait_ref
+            .args
+            .iter()
+            .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)));
+        if ty.has_param() || named_lifetime || trait_ref.has_escaping_bound_vars() {
+            return None;
+        }
+        let selected = tcx.codegen_select_candidate(
+            ty::TypingEnv::fully_monomorphized()
+                .as_query_input(tcx.erase_and_anonymize_regions(trait_ref)),
+        );
+        let Ok(rustc_middle::traits::ImplSource::UserDefined(selected)) = selected else {
+            return None;
+        };
+        let value = tcx
+            .impl_item_implementor_ids(selected.impl_def_id)
+            .get(&def_id)?;
+        let arguments = alias.args.rebase_onto(tcx, trait_id, selected.args);
+        let normalized = tcx
+            .type_of(*value)
+            .instantiate(tcx, arguments)
+            .skip_norm_wip();
+        (!normalized.has_erased_regions()).then_some(normalized)
+    }
+
     fn type_of(&mut self, ty: Ty<'tcx>, owner: DefId, depth: usize) -> Result<Type, String> {
         check_type_depth(depth)?;
         Ok(match ty.kind() {
@@ -4333,6 +4381,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 // the owner's environment: here the impl's `T`.
                 ty::AliasTyKind::Projection { .. }
                     if let Some(normalized) = self.normalized_in(ty, owner) =>
+                {
+                    return self.type_of(normalized, owner, depth.saturating_add(1));
+                }
+                // A projection whose own arguments hold a lifetime, as
+                // `<Theme as Catalog>::Class<'a>` at a signature's
+                // late-bound `'a`, is the impl's value at that lifetime.
+                ty::AliasTyKind::Projection { .. }
+                    if let Some(normalized) = self.normalized_through_impl(ty) =>
                 {
                     return self.type_of(normalized, owner, depth.saturating_add(1));
                 }

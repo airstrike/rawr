@@ -131,7 +131,10 @@ impl Palette for Ink {
         '|'
     }
 
-    fn paint(&self, class: &EdgeFn<'_, Self>) -> char {
+    /// Names the class by the trait's projection, as iced's `impl Catalog
+    /// for Theme` writes `class: &Self::Class<'_>`: rustc normalizes it
+    /// to `&EdgeFn<'_, Ink>` at the signature's own lifetime.
+    fn paint(&self, class: &Self::Class<'_>) -> char {
         class(self)
     }
 }
