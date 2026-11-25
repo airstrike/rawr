@@ -4080,6 +4080,39 @@ fn a_crate_helpers_open_types_are_what_the_body_and_its_output_give() {
     );
 }
 
+/// A crate trait whose method takes `&mut` of the trait's parameter, as
+/// iced's `Widget::draw` takes `&mut Renderer`, has the runner's stand-in:
+/// the program's `Mood` and frames of it cross as it, and the crate's
+/// concrete `drawn_all` lends each the canvas it makes, which the
+/// program's `draw` marks. The output is `cargo run`'s.
+#[test]
+fn a_crate_traits_mut_parameter_input_is_lent_to_the_programs_impl() {
+    let root = lane(Some("framed_drawn.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "|calm| ~plain~ ||~deep~|| \n");
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();

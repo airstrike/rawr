@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 288;
+const CLASSIFIER_VERSION: u32 = 289;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -11659,7 +11659,25 @@ impl<'graph> Context<'graph> {
                     if names_self(input) {
                         return None;
                     }
-                    self.convert_closure_input(&at(input)?)
+                    let input = at(input)?;
+                    // A `&mut` of a trait parameter, as `draw(&self,
+                    // renderer: &mut Renderer, ..)` takes: the stand-in's
+                    // impl writes it at the object's arguments, a crate
+                    // value it lends the program's method for the call.
+                    if let model::Type::Reference {
+                        mutability: model::Mutability::Mutable,
+                        ty,
+                        ..
+                    } = &input
+                        && let Ok(parameter @ representability::convert::Type::Parameter(_)) =
+                            self.convert_value(ty)
+                    {
+                        return Some(representability::convert::Type::Borrowed {
+                            mutable: true,
+                            ty: Box::new(parameter),
+                        });
+                    }
+                    self.convert_closure_input(&input)
                 })
                 .collect::<Option<Box<[_]>>>()?;
             if names_self(signature.output()) {

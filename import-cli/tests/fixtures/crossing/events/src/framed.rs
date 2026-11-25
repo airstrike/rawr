@@ -156,3 +156,51 @@ where
         format!("{edge}{mark}{}{mark}{edge}", self.item.shown())
     }
 }
+
+/// What a cell is drawn onto, as iced's `Renderer`: a crate type that
+/// native code makes and lends.
+#[derive(Debug, Default)]
+pub struct Canvas {
+    marks: String,
+}
+
+impl Canvas {
+    /// Marks `text` on the canvas.
+    pub fn mark(&mut self, text: &str) {
+        self.marks.push_str(text);
+    }
+}
+
+/// What draws a cell onto a canvas its parameter names, as iced's
+/// `Widget<Message, Theme, Renderer>::draw` takes `&mut Renderer`.
+pub trait Drawn<C> {
+    /// Draws the cell onto `canvas`.
+    fn draw(&self, canvas: &mut C);
+}
+
+impl Drawn<Canvas> for Label {
+    fn draw(&self, canvas: &mut Canvas) {
+        canvas.mark(&self.0);
+    }
+}
+
+impl<S: Drawn<Canvas>> Drawn<Canvas> for Framed<S> {
+    fn draw(&self, canvas: &mut Canvas) {
+        let edge = self.edge.to_string();
+        canvas.mark(&edge);
+        self.item.draw(canvas);
+        canvas.mark(&edge);
+    }
+}
+
+/// Each of `items` drawn onto one canvas through its trait object, by
+/// the crate's concrete code.
+#[must_use]
+pub fn drawn_all(items: &[Box<dyn Drawn<Canvas>>]) -> String {
+    let mut canvas = Canvas::default();
+    for item in items {
+        item.draw(&mut canvas);
+        canvas.mark(" ");
+    }
+    canvas.marks
+}
