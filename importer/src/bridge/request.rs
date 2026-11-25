@@ -20,6 +20,9 @@ pub enum Error {
     },
     #[error("out of memory while generating the program's Rust")]
     Allocation,
+    /// What a [`trial`] render met that the runner can't write.
+    #[error("the runner can't write {0}")]
+    Unwritten(&'static str),
 }
 
 impl Error {
@@ -30,16 +33,35 @@ impl Error {
         match self {
             Self::Node(error) => error.is_stale(),
             Self::Native(error) => error.is_stale(),
-            Self::Surface(_) | Self::Limit { .. } | Self::Allocation => false,
+            Self::Surface(_) | Self::Limit { .. } | Self::Allocation | Self::Unwritten(_) => false,
         }
     }
 }
 
 /// The generated Rust disagrees with what rawr read of the crates: only a
 /// rawr bug can cause it, so it panics naming the invariant.
+/// Inside a [`trial`], it is that render's [`Error::Unwritten`] instead.
 #[track_caller]
 pub(crate) fn drift(field: &'static str) -> Error {
+    if TRIAL.get() {
+        return Error::Unwritten(field);
+    }
     panic!("the generated Rust disagrees with the crates on {field}")
+}
+
+thread_local! {
+    /// A [`trial`] render runs on this thread.
+    static TRIAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `render`, of what the runner may have no Rust for, as a crate trait's
+/// stand-in whose methods' types no program chose (#2698): a type it
+/// can't write is its `Err(Error::Unwritten(..))`, not a rawr bug.
+pub(crate) fn trial<T>(render: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    let outer = TRIAL.replace(true);
+    let rendered = render();
+    TRIAL.set(outer);
+    rendered
 }
 
 /// rawr can't read back the runner's Cargo.toml or Cargo.lock that it and

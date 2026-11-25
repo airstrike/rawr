@@ -463,6 +463,15 @@ pub(super) enum PreludeOp {
     /// runner's adapter makes the object of (`object::Coerced`).
     #[cfg(feature = "rust-import")]
     NativeCoerce,
+    /// A program's value of any type coerced to a crate's trait object
+    /// (#2698), with the member of its impl each of the trait's methods
+    /// calls: `program(value, members, owner, trait)`, `members` each
+    /// method's name and member path on lines of their own, which the
+    /// runner's one stand-in for the trait holds (`crossing::Object`). Where
+    /// rawr's copy of the crate declares a stand-in for `owner`, a native
+    /// island's type, it is that one's, as `NativeObject` makes it.
+    #[cfg(feature = "rust-import")]
+    NativeProgram,
     /// A static declared in a body, of a native type (D862): its place,
     /// or before its block writes it, its slot. A static the interpreter
     /// holds: the value its first read kept. `value(key)`.
@@ -622,6 +631,8 @@ impl PreludeOp {
             Self::NativeObject => "island.object",
             #[cfg(feature = "rust-import")]
             Self::NativeCoerce => "object.coerce",
+            #[cfg(feature = "rust-import")]
+            Self::NativeProgram => "object.program",
             Self::StaticValue => "static.value",
             Self::StaticReserved => "static.reserved",
             Self::StaticSettle => "static.settle",
@@ -942,6 +953,13 @@ impl PreludeOp {
             ],
             #[cfg(feature = "rust-import")]
             Self::NativeCoerce => vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()],
+            #[cfg(feature = "rust-import")]
+            Self::NativeProgram => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<ImmutableString>(),
+            ],
         }
     }
 
@@ -1053,6 +1071,26 @@ impl PreludeOp {
                 let value = args[0].take();
                 let value = counted::value(&value).unwrap_or(value);
                 return Ok(Dynamic::from(crate::object::Coerced::new(value, tag)));
+            }
+            #[cfg(feature = "rust-import")]
+            Self::NativeProgram => {
+                let written = args[1].clone_cast::<ImmutableString>();
+                let mut lines = written.lines();
+                let mut members = Vec::new();
+                while let (Some(name), Some(path)) = (lines.next(), lines.next()) {
+                    members.push((ImmutableString::from(name), ImmutableString::from(path)));
+                }
+                let owner = args[2].clone_cast::<ImmutableString>();
+                let trait_name = args[3].clone_cast::<ImmutableString>();
+                let value = args[0].take();
+                let value = counted::value(&value).unwrap_or(value);
+                if crate::island::declares_object(&owner) {
+                    return crate::island::object(value, &owner, &trait_name).or_else(&panic);
+                }
+                return Ok(Dynamic::from(crate::object::Program::coerced(
+                    value,
+                    members.into(),
+                )));
             }
             // Only a native trait's object makes one, which needs the crate.
             #[cfg(not(feature = "rust-import"))]

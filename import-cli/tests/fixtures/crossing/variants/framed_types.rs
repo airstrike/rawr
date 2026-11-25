@@ -17,7 +17,12 @@ impl Shown for Mood {
 fn main() {
     let items: Vec<Box<dyn Shown>> = vec![
         Box::new(framed::framed(Label("calm".into()))),
+        Box::new(Mood("plain")),
         Box::new(framed::framed(Mood("bright")).edge('#')),
     ];
     println!("{}", framed::shown_all(&items));
+    let lent: &dyn Shown = &Mood("lent");
+    println!("{}", framed::shown_one(lent));
+    let lent: &dyn Shown = &framed::framed(Mood("lent")).edge('*');
+    println!("{}", framed::shown_one(lent));
 }

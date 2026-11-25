@@ -69,6 +69,83 @@ pub struct Object {
     call: Option<Box<Call>>,
 }
 
+/// One method of a trait's vtable, each of the trait's parameters by
+/// position: what the runner's stand-in for the trait implements, at an
+/// object's arguments, by calling the program's impl (#2698).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Method {
+    name: Box<str>,
+    receiver: crate::surface::instance::ImplReceiver,
+    inputs: Box<[Type]>,
+    output: Type,
+    /// Whether the trait gives the method a body, which a program's impl
+    /// that writes none runs.
+    provided: bool,
+}
+
+impl Method {
+    #[must_use]
+    pub(crate) const fn new(
+        name: Box<str>,
+        receiver: crate::surface::instance::ImplReceiver,
+        inputs: Box<[Type]>,
+        output: Type,
+        provided: bool,
+    ) -> Self {
+        Self {
+            name,
+            receiver,
+            inputs,
+            output,
+            provided,
+        }
+    }
+
+    /// The method's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// How it takes `self`.
+    #[must_use]
+    pub const fn receiver(&self) -> crate::surface::instance::ImplReceiver {
+        self.receiver
+    }
+
+    /// Its inputs after `self`, in order.
+    #[must_use]
+    pub fn inputs(&self) -> &[Type] {
+        &self.inputs
+    }
+
+    #[must_use]
+    pub const fn output(&self) -> &Type {
+        &self.output
+    }
+
+    /// Whether the trait gives it a body.
+    #[must_use]
+    pub const fn provided(&self) -> bool {
+        self.provided
+    }
+
+    /// The method with each `Parameter(index)` of its trait's replaced by
+    /// what `given` gives for it, or `None` when it gives nothing for one.
+    #[must_use]
+    pub fn with_parameters(&self, given: &impl Fn(u32) -> Option<Type>) -> Option<Self> {
+        Some(Self {
+            inputs: self
+                .inputs
+                .iter()
+                .map(|input| input.with_parameters(given))
+                .collect::<Option<_>>()?,
+            output: self.output.with_parameters(given)?,
+            ..self.clone()
+        })
+    }
+}
+
 /// The inputs and output of the `Fn` bound of a trait's one impl for every
 /// callable, at the object's arguments: a program's callable coerced to
 /// the object runs with these, as the impl's methods call it.
@@ -203,6 +280,11 @@ impl Object {
 /// trait the crate implements for every callable ([`Object::call`]): the
 /// adapter makes a Rust closure that calls it, which the impl takes.
 pub const CALLABLE: &str = "fn";
+
+/// The tag of a program's value of any type coerced to an object of a
+/// crate's trait: the runner's one stand-in for the trait holds it and
+/// calls its impl (`Object::methods`, #2698).
+pub const PROGRAM: &str = "program";
 
 /// The tag of the program's `format_args!` coerced to an object, core's
 /// `fmt::Arguments<'_>`, which the adapter formats where the call runs.

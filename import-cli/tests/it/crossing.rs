@@ -3878,10 +3878,12 @@ fn a_crate_modules_generic_code_runs_from_its_source_with_no_instance_built() {
 /// program's crate: `RAWR_CRATE_SOURCE` opens `events::framed`, whose
 /// `Framed<S>` frames a crate label and the program's own `Shown` type,
 /// and whose `impl<S: Shown> Shown for Framed<S>` the crate's concrete
-/// `shown_all` calls through `Box<dyn Shown>`. The runner holds no
-/// instance of `Framed`. The output is `cargo run`'s. An edit that frames
-/// a frame and a new program type prints `cargo run`'s output with no new
-/// runner build.
+/// `shown_all` calls through `Box<dyn Shown>`, beside a plain program
+/// type's box, and `shown_one` through `&dyn Shown`. Each crosses as the
+/// runner's one stand-in for `Shown`, which holds no type of the
+/// program's, and the runner holds no instance of `Framed`. The output is
+/// `cargo run`'s. An edit that frames a frame and a new program type
+/// prints `cargo run`'s output with no new runner build.
 #[test]
 fn a_crate_generic_type_at_the_programs_arguments_crosses_as_a_trait_object() {
     let root = lane(Some("framed_types.rs"));
@@ -3910,7 +3912,7 @@ fn a_crate_generic_type_at_the_programs_arguments_crosses_as_a_trait_object() {
     };
     let (rawr, cargo) = run(&root);
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "|calm| #~bright~#\n");
+    assert_eq!(rawr, "|calm| ~plain~ #~bright~#\n<~lent~>\n<*~lent~*>\n");
     let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
     let mut bound = String::new();
     for entry in fs::read_dir(&adapters).unwrap() {
@@ -3926,7 +3928,10 @@ fn a_crate_generic_type_at_the_programs_arguments_crosses_as_a_trait_object() {
     .unwrap();
     let (rawr, cargo) = run(&root);
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "|calm| #~bright~# [|deep|[ |3 items|\n");
+    assert_eq!(
+        rawr,
+        "|calm| ~plain~ #~bright~# [|deep|[ |3 items|\n<~lent~>\n<*~lent~*>\n"
+    );
     assert_eq!(runners(&root.join("target/rawr/store")), built);
 }
 

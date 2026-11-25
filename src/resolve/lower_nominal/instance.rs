@@ -439,6 +439,18 @@ impl Parser<'_> {
         substitution: &BTreeMap<ImmutableString, Ty>,
         call: Span,
     ) -> Option<String> {
+        self.instance_key(template, substitution, call)
+            .map(|key| method_key_name(&key))
+    }
+
+    /// The key of the instance [`Parser::instance_name`] names, which the
+    /// running program holds it by.
+    pub(super) fn instance_key(
+        &mut self,
+        template: &crate::item::Key,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        call: Span,
+    ) -> Option<crate::item::Key> {
         let types = self
             .models
             .templates
@@ -459,9 +471,9 @@ impl Parser<'_> {
             call,
             method: true,
         };
-        let name = demand.name(&self.models);
+        let key = demand.key(&self.models);
         self.instance_uses.demands.push(demand);
-        Some(name)
+        Some(key)
     }
 
     /// Write each template call's instance over its placeholder, now that

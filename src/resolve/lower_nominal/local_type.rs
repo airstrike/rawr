@@ -1188,7 +1188,7 @@ impl<'a> Parser<'a> {
     /// `Page` after its root's `use page::Page;`. `None` when no crate
     /// declares a trait at `path`.
     #[cfg(feature = "rust-import")]
-    fn trait_known_as(&self, path: &str) -> Option<ImmutableString> {
+    pub(super) fn trait_known_as(&self, path: &str) -> Option<ImmutableString> {
         let parsed = crate::host::path::Path::parse(path).ok()?;
         let header = self.models.host.trait_header(&parsed)?;
         Some(

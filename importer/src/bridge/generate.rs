@@ -9263,6 +9263,7 @@ fn render_source(
     // names the proxies take (`family::named`), so they come first.
     let mut impls = Vec::new();
     render_impls(plans, profile, facade.as_ref(), &mut impls)?;
+    object::render_stand_ins(&mut impls);
     place::render_policies(&mut impls);
     let registrations = place::registrations();
     let mut families = Vec::new();
@@ -27178,6 +27179,7 @@ fn render_impl(
         };
         body.push_str(&render_impl_function(
             function,
+            Callee::Member(function.member()),
             generics,
             frame.as_ref(),
             revealed.as_ref(),
@@ -27256,9 +27258,21 @@ impl Revealed<'_> {
     }
 }
 
-/// One function of a script impl, as `render_impls` writes it.
+/// What a function of a runner's impl calls in the program.
+#[derive(Clone, Copy)]
+enum Callee<'a> {
+    /// The member at this path, of the proxy's impl (D594).
+    Member(&'a str),
+    /// The member the program's trait object `self.0` names for the
+    /// function, of the trait's stand-in (`crossing::Object`, #2698).
+    Object,
+}
+
+/// One function of a script impl, as `render_impls` writes it, or of a
+/// trait's stand-in (`object::render_stand_ins`).
 fn render_impl_function(
     function: &crate::surface::instance::ScriptImplFunction,
+    callee: Callee<'_>,
     generics: &[Box<str>],
     frame: Option<&frame::Frame>,
     revealed: Option<&Revealed<'_>>,
@@ -27500,11 +27514,13 @@ fn render_impl_function(
     );
     // Each thread finds the member once per generation, with its witnesses,
     // and each call enters that generation (`crossing::Member`).
-    let entered = format!(
-        "static MEMBER: __rawr_internal::crossing::Member = __rawr_internal::crossing::Member::new({:?});
-        let member = MEMBER.enter();",
-        function.member()
-    );
+    let entered = match callee {
+        Callee::Member(path) => format!(
+            "static MEMBER: __rawr_internal::crossing::Member = __rawr_internal::crossing::Member::new({path:?});
+        let member = MEMBER.enter();"
+        ),
+        Callee::Object => format!("let member = self.0.enter({:?});", function.name()),
+    };
     let mutable = mutable.join(", ");
     // An output that borrows, as a `view(&self) -> impl Widget<..> + 'a`'s
     // widgets do: made in a region, as a slot's is, anchored on the strings

@@ -45,6 +45,13 @@ impl<S: Shown> Shown for Framed<S> {
     }
 }
 
+/// `item` shown through its borrowed trait object, by the crate's
+/// concrete code.
+#[must_use]
+pub fn shown_one(item: &dyn Shown) -> String {
+    format!("<{}>", item.shown())
+}
+
 /// Each of `items` shown through its trait object, by the crate's
 /// concrete code.
 #[must_use]

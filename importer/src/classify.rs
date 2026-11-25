@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 278;
+const CLASSIFIER_VERSION: u32 = 283;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -810,6 +810,35 @@ fn type_names_static(ty: &model::Type) -> bool {
             type_names_static(element)
         }
         _ => false,
+    }
+}
+
+/// Whether `ty` names the `Self` of the trait `trait_id`, at any depth: a
+/// pointer, callable, object or opaque type is taken to, as no vtable
+/// method's signature the runner writes holds one that does.
+fn names_trait_self(ty: &model::Type, trait_id: &api::identity::Definition) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => names_trait_self(ty, trait_id),
+        _ => false,
+    };
+    match ty {
+        model::Type::SelfType(_) => true,
+        model::Type::Parameter { owner, index } => owner == trait_id && *index == 0,
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
+            arguments.iter().any(argument)
+        }
+        model::Type::Tuple(members) => members
+            .iter()
+            .any(|member| names_trait_self(member, trait_id)),
+        model::Type::Slice(element) | model::Type::Array { element, .. } => {
+            names_trait_self(element, trait_id)
+        }
+        model::Type::Reference { ty, .. } => names_trait_self(ty, trait_id),
+        model::Type::RawPointer { .. }
+        | model::Type::FunctionPointer(_)
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. } => true,
+        model::Type::Primitive(_) | model::Type::Never => false,
     }
 }
 
@@ -9545,7 +9574,8 @@ impl<'graph> Context<'graph> {
                 ),
             ));
         }
-        if methods.is_empty() {
+        let object = self.object_methods(definition, &by_position);
+        if methods.is_empty() && object.is_none() {
             return Ok(None);
         }
         let defaults = positions
@@ -9560,10 +9590,10 @@ impl<'graph> Context<'graph> {
                 _ => None,
             })
             .collect();
-        Ok(Some(representability::signature::Outputs::new(
-            defaults,
-            methods.into_boxed_slice(),
-        )))
+        Ok(Some(
+            representability::signature::Outputs::new(defaults, methods.into_boxed_slice())
+                .with_object(object),
+        ))
     }
 
     /// How a value held through the proxy of an opaque type's one trait
@@ -11453,6 +11483,126 @@ impl<'graph> Context<'graph> {
             )
             .with_call(call),
         )))
+    }
+
+    /// The methods of the trait `definition`'s vtable, each trait parameter
+    /// other than `Self` by its position (`by_position`), as the runner's
+    /// one stand-in for the trait implements them by calling a program's
+    /// impl at an object's arguments (#2698). `None` when the trait is not
+    /// object safe, has a supertrait other than a marker or an associated
+    /// type, or a method names a type the runner can't give or take, where
+    /// a program's value can't become its object.
+    fn object_methods(
+        &self,
+        definition: &model::Definition,
+        by_position: &BTreeMap<u32, model::Type>,
+    ) -> Option<Box<[representability::object::Method]>> {
+        use crate::surface::instance::ImplReceiver;
+        let trait_id = definition.id();
+        let model::Kind::Trait {
+            supertraits,
+            associated,
+            ..
+        } = definition.kind()
+        else {
+            return None;
+        };
+        let marker = |predicate: &model::Predicate| match predicate {
+            model::Predicate::Bound {
+                bound: model::Bound::Trait { trait_id, .. },
+                ..
+            } => {
+                ["Sized", "MetaSized", "PointeeSized"]
+                    .into_iter()
+                    .any(|name| self.is_core_trait(trait_id, name))
+                    || self.auto_trait(trait_id)
+            }
+            model::Predicate::Bound { .. } | model::Predicate::TypeOutlives { .. } => true,
+            _ => false,
+        };
+        if !supertraits.iter().all(marker) {
+            return None;
+        }
+        let at = |ty: &model::Type| Some(substitute_bindings(ty, by_position));
+        let names_self = |ty: &model::Type| names_trait_self(ty, trait_id);
+        let mut methods = Vec::new();
+        for id in associated.iter() {
+            let item = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definition_at(index))?;
+            let model::Kind::Function {
+                signature,
+                generics,
+            } = item.kind()
+            else {
+                return None;
+            };
+            // A method bounded `where Self: Sized` is no vtable's.
+            let sized = generics.predicates().any(|predicate| {
+                matches!(predicate, model::Predicate::Bound {
+                    ty,
+                    bound: model::Bound::Trait { trait_id: bound, .. },
+                } if self.is_core_trait(bound, "Sized") && names_self(ty))
+            });
+            if sized {
+                continue;
+            }
+            if generics.parameters().any(|parameter| {
+                parameter.owner() == item.id()
+                    && !matches!(parameter.kind(), model::ParameterKind::Lifetime { .. })
+            }) {
+                return None;
+            }
+            let mut inputs = signature.inputs();
+            let receiver = match signature.receiver() {
+                model::Receiver::Reference { mutability, .. } => match mutability {
+                    model::Mutability::Shared => ImplReceiver::Shared,
+                    model::Mutability::Mutable => ImplReceiver::Mutable,
+                },
+                model::Receiver::None => match inputs.next() {
+                    Some(model::Type::Reference { mutability, ty, .. }) if names_self(ty) => {
+                        match mutability {
+                            model::Mutability::Shared => ImplReceiver::Shared,
+                            model::Mutability::Mutable => ImplReceiver::Mutable,
+                        }
+                    }
+                    _ => return None,
+                },
+                model::Receiver::Value { .. } | model::Receiver::Explicit { .. } => return None,
+            };
+            let inputs = inputs
+                .map(|input| {
+                    if names_self(input) {
+                        return None;
+                    }
+                    self.convert_closure_input(&at(input)?)
+                })
+                .collect::<Option<Box<[_]>>>()?;
+            if names_self(signature.output()) {
+                return None;
+            }
+            let output = self
+                .convert_value(&late_as_static(&at(signature.output())?))
+                .ok()?;
+            // A method some impl leaves to the trait has the trait's body.
+            let provided = self
+                .graph
+                .implementations_of(trait_id)
+                .any(|implementation| {
+                    implementation
+                        .associated()
+                        .any(|associated| associated == id)
+                });
+            methods.push(representability::object::Method::new(
+                item.display_path().last()?.into(),
+                receiver,
+                inputs,
+                output,
+                provided,
+            ));
+        }
+        Some(methods.into_boxed_slice())
     }
 
     /// Whether `id` is core's `Option`.

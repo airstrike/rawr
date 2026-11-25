@@ -266,6 +266,12 @@ pub struct Forwarding {
 pub struct Outputs {
     defaults: Box<[Option<super::convert::Type>]>,
     methods: Box<[(Box<str>, Opaque)]>,
+    /// Each method of the trait's vtable, each parameter by position, when
+    /// the trait is object safe and the runner can write each: a program's
+    /// value of any type crosses as the trait's one stand-in, which calls
+    /// the value's impl through them (#2698).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    object: Option<Box<[super::object::Method]>>,
 }
 
 impl Outputs {
@@ -273,7 +279,24 @@ impl Outputs {
         defaults: Box<[Option<super::convert::Type>]>,
         methods: Box<[(Box<str>, Opaque)]>,
     ) -> Self {
-        Self { defaults, methods }
+        Self {
+            defaults,
+            methods,
+            object: None,
+        }
+    }
+
+    /// These outputs, of a trait whose vtable holds `object`.
+    #[must_use]
+    pub(crate) fn with_object(self, object: Option<Box<[super::object::Method]>>) -> Self {
+        Self { object, ..self }
+    }
+
+    /// The methods of the trait's vtable, each parameter by position, when
+    /// the runner's stand-in for the trait can implement each.
+    #[must_use]
+    pub fn object(&self) -> Option<&[super::object::Method]> {
+        self.object.as_deref()
     }
 
     /// The default of each of the trait's type parameters other than

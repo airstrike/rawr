@@ -547,6 +547,50 @@ impl<'a> Parser<'a> {
             {
                 return Err(unsendable.error(&self.models, value.span, None));
             }
+            // A value of the program's own type that implements a native
+            // trait, a crate's generic type at the program's arguments among
+            // them: the runner's one stand-in for the trait holds it, and
+            // calls the member of its impl each method names, so no runner
+            // is built for the type (#2698). A type of a native island's is
+            // the stand-in rawr's copy of the crate declares for it, where
+            // the running build has one (#1264).
+            #[cfg(feature = "rust-import")]
+            if self.models.native_trait(&trait_name)
+                && matches!(
+                    target,
+                    Ty::Boxed(_) | Ty::Counted(..) | Ty::Reference { mutable: false, .. }
+                )
+                && let Some(members) = self.native_object_members(
+                    &concrete,
+                    (&trait_name, &dyn_arguments(&bindings)),
+                    value.span,
+                )?
+            {
+                let written = members
+                    .iter()
+                    .flat_map(|(name, path)| [name.as_str(), path.as_str()])
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let (owner, island) = self
+                    .native_object_owner(&concrete, &trait_name)
+                    .map_or_else(Default::default, |(owner, written)| {
+                        (owner, written.to_string())
+                    });
+                let source = std::mem::take(&mut value.source);
+                value.source = self.prelude_op(
+                    PreludeOp::NativeProgram,
+                    [
+                        source,
+                        format!("{written:?}").into(),
+                        format!("{owner:?}").into(),
+                        format!("{island:?}").into(),
+                    ],
+                );
+                value.source.cover(value.span);
+                value.ty = target;
+                value.lvalue = None;
+                return Ok(None);
+            }
             // A box of the program's own type that implements a native
             // trait becomes that trait's object: the stand-in rawr's copy of
             // the crate declares for the type, which holds the value's
