@@ -582,44 +582,11 @@ pub(crate) fn module_items_public(text: &str) -> String {
     for (range, width) in restricted_visibilities(&opened).into_iter().rev() {
         opened.replace_range(range, &format!("{:width$}", "pub"));
     }
-    // A generic inherent method of a concrete type runs as the program's
-    // (`generic_items`): the runner's copy hides the native one from other
-    // crates, so a call finds the program's.
-    for at in generic_inherent_methods(&opened).into_iter().rev() {
-        opened.insert_str(at, "(crate)");
-    }
+    // A generic inherent method of a concrete type stays public: the
+    // program's own runs where the program calls it (`generic_items`), and
+    // another crate's native code calls the native one, as iced_runtime's
+    // `UserInterface` calls iced_core's `Tree::diff`.
     opened
-}
-
-/// Where `(crate)` goes after the `pub` of each generic method of an
-/// inherent impl of a concrete type in `text`.
-fn generic_inherent_methods(text: &str) -> Vec<usize> {
-    let tokens = placed(text);
-    let mut found = Vec::new();
-    for item in module_items(text, &tokens) {
-        let header = &tokens[item.header.clone()];
-        let concrete = !header.iter().any(|(token, _)| {
-            matches!(token, Token::Ident("for", _)) || *token == Token::Punct(b'<')
-        });
-        if item.keyword != "impl" || item.generic || !concrete || item.header.end >= item.end {
-            continue;
-        }
-        let body = &tokens[item.header.end + 1..item.end];
-        for method in module_items(text, body) {
-            if method.keyword != "fn" || !method.generic {
-                continue;
-            }
-            let public = body.iter().enumerate().find_map(|(index, (token, at))| {
-                (matches!(token, Token::Ident("pub", _))
-                    && method.bytes.contains(at)
-                    && body.get(index + 1).map(|(next, _)| *next) != Some(Token::Punct(b'(')))
-                .then_some(at + 3)
-            });
-            found.extend(public);
-        }
-    }
-    found.sort_unstable();
-    found
 }
 
 /// The byte ranges of `text`'s module-level items that a crate's program

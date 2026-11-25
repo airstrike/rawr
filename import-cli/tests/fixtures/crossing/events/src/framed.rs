@@ -254,3 +254,9 @@ pub fn drawn_all(items: &[Box<dyn Drawn<Canvas>>]) -> String {
     }
     canvas.marks
 }
+
+/// Each of `items` after its place, by `parts`' generic `tallied`, as
+/// iced's `Container::diff` calls iced_core's `Tree::diff_children`.
+pub fn tallied<T: std::fmt::Display>(items: &[T]) -> String {
+    crate::tally::tallied(items)
+}

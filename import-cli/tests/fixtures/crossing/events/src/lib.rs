@@ -5,6 +5,10 @@
 
 use std::fmt::Debug;
 
+// `parts`' places, which `framed` reaches by `crate::tally`, as iced_widget
+// reaches iced_core by `crate::core`.
+pub use parts::tally;
+
 pub mod buffers;
 pub mod choices;
 pub mod classic;

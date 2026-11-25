@@ -3810,8 +3810,8 @@ fn a_save_that_first_names_a_module_beside_a_function_of_its_name_takes_effect()
 /// `RAWR_CRATE_SOURCE` names the module: `shade(impl Into<Tint>)` at a
 /// native type and at the program's, `draw` at the
 /// program's `M`, and the generic method `Style::retinted` of a concrete
-/// crate type, which the runner's copy hides from the program, so the
-/// program's runs. Their bodies call the module's private helper, build its
+/// crate type, the program's own, which runs though the runner's copy
+/// keeps the native one public for other crates' code. Their bodies call the module's private helper, build its
 /// private-field `Style` and bump its private static through the runner's
 /// copy of the crate, which opens them, and the crate's concrete `plain`
 /// bumps the same static natively. The runner holds no instance of the
@@ -4241,6 +4241,47 @@ fn a_crate_boxed_closure_crosses_from_native_code_and_from_the_program() {
     let (rawr, cargo) = framed_and_cargo(&root);
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "+\n#\n");
+}
+
+/// A crate module's generic code that calls another crate's generic code
+/// through its crate's re-export, as iced_widget's `Container::diff` calls
+/// iced_core's `Tree::diff_children` through `crate::core::widget::tree`:
+/// `RAWR_CRATE_SOURCE` opens `events::tally`, which is `parts`' module, so
+/// `framed`'s `crate::tally::tallied` is that module's program module and
+/// runs from `parts`' source. The runner holds no instance of `tallied`.
+/// The output is `cargo run`'s.
+#[test]
+fn a_crate_module_reexported_from_another_crate_runs_from_its_source() {
+    let root = lane(Some("framed_tallied.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::tally")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "0:3 1:5 2:8\n0:calm 1:deep\n");
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).unwrap() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    assert!(!bound.contains("tally::tallied"), "{bound}");
 }
 
 /// A program's value boxed as a crate trait's object the runner has no

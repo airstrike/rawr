@@ -53,6 +53,12 @@ pub(crate) struct Located {
     /// declares as `mod helpers; pub use helpers::*;`. The program names
     /// its items only there.
     pub(crate) mount: Option<Box<[ImmutableString]>>,
+    /// Whether the program names the module's crate by a dependency of its
+    /// own. One it reaches only through others, as `iced_core` behind
+    /// `iced`, it names by its hidden dependency on it ([`Located::alias`]).
+    pub(crate) named: bool,
+    /// Whether the defining crate is a dependency of the program's own.
+    direct: bool,
 }
 
 /// A package of the program's graph, as `cargo metadata` describes it.
@@ -150,10 +156,21 @@ struct Import {
 /// can't describe the graph offline or the path names no module.
 pub(crate) fn locate(manifest: &Path, path: &[ImmutableString]) -> Option<Located> {
     let graph = Graph::read(manifest)?;
+    let named = graph
+        .index(&graph.root)
+        .zip(path.first())
+        .is_some_and(|(root, first)| graph.dependency(root, first).is_some());
     let module = graph.module(path)?;
     if module.path.is_empty() {
         return None;
     }
+    let direct = graph.index(&graph.root).is_some_and(|root| {
+        graph.node(root).is_some_and(|node| {
+            node.dependencies
+                .iter()
+                .any(|edge| graph.index(&edge.package) == Some(module.package))
+        })
+    });
     let package = graph.packages[module.package].clone();
     let siblings: Vec<Package> = graph
         .packages
@@ -167,6 +184,8 @@ pub(crate) fn locate(manifest: &Path, path: &[ImmutableString]) -> Option<Locate
     Some(Located {
         features: graph.features(module.package).to_vec(),
         mount,
+        named,
+        direct,
         file: module.file,
         package,
         module: module.path.into_boxed_slice(),
@@ -215,20 +234,34 @@ pub(crate) fn imported(manifest: &Path, path: &[ImmutableString]) -> Vec<super::
     found
 }
 
+/// The name of the program's hidden dependency on the crate `name`.
+pub(crate) fn hidden_name(name: &str) -> ImmutableString {
+    format!("{HIDDEN}{name}").into()
+}
+
 impl Located {
     /// The name of the program's dependency on the defining crate, which
     /// the module's `crate::` names: `__rawr_source_iced_widget`.
     pub(crate) fn alias(&self) -> Option<ImmutableString> {
         let library = self.package.library.as_ref()?;
-        Some(format!("{HIDDEN}{}", library.name).into())
+        Some(hidden_name(&library.name))
     }
 
     /// The program's dependency on the defining crate, by [`Located::alias`]:
     /// the version or commit Cargo resolved, with no features of its own,
-    /// so the graph Cargo resolves stays the program's. `None` for a path
-    /// package, which the program names itself.
+    /// so the graph Cargo resolves stays the program's, or the path of a
+    /// path package the program reaches only through another crate. `None`
+    /// for a path package the program names itself.
     pub(crate) fn dependency(&self) -> Option<Dependency> {
-        let source = self.package.source.as_deref()?;
+        let source = match self.package.source.as_deref() {
+            Some(source) => source,
+            // A path package the program reaches only through another
+            // crate, as the fixture's `parts` behind `events`, by its path.
+            None if !self.direct => {
+                return self.hidden(Source::Path(self.package.directory.clone()));
+            }
+            None => return None,
+        };
         let source = if source.starts_with("registry+") {
             Source::Registry {
                 version: format!("={}", self.package.version),
@@ -241,6 +274,11 @@ impl Located {
                 version: None,
             }
         };
+        self.hidden(source)
+    }
+
+    /// The program's hidden dependency on the defining crate at `source`.
+    fn hidden(&self, source: Source) -> Option<Dependency> {
         let alias = self.alias()?;
         Some(Dependency {
             key: alias.to_string(),
@@ -339,6 +377,21 @@ impl Graph {
             .iter()
             .find(|edge| edge.name == name)?;
         self.index(&edge.package)
+    }
+
+    /// The one package the program's graph holds whose library code names
+    /// `name`, as `iced_core` behind `iced`'s re-exports, which hide its
+    /// `widget::tree` from the program: where a crate module the program
+    /// can't name is (#2698).
+    fn reached(&self, name: &str) -> Option<usize> {
+        let mut named = self.packages.iter().enumerate().filter(|(_, package)| {
+            package
+                .library
+                .as_ref()
+                .is_some_and(|library| library.name == name)
+        });
+        let (index, _) = named.next()?;
+        named.next().is_none().then_some(index)
     }
 
     /// The features Cargo resolved for `package`.
@@ -470,7 +523,10 @@ impl Graph {
     fn module(&self, path: &[ImmutableString]) -> Option<Module> {
         let (first, rest) = path.split_first()?;
         let root = self.index(&self.root)?;
-        let mut module = self.root_module(self.dependency(root, first)?)?;
+        let mut module = self.root_module(
+            self.dependency(root, first)
+                .or_else(|| self.reached(first))?,
+        )?;
         for segment in rest {
             module = self.child(&module, segment, HOPS)?;
         }

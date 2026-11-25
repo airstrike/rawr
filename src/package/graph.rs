@@ -100,6 +100,12 @@ struct CrateModule {
     /// The program's path to the module whose items the module's are
     /// (`crate_source::located::Located::mount`).
     mount: Option<Box<[ImmutableString]>>,
+    /// The program's path to the module when it names its crate by no
+    /// dependency of its own: through its hidden dependency, `root`.
+    hidden: Option<Box<[ImmutableString]>>,
+    /// The path the module is named by through re-exports
+    /// ([`CrateSourceRoot::spelled`]).
+    spelled: Option<Box<[ImmutableString]>>,
 }
 
 /// Where a program module of a crate module's generic items
@@ -116,6 +122,11 @@ struct CrateSourceRoot {
     /// is globbed into (`crate_source::located::Located::mount`), whose
     /// other items stay native.
     mounted: bool,
+    /// The path the crate module's opener names it by, through re-exports,
+    /// when that is another: `events::tally` of `parts`' `tally`, or
+    /// `iced_widget`'s `crate::core::widget::tree` of `iced_core`'s, which
+    /// another program module of a crate module spells so.
+    spelled: Option<Box<[ImmutableString]>>,
 }
 
 /// One `use` declaration of a marked module that a native module's path
@@ -360,16 +371,22 @@ impl Package {
         &self,
         spelled: &[ImmutableString],
     ) -> Option<Vec<ImmutableString>> {
-        let found = self
+        // By the crate's own path to it, or the one its opener names it by.
+        let (found, taken) = self
             .crate_source_roots
             .iter()
-            .filter(|root| {
-                spelled.len() >= root.root.len() + root.path.len()
+            .filter_map(|root| {
+                let own = spelled.len() >= root.root.len() + root.path.len()
                     && spelled.starts_with(&root.root)
-                    && spelled[root.root.len()..].starts_with(&root.path)
+                    && spelled[root.root.len()..].starts_with(&root.path);
+                if own {
+                    return Some((root, root.root.len() + root.path.len()));
+                }
+                let named = root.spelled.as_deref()?;
+                spelled.starts_with(named).then_some((root, named.len()))
             })
-            .max_by_key(|root| root.path.len())?;
-        let rest = &spelled[found.root.len() + found.path.len()..];
+            .max_by_key(|(root, _)| root.path.len())?;
+        let rest = &spelled[taken..];
         Some(
             [ImmutableString::from("crate"), found.module.clone()]
                 .into_iter()
@@ -1529,7 +1546,7 @@ impl<'a> Builder<'a> {
             // A module whose items the program names at its parent's path
             // stands for that path.
             let mounted = found.mount.is_some();
-            let path = found.mount.unwrap_or(path);
+            let path = found.mount.or(found.hidden).unwrap_or(path);
             let generic = super::crate_source::generic::text(
                 &selected,
                 &path,
@@ -1547,6 +1564,7 @@ impl<'a> Builder<'a> {
                     root: found.root,
                     path: found.module,
                     mounted,
+                    spelled: found.spelled,
                 });
             let module_root = file.parent().unwrap_or(&root).to_path_buf();
             self.load_module_text(
@@ -1584,23 +1602,7 @@ impl<'a> Builder<'a> {
                     _ => None,
                 });
         let Some(directory) = directory else {
-            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
-            {
-                let manifest = self.packages[package.0].cargo.as_ref()?.path.clone();
-                let located = super::crate_source::located::locate(&manifest, path)?;
-                let alias = located.alias()?;
-                return Some(CrateModule {
-                    dependency: located.dependency(),
-                    file: located.file,
-                    root: Box::new([alias]),
-                    module: located.module,
-                    features: Some(located.features),
-                    imported: super::crate_source::located::imported(&manifest, path),
-                    mount: located.mount,
-                });
-            }
-            #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
-            return None;
+            return self.located_module(package, path);
         };
         let mut file = directory.join("src");
         file.extend(modules.iter().map(ImmutableString::as_str));
@@ -1628,13 +1630,61 @@ impl<'a> Builder<'a> {
             dependency: None,
             imported: imported.clone(),
             mount: mount.clone(),
+            hidden: None,
+            spelled: None,
         };
         let flat = file.with_extension("rs");
         if self.is_file(&flat) {
             return Some(found(flat));
         }
         let nested = file.join("mod.rs");
-        self.is_file(&nested).then(|| found(nested))
+        // A module the dependency re-exports from a crate of its own, as
+        // the fixture's `events::tally` is `parts`' (`located`).
+        self.is_file(&nested)
+            .then(|| found(nested))
+            .or_else(|| self.located_module(package, path))
+    }
+
+    /// The module at `path` of a crate `package` names, as Cargo's package
+    /// graph and the crates' re-exports reach it (`crate_source::located`),
+    /// whose crate the package reaches by a hidden dependency when it has
+    /// none of its own.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    fn located_module(&self, package: Id, path: &[ImmutableString]) -> Option<CrateModule> {
+        let manifest = self.packages[package.0].cargo.as_ref()?.path.clone();
+        let located = super::crate_source::located::locate(&manifest, path)?;
+        let alias = located.alias()?;
+        let hidden = (!located.named).then(|| {
+            std::iter::once(alias.clone())
+                .chain(located.module.iter().cloned())
+                .collect()
+        });
+        // As the crate `path` starts at names it, which is the program's
+        // dependency on it, or its hidden one.
+        let (first, rest) = path.split_first()?;
+        let first = if located.named {
+            first.clone()
+        } else {
+            super::crate_source::located::hidden_name(first)
+        };
+        let spelled = Some(std::iter::once(first).chain(rest.iter().cloned()).collect());
+        Some(CrateModule {
+            dependency: located.dependency(),
+            file: located.file,
+            root: Box::new([alias]),
+            module: located.module,
+            features: Some(located.features),
+            imported: super::crate_source::located::imported(&manifest, path),
+            mount: located.mount,
+            hidden,
+            spelled,
+        })
+    }
+
+    #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
+    #[allow(clippy::unused_self)]
+    fn located_module(&self, _package: Id, _path: &[ImmutableString]) -> Option<CrateModule> {
+        None
     }
 
     /// A binary whose tree is marked runs, so a marked module in the tree

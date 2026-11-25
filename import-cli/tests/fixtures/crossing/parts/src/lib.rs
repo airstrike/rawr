@@ -499,3 +499,7 @@ pub struct Point {
     /// Its y.
     pub y: f32,
 }
+
+/// Places, as iced_core's `widget::tree` diffs a widget's children: generic
+/// code `events`' generic code calls through `events`' re-export of it.
+pub mod tally;
