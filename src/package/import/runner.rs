@@ -1183,6 +1183,11 @@ pub(crate) fn impl_header(header: &facade::ImplHeader) -> Option<host::facade::I
                 Some((ImmutableString::from(&**name), self::ty(value).ok()?))
             })
             .collect(),
+        defaulted: header
+            .defaulted()
+            .iter()
+            .map(|name| ImmutableString::from(&**name))
+            .collect(),
     })
 }
 

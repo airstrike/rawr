@@ -1650,7 +1650,7 @@ impl<'a> Parser<'a> {
     /// autoref borrows its receiver: a place where it is, else the
     /// temporary, as `&` of an operand does (`parse_operand`).
     #[cfg(feature = "rust-import")]
-    fn borrow_receiver(&mut self, value: &mut ParsedExpr, mutable: bool) {
+    pub(super) fn borrow_receiver(&mut self, value: &mut ParsedExpr, mutable: bool) {
         let ty = self.inference.resolve(&value.ty);
         if value.lvalue.is_some() || self.flow().is_place(value.span) {
             let inner = self.may_hold_borrow(&ty);
@@ -1706,6 +1706,45 @@ impl<'a> Parser<'a> {
         let trait_path = self.spliced_traits.get(&member_span.start())?;
         let path = rawr_import::surface::member::path(trait_path, member);
         self.models.host_items(&path).is_some().then_some(path)
+    }
+
+    /// Whether the type `ty`'s own member `member` leaves a type
+    /// parameter open that none of its inputs or its output names, as `M`
+    /// of a crate's `impl<M> Diffed<M> for Mark` leaves `label`'s, where a
+    /// generic body's bound selected the trait's method at `member_span`
+    /// (`seed_selections`): the trait's method over its `Self` takes the
+    /// parameter from the body's bound, as rustc's generic body calls
+    /// through it.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn spliced_unfixed(&self, ty: &Ty, member: &str, member_span: Span) -> bool {
+        if self.spliced_trait_member(member, member_span).is_none() {
+            return false;
+        }
+        let resolved = match self.inference.resolve(ty) {
+            Ty::Reference { target, .. } => self.inference.resolve(&target),
+            ty => ty,
+        };
+        let Some(own) = resolved
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(&resolved, member))
+            .and_then(|definition| {
+                self.models
+                    .host_items(&format!("{}::{member}", definition.path()))
+            })
+        else {
+            return false;
+        };
+        own.iter().all(|item| {
+            let signature = item.signature();
+            signature.type_parameters().any(|(name, _)| {
+                !signature
+                    .parameters()
+                    .iter()
+                    .chain(std::iter::once(signature.output()))
+                    .any(|ty| ty.mentions_parameter(&name))
+            })
+        })
     }
 
     /// Whether the member `member` of the type `ty` is only a namesake of

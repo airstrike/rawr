@@ -630,6 +630,16 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
     let mut inherent_impls = BTreeMap::<&str, usize>::new();
     for item in &items {
         let header = &tokens[item.header.clone()];
+        // A crate trait stays native. Its provided methods the program
+        // reaches are functions over its `Self` too (`provided`).
+        if item.keyword == "trait" {
+            generic
+                .declared
+                .push_str(&super::crate_source::provided::templates(
+                    text, &tokens, item, reached,
+                ));
+            continue;
+        }
         let whole = match item.keyword {
             "use" | "macro_rules" => true,
             "fn" | "struct" | "enum" | "union" | "type" => {
@@ -638,11 +648,14 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
             // A crate trait's generic impl for a type that is not one of
             // this module's generic types, as `impl<M> Diffed<M> for
             // Label`: the program runs it from source at its own arguments.
+            // An impl whose self type names its own parameters, as
+            // `impl<T> Meta for Option<T>`, is no such impl.
             "impl" => impl_owner(header).is_some_and(|owner| {
                 generic_types.contains(&owner)
                     || item.generic
                         && is_trait_impl(header)
                         && named_owner(header)
+                        && !owner_generic(text, header)
                         && !declared_generic.contains(&owner)
             }),
             _ => false,
@@ -748,6 +761,70 @@ fn named_owner(header: &[(Token<'_>, usize)]) -> bool {
     });
     matches!(after, Some((Token::Ident(name, _), _))
         if !matches!(*name, "dyn" | "impl" | "fn") && !is_primitive(name))
+}
+
+/// Whether a trait impl's self type names one of the impl's own type
+/// parameters, as `impl<T> Meta for Option<T>` does, in `text`. A
+/// lifetime, as `Text<'a, Theme>`'s, is no type parameter.
+fn owner_generic(text: &str, header: &[(Token<'_>, usize)]) -> bool {
+    let lifetime = |at: usize| {
+        at.checked_sub(1)
+            .is_some_and(|before| text.as_bytes()[before] == b'\'')
+    };
+    let Some((Token::Punct(b'<'), _)) = header.first() else {
+        return false;
+    };
+    let mut depth = 0_usize;
+    let mut parameters = Vec::new();
+    let mut start = true;
+    let mut close = header.len();
+    for (index, (token, _)) in header.iter().enumerate() {
+        match token {
+            Token::Punct(b'<' | b'(' | b'[') => depth += 1,
+            Token::Punct(b'>') if index > 0 && header[index - 1].0 == Token::Punct(b'-') => {}
+            Token::Punct(b'>' | b')' | b']') => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close = index;
+                    break;
+                }
+            }
+            Token::Punct(b',') if depth == 1 => start = true,
+            Token::Ident(name, _) if depth == 1 && start => {
+                if *name != "const" {
+                    if !lifetime(header[index].1) {
+                        parameters.push(*name);
+                    }
+                    start = false;
+                }
+            }
+            _ => start = false,
+        }
+    }
+    let mut depth = 0_usize;
+    let after = header[close..]
+        .iter()
+        .enumerate()
+        .position(|(offset, (token, _))| {
+            let index = close + offset;
+            match token {
+                Token::Punct(b'<') => depth += 1,
+                Token::Punct(b'>') if index > 0 && header[index - 1].0 == Token::Punct(b'-') => {}
+                Token::Punct(b'>') => depth = depth.saturating_sub(1),
+                Token::Ident("for", _) => return depth == 0,
+                _ => {}
+            }
+            false
+        });
+    let Some(after) = after else {
+        return false;
+    };
+    header[close + after + 1..]
+        .iter()
+        .take_while(|(token, _)| !matches!(token, Token::Ident("where", _)))
+        .any(|(token, at)| {
+            matches!(token, Token::Ident(name, _) if parameters.contains(name) && !lifetime(*at))
+        })
 }
 
 /// Whether `name` is one of Rust's primitive types.
@@ -878,6 +955,17 @@ pub(crate) fn reached_names(program: &[&str], modules: &[&str]) -> BTreeSet<Stri
                     items.push((name, written));
                 }
                 "impl" if !item.generic => pending.extend(named(&text[item.bytes.clone()])),
+                // A trait's provided method the program reaches by its name
+                // runs from source where its impl leaves it to the trait
+                // (`crate_source::provided`).
+                "trait" if item.header.end < item.end => {
+                    let body = &tokens[item.header.end + 1..item.end];
+                    for method in module_items(text, body) {
+                        if let (Some(name), "fn") = (method.name, method.keyword) {
+                            items.push((name, text[method.bytes.clone()].to_owned()));
+                        }
+                    }
+                }
                 _ => {}
             }
         }

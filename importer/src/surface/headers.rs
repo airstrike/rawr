@@ -51,6 +51,10 @@ pub struct ImplHeader {
     /// parameters with its lifetimes erased: `Class` of iced's `impl
     /// Catalog for Theme` is `StyleFn<'a, Self>`, a boxed callable.
     pub associated: Box<[(Box<str>, convert::Type)]>,
+    /// The names of the trait's provided methods the impl leaves to the
+    /// trait, as iced's `impl Widget for Text` leaves `overlay`: rustc
+    /// selects the trait's own body for each.
+    pub defaulted: Box<[Box<str>]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type,
@@ -741,6 +745,7 @@ impl<'g, P: api::Phase> Headers<'g, '_, P> {
                     bounds: Box::default(),
                     projections: Box::default(),
                     associated: Box::default(),
+                    defaulted: Box::default(),
                 });
             }
         }
@@ -888,7 +893,31 @@ impl<'g, P: api::Phase> Headers<'g, '_, P> {
             bounds,
             projections,
             associated: self.associated_values(implementation),
+            defaulted: self.defaulted(implementation, id),
         })
+    }
+
+    /// The names of the methods of `implementation`, an impl of the trait
+    /// `trait_id`, that the trait declares rather than the impl: its
+    /// provided methods the impl doesn't override.
+    fn defaulted(
+        &self,
+        implementation: &model::Implementation,
+        trait_id: &api::identity::Definition,
+    ) -> Box<[Box<str>]> {
+        implementation
+            .associated()
+            .filter_map(|associated| {
+                let definition = self.model(&identity(associated))?;
+                let model::Owner::Definition(owner) = definition.owner() else {
+                    return None;
+                };
+                if owner != trait_id || !matches!(definition.kind(), model::Kind::Function { .. }) {
+                    return None;
+                }
+                definition.display_path().last().map(Into::into)
+            })
+            .collect()
     }
 
     /// The where-clause bound `<this as Trait>::Name == value`, with a case

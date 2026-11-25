@@ -237,6 +237,9 @@ pub(crate) struct ImplHeader {
     pub(crate) projections: Box<[ImplProjection]>,
     /// Each associated type the impl gives, by name, at its parameters.
     pub(crate) associated: Box<[(ImmutableString, host::type_ref::Type)]>,
+    /// The trait's provided methods the impl leaves to the trait, whose
+    /// own bodies rustc selects for the impl's self type.
+    pub(crate) defaulted: Box<[ImmutableString]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type,
@@ -332,6 +335,7 @@ impl ImplHeader {
                 .iter()
                 .map(|(name, value)| Ok((name.clone(), value.try_clone()?)))
                 .collect::<Result<_, rawr_import::surface::Error>>()?,
+            defaulted: self.defaulted.clone(),
         })
     }
 }
@@ -435,6 +439,7 @@ impl ImplHeader {
             bounds,
             projections,
             associated,
+            defaulted: self.defaulted.clone(),
         })
     }
 }

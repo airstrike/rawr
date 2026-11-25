@@ -81,6 +81,8 @@ mod places;
 mod poll;
 mod postfix;
 mod proof;
+#[cfg(feature = "rust-import")]
+mod provided;
 pub(crate) mod range;
 mod relocate;
 mod scope;

@@ -256,6 +256,14 @@ pub trait Diffed<M> {
     fn seen(&self, _spot: crate::walks::Spot, _node: &crate::walks::Node) -> String {
         String::new()
     }
+
+    /// The nodes the holder lifts out of `node`, borrowed for as long as
+    /// the holder and the node, as iced's `Widget::overlay`: none, once
+    /// the holder's label is marked on the node.
+    fn lifted<'b>(&'b mut self, node: &'b mut crate::walks::Node) -> Vec<crate::walks::Lifted<'b>> {
+        node.mark(&self.label());
+        Vec::new()
+    }
 }
 
 /// A crate label diffs at any `M`, as iced's `impl<Message, ..> Widget<
@@ -346,5 +354,12 @@ where
     fn seen(&self, spot: crate::walks::Spot, node: &crate::walks::Node) -> String {
         let (spot, node) = spot.iter(&node.children).next().unwrap();
         format!("[{}{}]", self.item.seen(spot, node), spot.width())
+    }
+
+    /// What the item lifts out of the node, after marking the node, as
+    /// iced's `Container::overlay` gives its content's.
+    fn lifted<'b>(&'b mut self, node: &'b mut crate::walks::Node) -> Vec<crate::walks::Lifted<'b>> {
+        node.mark("tallied");
+        self.item.lifted(node)
     }
 }

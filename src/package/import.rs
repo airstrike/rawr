@@ -3392,6 +3392,11 @@ fn build(
                 .iter()
                 .filter_map(|(name, value)| Some((ImmutableString::from(&**name), convert(value)?)))
                 .collect(),
+            defaulted: header
+                .defaulted
+                .iter()
+                .map(|name| ImmutableString::from(&**name))
+                .collect(),
         })?;
     }
     // A re-exported variant names its enum's variant, through a path the

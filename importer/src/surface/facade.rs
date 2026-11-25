@@ -20,7 +20,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 82;
+const SCHEMA: u32 = 83;
 
 /// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
 /// outcome is of.
@@ -308,6 +308,9 @@ pub struct ImplHeader {
     /// Each associated type the impl gives, by name, at its parameters.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     associated: Box<[(Box<str>, Type)]>,
+    /// The trait's provided methods the impl leaves to the trait.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    defaulted: Box<[Box<str>]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type:
@@ -393,6 +396,12 @@ impl ImplHeader {
     #[must_use]
     pub fn associated(&self) -> &[(Box<str>, Type)] {
         &self.associated
+    }
+    /// The names of the trait's provided methods the impl leaves to the
+    /// trait, whose own bodies rustc selects for its self type.
+    #[must_use]
+    pub fn defaulted(&self) -> &[Box<str>] {
+        &self.defaulted
     }
 }
 

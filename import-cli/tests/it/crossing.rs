@@ -4582,6 +4582,45 @@ fn a_crate_iterator_over_a_lent_slice_lends_each_item_to_the_program() {
     );
 }
 
+/// A crate trait's provided method whose signature can't cross, as
+/// iced's `Widget::overlay`, runs from the trait's source where the impl
+/// rustc selects leaves it to the trait: for the crate's native `Mark`,
+/// the crate's `Label`, whose impl runs from source, and the program's
+/// `Note`. The body's own call of `label` is each item's, natively for
+/// `Mark` at the program's `Note`. The output is `cargo run`'s.
+#[test]
+fn a_crate_traits_provided_method_that_cant_cross_runs_from_the_traits_source() {
+    let root = lane(Some("tinted_lifted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "(0, [\"0:tallied\", \"0:calm\"])\n\
+         (0, [\"0:tallied\", \"0:leaf\"])\n\
+         (0, [\"0:tallied\", \"0:tallied\", \"0:note\"])\n"
+    );
+}
+
 /// A crate call whose trait argument the call leaves open and none of its
 /// item's inputs or output names fails at check, at the call: the
 /// runner's rustc couldn't infer it either, and its build once failed.

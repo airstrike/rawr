@@ -33,6 +33,7 @@ pub(crate) mod generic;
 pub(crate) mod located;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod opened;
+pub(crate) mod provided;
 
 /// The variable that names the crate modules rawr reads generic code from.
 pub(crate) const VARIABLE: &str = "RAWR_CRATE_SOURCE";
@@ -46,6 +47,22 @@ const PREFIX: &str = "__rawr_crate";
 /// module holds them as this trait's impl, which is in scope wherever the
 /// type is, as inherent methods are.
 const INHERENT: &str = "__rawr_inherent__";
+
+/// The prefix of the function that holds a crate trait's provided method
+/// (`provided`).
+const PROVIDED: &str = "__rawr_provided__";
+
+/// The name of the function that holds the provided method `member` of
+/// the crate trait `trait_name` (`provided`).
+pub(crate) fn provided(trait_name: &str, member: &str) -> String {
+    format!("{PROVIDED}{trait_name}__{member}")
+}
+
+/// Whether the function `name` holds a crate trait's provided method
+/// (`provided`).
+pub(crate) fn is_provided(name: &str) -> bool {
+    name.starts_with(PROVIDED)
+}
 
 /// Whether the function `name` of the program module at `modules` binds a
 /// crate-source module's concrete item (`bound`).

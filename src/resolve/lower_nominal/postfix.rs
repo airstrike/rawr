@@ -1887,8 +1887,22 @@ impl<'a> Parser<'a> {
                 #[cfg(feature = "rust-import")]
                 if !self.host_has_member(&value.ty, &member)
                     || self.spliced_namesake(&value.ty, &member, member_span)
+                    || self.spliced_unfixed(&value.ty, &member, member_span)
                 {
                     match self.spliced_trait_call(value, &member, member_span)? {
+                        Ok(called) => {
+                            value = called;
+                            continue;
+                        }
+                        Err(back) => value = back,
+                    }
+                }
+                // A crate trait's provided method the type's impl leaves
+                // to the trait, whose native item can't cross: the trait's
+                // body from its source, as rustc selects it.
+                #[cfg(feature = "rust-import")]
+                if !self.host_has_member(&value.ty, &member) {
+                    match self.provided_body_call(value, &member, member_span)? {
                         Ok(called) => {
                             value = called;
                             continue;
@@ -1942,6 +1956,13 @@ impl<'a> Parser<'a> {
                         }
                         Err(back) => value = back,
                     }
+                }
+                match self.provided_body_call(value, &member, member_span)? {
+                    Ok(called) => {
+                        value = called;
+                        continue;
+                    }
+                    Err(back) => value = back,
                 }
             }
             // A scripted widget's `map` and `boxed` (`erasure_with`).

@@ -197,7 +197,9 @@ mod tests {
                     }\n\
                     impl<M> Diffed<M> for &str {\n\
                     fn label(&mut self) -> String { String::new() }\n\
-                    }\n";
+                    }\n\
+                    impl<'a, M> Diffed<M> for Text<'a> {}\n\
+                    impl<T> Meta for Option<T> where T: Meta {}\n";
         let generic = super::text(
             text,
             &["events", "tinted"],
@@ -210,5 +212,9 @@ mod tests {
             "{generic}"
         );
         assert!(!generic.contains("for &str"), "{generic}");
+        // A lifetime of the self type is no type parameter, and an impl
+        // whose self type names its own type parameter stays native.
+        assert!(generic.contains("for Text<'a> {}"), "{generic}");
+        assert!(!generic.contains("for Option<T>"), "{generic}");
     }
 }

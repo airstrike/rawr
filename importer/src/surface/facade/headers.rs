@@ -363,5 +363,6 @@ fn impl_header(header: written::ImplHeader) -> Result<Option<ImplHeader>, crate:
             .iter()
             .filter_map(|(name, value)| Some((name.clone(), ty(value, &header.parameters).ok()?)))
             .collect(),
+        defaulted: header.defaulted,
     }))
 }

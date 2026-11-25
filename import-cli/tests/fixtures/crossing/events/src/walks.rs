@@ -54,6 +54,13 @@ impl Node {
     }
 }
 
+/// A node lifted out of a holder for as long as the holder and the node
+/// are borrowed, as iced's `overlay::Element<'a, ..>` borrows its widget
+/// and tree.
+pub struct Lifted<'b> {
+    pub node: &'b mut Node,
+}
+
 /// Where a node is, as iced's `Layout`: a copy the crate makes for each
 /// child it walks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
