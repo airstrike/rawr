@@ -190,6 +190,14 @@ pub(crate) struct Instances {
     /// Each instance's generic parameters by name, as the types its body
     /// reads them as.
     pub(crate) types: BTreeMap<crate::item::Key, Box<[(ImmutableString, type_ref::Type)]>>,
+    /// Each instance's param-env: the crate-trait bounds its template's
+    /// parameters are declared with, at the instance's types, each the
+    /// bounded type and its `impl Trait<..>` bound. A call in the body
+    /// takes a trait argument its impls leave open from these, as rustc
+    /// selects a where-clause before an impl (`Text: Widget<Message, ..>`
+    /// fixes `Message` of the impl generic in it).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) bounds: BTreeMap<crate::item::Key, Box<[(type_ref::Type, type_ref::Type)]>>,
     /// Each instance's parameters whose template writes them as a generic
     /// parameter bounded by `Into<U>`, each with its `U` at the instance:
     /// rustc reads the generic body's `path.into()` as a `U`.

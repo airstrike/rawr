@@ -359,6 +359,68 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The arguments of the one bound of this instance's param-env
+    /// (`Instances::bounds`) on `ty` by the crate trait `identity`, as
+    /// rustc selects a where-clause candidate before the impls: in
+    /// `fn noted(item: &mut impl Diffed<Note>)` at `Tallied<Label>`,
+    /// `Tallied<Label>: Diffed<Note>` gives `Note`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn param_env_arguments(&mut self, ty: &Ty, identity: [u8; 32]) -> Option<Vec<Ty>> {
+        let key = self.callable.as_ref()?;
+        let bounds = self.models.instances.bounds.get(key)?.clone();
+        let ty = self.inference.resolve(ty);
+        let mut found = bounds.iter().filter_map(|(bounded, bound)| {
+            let path = crate::host::path::Path::parse(bound.opaque_trait()?).ok()?;
+            let header = self.models.host.trait_header(&path)?;
+            (header.identity == identity).then(|| {
+                (
+                    Ty::from_resolved(bounded),
+                    bound
+                        .opaque_arguments()
+                        .into_iter()
+                        .map(Ty::from_resolved)
+                        .collect::<Vec<_>>(),
+                )
+            })
+        });
+        let fitting = found
+            .by_ref()
+            .filter(|(bounded, _)| !contains_inference(bounded))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter(|(bounded, _)| self.unifies(bounded, &ty))
+            .collect::<Vec<_>>();
+        match <[_; 1]>::try_from(fitting) {
+            Ok([(_, arguments)]) => Some(arguments),
+            Err(_) => None,
+        }
+    }
+
+    /// Unify `arguments`, a crate trait's at a bound on `ty` that a call
+    /// leaves open, with those the body's param-env gives the bound.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn fix_by_param_env(&mut self, ty: &Ty, identity: [u8; 32], arguments: &[Ty]) {
+        if !arguments
+            .iter()
+            .any(|argument| contains_inference(&self.inference.resolve(argument)))
+        {
+            return;
+        }
+        let Some(given) = self.param_env_arguments(ty, identity) else {
+            return;
+        };
+        if given.len() <= arguments.len()
+            && given
+                .iter()
+                .zip(arguments)
+                .all(|(given, argument)| self.unifies(given, argument))
+        {
+            for (given, argument) in given.iter().zip(arguments) {
+                let _ = self.unify_type(given, argument);
+            }
+        }
+    }
+
     /// `fix_opaque` with the generic parameters `written` names at the
     /// types `substitution` gives them, as a generic function's bound
     /// `impl Widget<Message>` is at a call (D629).
@@ -433,6 +495,8 @@ impl<'a> Parser<'a> {
             self.take_opaque_arguments(&resolved, header.identity, &arguments, &[]);
             return Ok(());
         }
+        // The body's own bound on the type fixes what its impls leave open.
+        self.fix_by_param_env(&resolved, header.identity, &arguments);
         let span = match written {
             type_ref::Type::Unit(span)
             | type_ref::Type::Tuple { span, .. }

@@ -1403,6 +1403,17 @@ impl<'a> Parser<'a> {
             };
             let owner = impl_self_ty(definition, &substitution);
             self.require_type(&owner, &receiver, call)?;
+            // A trait impl's parameter only its trait's arguments name
+            // takes what the body's own bound on the receiver gives.
+            #[cfg(feature = "rust-import")]
+            if let Some(identity) = self.script_impl_trait(definition) {
+                let arguments = definition
+                    .trait_arguments()
+                    .iter()
+                    .map(|argument| instantiate(&Ty::from_resolved(argument), &substitution))
+                    .collect::<Vec<_>>();
+                self.fix_by_param_env(&receiver, identity, &arguments);
+            }
         }
         // `v.by_name::<String>(..)`: the method's own parameters take its
         // turbofish, as rustc's E0107 counts them.
@@ -1417,6 +1428,35 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(substitution)
+    }
+
+    /// The identity of the crate trait whose program impl `definition` is
+    /// a method of, by the impl's full trait path (`Models::script_impls`).
+    #[cfg(feature = "rust-import")]
+    fn script_impl_trait(&self, definition: &method::Definition) -> Option<[u8; 32]> {
+        let written = definition.trait_name()?;
+        let last = written.rsplit("::").next().unwrap_or(written);
+        let mut identities = self
+            .models
+            .script_impls
+            .iter()
+            .filter(|candidate| {
+                matches!(&candidate.owner, type_ref::Type::Path(type_ref::Path {
+                    target: type_ref::Target::Script { definition: owner, .. },
+                    ..
+                }) if *owner == definition.owner())
+                    && candidate.path.rsplit("::").next() == Some(last)
+            })
+            .filter_map(|candidate| {
+                let path = crate::host::path::Path::parse(&candidate.path).ok()?;
+                Some(self.models.host.trait_header(&path)?.identity)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter();
+        match (identities.next(), identities.next()) {
+            (Some(identity), None) => Some(identity),
+            _ => None,
+        }
     }
 
     /// rustc's E0599 for an inherent method whose impl's bounds the

@@ -1389,8 +1389,36 @@ pub(super) fn method_instance(
     if !conversions.is_empty() {
         instances.conversions.insert(key.clone(), conversions);
     }
+    let bounds = instance_bounds(definition.generics(), &substituted);
+    if !bounds.is_empty() {
+        instances.bounds.insert(key.clone(), bounds);
+    }
     instances.types.insert(key, substituted);
     instance
+}
+
+/// The crate-trait bounds `generics` declare, at the types `substituted`
+/// gives them: an instance's param-env (`Instances::bounds`).
+#[cfg(feature = "rust-import")]
+fn instance_bounds(
+    generics: &[item::Generic],
+    substituted: &[(ImmutableString, type_ref::Type)],
+) -> Box<[(type_ref::Type, type_ref::Type)]> {
+    generics
+        .iter()
+        .filter_map(|generic| {
+            let (_, bounded) = substituted
+                .iter()
+                .find(|(name, _)| *name == generic.name.text)?;
+            Some(
+                generic
+                    .crate_bounds
+                    .iter()
+                    .map(move |bound| (bounded.clone(), substitute_parameters(bound, substituted))),
+            )
+        })
+        .flatten()
+        .collect()
 }
 
 /// The types of `template`'s generic parameters after those `named` gives,
@@ -1994,6 +2022,10 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                     .instances
                     .conversions
                     .insert(key.clone(), conversions);
+            }
+            let bounds = instance_bounds(&definition.generics, &substituted);
+            if !bounds.is_empty() {
+                program.instances.bounds.insert(key.clone(), bounds);
             }
             program.instances.types.insert(key.clone(), substituted);
             items.push(item::Shell {

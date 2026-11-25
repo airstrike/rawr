@@ -4361,6 +4361,39 @@ fn a_crate_generic_method_takes_a_field_as_a_slice_and_lends_a_native_field() {
     }
 }
 
+/// A call in an instance of a generic function takes a parameter its
+/// impl leaves open from the function's own bound, as rustc selects the
+/// where-clause: `item.label()` under `impl Diffed<Note>` at
+/// `Tallied<Tallied<Note>>` diffs at `Note`, as iced's `Container` diffs
+/// its content at the `Message` of its `W: Widget<Message, ..>`.
+#[test]
+fn a_call_in_an_instance_takes_an_open_parameter_from_the_callers_bound() {
+    let root = lane(Some("tinted_noted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[note]\n[[note]]\n");
+}
+
 /// A program's value boxed as a crate trait's object the runner has no
 /// stand-in for, as iced's `Widget` while its `operate(&mut dyn
 /// Operation)` can't cross, is refused at check, rustc-style at the value,
