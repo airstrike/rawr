@@ -3978,6 +3978,57 @@ fn a_crate_generic_types_field_of_its_traits_associated_type_is_the_programs() {
     assert_eq!(rawr, "|calm| |*~bright~*|\n<|*~lent~*|>\n");
 }
 
+/// A crate's generic helper in a private module its root re-exports by a
+/// glob, as iced's `container(..)` is `widget::helpers`'s, runs from the
+/// crate's source when `RAWR_CRATE_SOURCE` names that module beside the
+/// module of the type it returns: `events::framed` is both the module and
+/// `made`'s generic `framed`, whose body calls the `framed` module's
+/// generic code, so a frame of the program's type is the program's
+/// `Framed`. The output is `cargo run`'s, and an edit that frames a new
+/// program type three deep prints `cargo run`'s output with no new runner
+/// build.
+#[test]
+fn a_crate_helper_globbed_into_its_parent_runs_from_its_source() {
+    let root = lane(Some("framed_made.rs"));
+    let run = |root: &std::path::Path| {
+        let output = |mut command: Command| {
+            let run = command
+                .current_dir(root)
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("RUSTFLAGS")
+                .env_remove("RAWR_VERBOSE")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+            assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+            stdout
+        };
+        let mut rawr = crate::support::rawr_import();
+        rawr.arg("run")
+            .arg(root)
+            .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+            .env("RAWR_HOME", crate::support::runtime_home());
+        let mut cargo = Command::new("cargo");
+        cargo.args(["run", "-q"]);
+        (output(rawr), output(cargo))
+    };
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "#calm# ##~deep~##\n<*~lent~*>\n");
+    let built = runners(&root.join("target/rawr/store"));
+
+    fs::write(
+        root.join("src/main.rs"),
+        CROSSING.read("variants/framed_made_nested.rs"),
+    )
+    .unwrap();
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "#calm# ##~deep~## ###3 clouds###\n<*~lent~*>\n");
+    assert_eq!(runners(&root.join("target/rawr/store")), built);
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();

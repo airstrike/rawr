@@ -47,6 +47,12 @@ pub(crate) struct Located {
     /// The packages of the program's graph from the defining package's
     /// source, itself among them.
     pub(crate) siblings: Vec<Package>,
+    /// The program's path to the module whose items its own are, when its
+    /// parent declares it privately and re-exports it by a public glob:
+    /// `iced::widget` for `iced::widget::helpers`, which `iced_widget`
+    /// declares as `mod helpers; pub use helpers::*;`. The program names
+    /// its items only there.
+    pub(crate) mount: Option<Box<[ImmutableString]>>,
 }
 
 /// A package of the program's graph, as `cargo metadata` describes it.
@@ -155,8 +161,12 @@ pub(crate) fn locate(manifest: &Path, path: &[ImmutableString]) -> Option<Locate
         .filter(|other| other.source.is_some() && other.source == package.source)
         .cloned()
         .collect();
+    let mount = graph
+        .globbed_privately(&module)
+        .then(|| path[..path.len() - 1].into());
     Some(Located {
         features: graph.features(module.package).to_vec(),
+        mount,
         file: module.file,
         package,
         module: module.path.into_boxed_slice(),
@@ -494,6 +504,45 @@ impl Graph {
             .filter(|import| matches!(import.bound, Bound::Glob))
             .filter_map(|import| self.resolve(module, &import.path, hops))
             .find_map(|globbed| self.definition(&globbed, name, hops))
+    }
+
+    /// Whether the module that declares `module` declares it privately
+    /// and re-exports its items by a public glob, `mod helpers; pub use
+    /// helpers::*;`, so its items are its parent's to every other crate.
+    fn globbed_privately(&self, module: &Module) -> bool {
+        let (Some(name), Some(parent)) = (module.path.last(), self.parent(module)) else {
+            return false;
+        };
+        let tokens = polyglot::placed(&parent.text);
+        let items = polyglot::module_items(&parent.text, &tokens);
+        let public = |item: &polyglot::ModuleItem<'_>| {
+            item.header.start >= 2
+                && matches!(
+                    tokens[item.header.start - 2].0,
+                    Token::Ident("pub", _) | Token::Punct(b')')
+                )
+        };
+        let private = items
+            .iter()
+            .any(|item| item.keyword == "mod" && item.name == Some(name.as_str()) && !public(item));
+        if !private {
+            return false;
+        }
+        items
+            .iter()
+            .filter(|item| item.keyword == "use" && public(item))
+            .any(|item| {
+                imports(&tokens, std::slice::from_ref(item))
+                    .iter()
+                    .any(|import| {
+                        matches!(import.bound, Bound::Glob)
+                            && self
+                                .resolve(&parent, &import.path, HOPS)
+                                .is_some_and(|globbed| {
+                                    globbed.package == module.package && globbed.path == module.path
+                                })
+                    })
+            })
     }
 
     /// The module that declares `module`.

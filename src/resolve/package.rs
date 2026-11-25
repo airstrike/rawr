@@ -2451,8 +2451,17 @@ impl<'a> Resolver<'a> {
                 if let Target::Trait(address) = &target {
                     traits.push(self.known_trait_name(address.clone()));
                 }
+                // A crate module the program module stands for, beside a
+                // function of its name that another such module, globbed into
+                // the same parent, holds: `iced::widget::container` is the
+                // module `container` and `helpers`'s generic `container`.
+                let beside = match &target {
+                    Target::Module if !module_only => self.crate_source_beside(context, &path),
+                    _ => None,
+                };
                 let import = match target {
                     _ if let Some(variant) = variant.clone() => variant,
+                    Target::Module if beside.is_some() => item::Import::Module,
                     // A crate module the program module stands for, which
                     // shares its name with a native item, as
                     // `iced::widget::container` is a module and a function:
@@ -2571,6 +2580,22 @@ impl<'a> Resolver<'a> {
                     && let Some(path) = super::std_path::bound_type(&qualified)
                 {
                     types.insert(name.text.clone(), type_ref::Target::Std(path));
+                }
+                if let Some((key, beside)) = beside {
+                    let written = super::Import {
+                        written: parsed.written(&name),
+                        rename: parsed.rename(&name),
+                        kind: "function",
+                    };
+                    bound.insert(
+                        (name.text.clone(), item::Namespace::Value),
+                        (context.source, name.span, Some(written)),
+                    );
+                    bindings.push(item::Binding {
+                        name: name.clone(),
+                        qualified: beside,
+                        target: item::Import::ScriptItem { key },
+                    });
                 }
                 bindings.push(item::Binding {
                     name,
@@ -2811,12 +2836,65 @@ impl<'a> Resolver<'a> {
             .take_while(|segment| *segment == "super")
             .count();
         let (supers, rest) = match path.first()?.as_str() {
+            // A program module's own path (`crate_source_sibling`).
+            "crate"
+                if path
+                    .get(1)
+                    .is_some_and(|next| crate::package::crate_source::is_name(next)) =>
+            {
+                return None;
+            }
             "crate" => (0, &path[1..]),
             "super" => (supers, &path[supers..]),
             _ => return None,
         };
-        self.tables
-            .crate_source_path(context.package, module, supers, rest)
+        let spelled = self
+            .tables
+            .crate_source_path(context.package, module, supers, rest)?;
+        // A path into another opened module of the crate is that module's
+        // program module (`crate_source_path`).
+        if self
+            .tables
+            .crate_source_module(context.package, &spelled)
+            .is_some()
+        {
+            return None;
+        }
+        Some(spelled)
+    }
+
+    /// `path` in a program module of a crate module's generic items when it
+    /// starts at `crate` or `super` and goes through a module of the crate
+    /// whose generic items the package holds too: that module's program
+    /// path (`Package::crate_source_module`).
+    fn crate_source_sibling(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let module = context.namespace.modules.first()?;
+        if context.namespace.modules.len() != 1 || !crate::package::crate_source::is_name(module) {
+            return None;
+        }
+        let supers = path
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let (supers, rest) = match path.first()?.as_str() {
+            "crate"
+                if !path
+                    .get(1)
+                    .is_some_and(|next| crate::package::crate_source::is_name(next)) =>
+            {
+                (0, &path[1..])
+            }
+            "super" => (supers, &path[supers..]),
+            _ => return None,
+        };
+        let spelled = self
+            .tables
+            .crate_source_path(context.package, module, supers, rest)?;
+        self.tables.crate_source_module(context.package, &spelled)
     }
 
     /// The native item `path` names beside the crate module whose program
@@ -2841,6 +2919,33 @@ impl<'a> Resolver<'a> {
                 definitions.into(),
                 self.host.item_owner(&qualified).cloned(),
             )),
+            _ => None,
+        }
+    }
+
+    /// The program's function of `path`'s name that a program module
+    /// globbed into `path`'s parent holds, when `path` names a crate module
+    /// the program module stands for (`crate_source_item`): its key and
+    /// its path from the crate's root.
+    fn crate_source_beside(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<(crate::item::Key, ImmutableString)> {
+        let (_, parent) = path.split_last()?;
+        if self.crate_source_path(context, path)?.len() != 2 {
+            return None;
+        }
+        let module = crate::package::crate_source::name(parent);
+        if !self.tables.crate_source_mounted(context.package, &module) {
+            return None;
+        }
+        let beside: Vec<ImmutableString> = [ImmutableString::from("crate"), module]
+            .into_iter()
+            .chain(path.last().cloned())
+            .collect();
+        match self.resolve_path(context, &beside, Span::NONE, &mut BTreeSet::new()) {
+            Ok(Target::Item(key)) => Some((key, beside.join("::").into())),
             _ => None,
         }
     }
@@ -2876,15 +2981,19 @@ impl<'a> Resolver<'a> {
             .modules
             .first()
             .is_some_and(|module| crate::package::crate_source::is_name(module));
+        if in_crate_source {
+            return self.crate_source_sibling(context, path);
+        }
         if path.len() < 2
-            || in_crate_source
             || self.tables.declaration(&context.address(first)).is_some()
             || !self.tables.reaches(first)
         {
             return None;
         }
         let package: ImmutableString = self.tables.package_name(context.package).into();
-        (2..=path.len()).rev().find_map(|split| {
+        // A crate module globbed into its crate's root stands for that root
+        // (`crate_source::located::Located::mount`).
+        (1..=path.len()).rev().find_map(|split| {
             let module = crate::package::crate_source::name(&path[..split]);
             let address = Address {
                 package: package.clone(),
@@ -2892,6 +3001,16 @@ impl<'a> Resolver<'a> {
                 name: module.clone(),
             };
             self.tables.declaration(&address)?;
+            // The module a crate module is globbed into keeps its other
+            // items native: only the crate module's own are the program's.
+            if self.tables.crate_source_mounted(context.package, &module) {
+                let item = Address {
+                    package: package.clone(),
+                    modules: Box::new([module.clone()]),
+                    name: path.get(split)?.clone(),
+                };
+                self.tables.declaration(&item)?;
+            }
             Some(
                 [ImmutableString::from("crate"), module]
                     .into_iter()

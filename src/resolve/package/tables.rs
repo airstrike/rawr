@@ -379,6 +379,23 @@ impl Tables {
         self.packages[package.index()].crate_source_path(module, supers, rest)
     }
 
+    /// The program module path `spelled` of `package` goes through
+    /// (`Package::crate_source_module`).
+    pub(super) fn crate_source_module(
+        &self,
+        package: graph::Id,
+        spelled: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        self.packages[package.index()].crate_source_module(spelled)
+    }
+
+    /// Whether the program module `module` of `package` stands for the
+    /// module its crate module is globbed into
+    /// (`Package::crate_source_mounted`).
+    pub(super) fn crate_source_mounted(&self, package: graph::Id, module: &str) -> bool {
+        self.packages[package.index()].crate_source_mounted(module)
+    }
+
     /// The package `package`'s name.
     pub(super) fn package_name(&self, package: graph::Id) -> &str {
         self.note(|| Read::Name(package));

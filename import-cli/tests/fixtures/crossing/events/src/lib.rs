@@ -24,6 +24,7 @@ pub mod held;
 pub mod image;
 pub mod keyed;
 pub mod keys;
+mod made;
 pub mod matched;
 pub mod named;
 pub mod nested;
@@ -49,6 +50,8 @@ pub mod styled;
 pub mod tinted;
 pub mod tuned;
 pub mod viewed;
+
+pub use made::*;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
