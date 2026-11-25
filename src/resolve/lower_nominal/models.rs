@@ -228,6 +228,9 @@ pub(super) struct ScriptTraitImpl {
     pub(super) owner: type_ref::Type,
     /// The trait's arguments as the header writes them.
     pub(super) arguments: Box<[type_ref::Type]>,
+    /// The crate traits each of `generics` is bounded by, as the impl's
+    /// `W: Widget<Message, Theme, Renderer>` (`Generic::crate_bounds`).
+    pub(super) crate_bounds: Box<[(ImmutableString, type_ref::Type)]>,
 }
 
 impl std::ops::Deref for Models {
@@ -1196,6 +1199,16 @@ impl Models {
                             .collect(),
                         owner: implementation.owner.clone(),
                         arguments: arguments.clone(),
+                        crate_bounds: implementation
+                            .generics
+                            .iter()
+                            .flat_map(|generic| {
+                                generic
+                                    .crate_bounds
+                                    .iter()
+                                    .map(|bound| (generic.name.text.clone(), bound.clone()))
+                            })
+                            .collect(),
                     })
                 })
                 .collect(),

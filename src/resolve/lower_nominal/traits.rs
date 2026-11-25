@@ -308,6 +308,16 @@ impl<'a> Parser<'a> {
             return None;
         };
         self.inference.commit(checkpoint);
+        // The impl's own bounds fix what the trait's arguments leave open,
+        // as `W: Widget<Message, Theme, Renderer>` of iced's `impl Widget
+        // for Container<'_, W, Theme>` gives its content's `Theme` the
+        // container's, by the content's impl (D604).
+        let substitution = types.iter().cloned().collect::<BTreeMap<_, _>>();
+        for (name, bound) in chosen.crate_bounds.iter() {
+            if let Some(bounded) = substitution.get(name) {
+                let _ = self.fix_opaque_in(bound, bounded, &substitution);
+            }
+        }
         self.impl_uses.push((chosen.index, types, full));
         Some(())
     }

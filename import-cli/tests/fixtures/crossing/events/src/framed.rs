@@ -178,6 +178,12 @@ impl Canvas {
     pub fn mark(&mut self, text: &str) {
         self.marks.push_str(text);
     }
+
+    /// What the canvas is marked with.
+    #[must_use]
+    pub fn marks(&self) -> &str {
+        &self.marks
+    }
 }
 
 /// What draws a cell onto a canvas its parameter names, as iced's
@@ -185,6 +191,15 @@ impl Canvas {
 pub trait Drawn<C> {
     /// Draws the cell onto `canvas`.
     fn draw(&self, canvas: &mut C);
+
+    /// The cell held as its trait object, as iced's `Widget::_boxed`
+    /// makes an `Element` at the widget's own parameters.
+    fn drawing<'a>(self) -> crate::held::Drawing<'a, C>
+    where
+        Self: Sized + 'a,
+    {
+        crate::held::Drawing(Box::new(self))
+    }
 }
 
 impl Drawn<Canvas> for Label {

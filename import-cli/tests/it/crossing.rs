@@ -4166,6 +4166,41 @@ fn a_crate_traits_provided_method_takes_the_programs_value_as_its_stand_in() {
     assert_eq!(runners(&root.join("target/rawr/store")), built);
 }
 
+/// A crate trait's provided method on the program's frame of a crate
+/// value whose type parameter only the frame's impl fixes, as iced's
+/// `Widget::_boxed(container(text(..)))` gives the text the container's
+/// `Theme` through `impl Widget for Container<'_, W, Theme> where W:
+/// Widget<Message, Theme, Renderer>`: the frame's `impl<S: Drawn<Canvas>>
+/// Drawn<Canvas>` fixes the swatch's canvas by the crate's impl for
+/// `Swatch<Canvas>`, as rustc infers it. The output is `cargo run`'s.
+#[test]
+fn a_program_impls_bound_fixes_what_a_crate_value_in_it_leaves_open() {
+    let root = lane(Some("framed_drawn_boxed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "|%teal| #|%rust|# ~calm \n");
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();
