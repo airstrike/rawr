@@ -7,6 +7,7 @@
 //! depends on a marked one is refused at load (native code never depends on
 //! marked code).
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use crate::project::cargo::features::{Enabled, Operator};
@@ -633,7 +634,10 @@ fn generic_inherent_methods(text: &str) -> Vec<usize> {
 /// parameter, as the impl of the type's inherent trait. Its concrete types
 /// and their other impls are native, which this reads only as far as
 /// their bounds.
-pub(crate) fn generic_items(text: &str) -> Generic {
+/// A generic item the program reaches by `reached`, a name its code or
+/// another reached item's names, is kept; one it reaches by no name stays
+/// native, as rustc compiles only what a program instantiates.
+pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Generic {
     let tokens = placed(text);
     let items = module_items(text, &tokens);
     let generic_types = items
@@ -642,13 +646,16 @@ pub(crate) fn generic_items(text: &str) -> Generic {
             "struct" | "enum" | "union" if item.generic => item.name,
             _ => None,
         })
+        .filter(|name| reached(name))
         .collect::<Vec<_>>();
     let mut generic = Generic::default();
     for item in &items {
         let header = &tokens[item.header.clone()];
         let whole = match item.keyword {
             "use" | "macro_rules" => true,
-            "fn" | "struct" | "enum" | "union" | "type" => item.generic,
+            "fn" | "struct" | "enum" | "union" | "type" => {
+                item.generic && item.name.is_some_and(reached)
+            }
             "impl" => impl_owner(header).is_some_and(|owner| generic_types.contains(&owner)),
             _ => false,
         };
@@ -786,6 +793,80 @@ pub(crate) struct Generic {
     /// The traits that hold inherent methods of the crate's concrete
     /// types, declared after the module's text.
     pub(crate) declared: String,
+}
+
+/// The names of the generic items of the crate modules `modules` (their
+/// texts) that the program, whose module texts are `program`, reaches:
+/// each name its code writes, and each that a reached item writes in
+/// turn, a generic type's impls with it, and each the generic methods of
+/// a concrete type write, which the program module keeps whatever it
+/// names. A lowercase name a path goes on from, as `iced` of
+/// `iced::run`, names a module or a crate, never a function.
+pub(crate) fn reached_names(program: &[&str], modules: &[&str]) -> BTreeSet<String> {
+    let mut reached = BTreeSet::new();
+    let mut pending: Vec<String> = program.iter().flat_map(|text| named(text)).collect();
+    // Each generic item by its name, with the text that names what it
+    // reaches.
+    let mut items: Vec<(&str, String)> = Vec::new();
+    for text in modules {
+        let tokens = placed(text);
+        let module = module_items(text, &tokens);
+        for item in &module {
+            match item.keyword {
+                "fn" | "struct" | "enum" | "union" | "type" if item.generic => {
+                    let Some(name) = item.name else { continue };
+                    let mut written = text[item.bytes.clone()].to_owned();
+                    if matches!(item.keyword, "struct" | "enum" | "union") {
+                        for other in module.iter().filter(|other| {
+                            other.keyword == "impl"
+                                && impl_owner(&tokens[other.header.clone()]) == Some(name)
+                        }) {
+                            written.push('\n');
+                            written.push_str(&text[other.bytes.clone()]);
+                        }
+                    }
+                    items.push((name, written));
+                }
+                "impl" if !item.generic => pending.extend(named(&text[item.bytes.clone()])),
+                _ => {}
+            }
+        }
+    }
+    while let Some(name) = pending.pop() {
+        if !reached.insert(name.clone()) {
+            continue;
+        }
+        for (item, written) in &items {
+            if *item == name {
+                pending.extend(named(written));
+            }
+        }
+    }
+    reached
+}
+
+/// The names `text` writes, but a lowercase one a path goes on from.
+fn named(text: &str) -> Vec<String> {
+    let tokens = placed(text);
+    tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (token, _))| {
+            let Token::Ident(name, _) = token else {
+                return None;
+            };
+            let pathed = matches!(
+                tokens.get(index + 1..index + 4),
+                Some([
+                    (Token::Punct(b':'), _),
+                    (Token::Punct(b':'), _),
+                    (Token::Ident(..), _)
+                ])
+            );
+            let lowercase = name.starts_with(|first: char| first.is_ascii_lowercase());
+            (!(pathed && lowercase)).then(|| (*name).to_owned())
+        })
+        .collect()
 }
 
 /// Where the visibility `pub` or `pub(..)` at `at` of `text` ends.

@@ -984,10 +984,18 @@ impl<'a> Resolver<'a> {
             for call in qualified_calls(body) {
                 let scoped = self.in_blocks(&unit.context, &call.path, call.path_span);
                 let path = scoped.as_deref().unwrap_or(&call.path);
+                let source = program::source::Id::from_index(unit.context.source.index());
+                // `crate::widgets::button(..)` in a program module of a crate
+                // module's generic items: the crate's function.
+                if let Some(spelled) = self.crate_source_spelled(&unit.context, path) {
+                    resolved
+                        .rust
+                        .insert((source, call.path_span), spelled.into_boxed_slice());
+                    continue;
+                }
                 if !self.is_script_path(&unit.context, path) {
                     continue;
                 }
-                let source = program::source::Id::from_index(unit.context.source.index());
                 // `crate::model::Thing::new` into a `.rs` module
                 // is the app crate's `polyglot::model::Thing::new`.
                 if let Some(spelled) = self.rust_spelling(&unit.context, path) {
@@ -2351,7 +2359,16 @@ impl<'a> Resolver<'a> {
                 // resolved as a macro before stays one.
                 let variant = variant.or_else(|| {
                     let qualified = super::std_reexport(&spelled.join("::"), self.host);
-                    if self.host.entry(&qualified).is_some() {
+                    // An item of a program module that stands for a crate
+                    // module, as its generic type alias, which no facade
+                    // holds, is that item.
+                    let program = self
+                        .crate_source_path(context, &path)
+                        .is_some_and(|mapped| {
+                            self.resolve_path(context, &mapped, name.span, &mut BTreeSet::new())
+                                .is_ok()
+                        });
+                    if program || self.host.entry(&qualified).is_some() {
                         None
                     } else if self.host.derive_macro(&qualified) {
                         Some(item::Import::Derive)
@@ -3003,6 +3020,9 @@ impl<'a> Resolver<'a> {
             self.tables.declaration(&address)?;
             // The module a crate module is globbed into keeps its other
             // items native: only the crate module's own are the program's.
+            // A name that is a macro there too stays the crate's, as
+            // `column` is `column!` and a function: one binding holds
+            // either a program function or a crate macro.
             if self.tables.crate_source_mounted(context.package, &module) {
                 let item = Address {
                     package: package.clone(),
@@ -3010,6 +3030,15 @@ impl<'a> Resolver<'a> {
                     name: path.get(split)?.clone(),
                 };
                 self.tables.declaration(&item)?;
+                let native = path[..=split].join("::");
+                if let Some(host::Entry::ModuleItem(definitions) | host::Entry::Item(definitions)) =
+                    self.host.entry(&native)
+                    && definitions
+                        .iter()
+                        .any(|definition| definition.kind().is_macro())
+                {
+                    return None;
+                }
             }
             Some(
                 [ImmutableString::from("crate"), module]

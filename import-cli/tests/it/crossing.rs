@@ -3984,8 +3984,10 @@ fn a_crate_generic_types_field_of_its_traits_associated_type_is_the_programs() {
 /// module of the type it returns: `events::framed` is both the module and
 /// `made`'s generic `framed`, whose body calls the `framed` module's
 /// generic code, so a frame of the program's type is the program's
-/// `Framed`, and whose `reddened` names a type through the crate it calls
-/// `core`, as iced's names iced_core. The output is `cargo run`'s, and an edit that frames a new
+/// `Framed`, whose `reddened` names a type through the crate it calls
+/// `core`, as iced's names iced_core, and whose `painted` names the
+/// `framed` module's generic alias, which the program imports by its name
+/// too. The output is `cargo run`'s, and an edit that frames a new
 /// program type three deep prints `cargo run`'s output with no new runner
 /// build.
 #[test]
@@ -4016,7 +4018,10 @@ fn a_crate_helper_globbed_into_its_parent_runs_from_its_source() {
     };
     let (rawr, cargo) = run(&root);
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "#calm# ##~deep~##\n<*~lent~*>\n<!~red~!>\n");
+    assert_eq!(
+        rawr,
+        "#calm# ##~deep~##\n<*~lent~*>\n<!~red~!>\n<|~painted~|>\n"
+    );
     let built = runners(&root.join("target/rawr/store"));
 
     fs::write(
@@ -4028,9 +4033,51 @@ fn a_crate_helper_globbed_into_its_parent_runs_from_its_source() {
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "#calm# ##~deep~## ###3 clouds###\n<*~lent~*>\n<!~red~!>\n"
+        "#calm# ##~deep~## ###3 clouds###\n<*~lent~*>\n<!~red~!>\n<|~painted~|>\n"
     );
     assert_eq!(runners(&root.join("target/rawr/store")), built);
+}
+
+/// A crate helper of an opened module that returns a crate generic type
+/// no opened module holds, as iced's `button(..)` returns `Button<'a,
+/// Message, W, Theme>`, takes the types its arguments leave open from the
+/// view's later uses and its output: `on_press` gives `Message` and `impl
+/// Widget<Message>` the default `Theme`, as rustc infers them. The output
+/// is `cargo run`'s.
+#[test]
+fn a_crate_helpers_open_types_are_what_the_body_and_its_output_give() {
+    let root = lane(Some("framed_pressed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .env_remove("EVENTS_COUNT")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+            .lines()
+            .filter(|line| !line.starts_with("pid "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view [Increment]\n1 message Increment"),
+        "{rawr}"
+    );
 }
 
 /// Each runner executable under `store`, with when it was written.

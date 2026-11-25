@@ -15,3 +15,24 @@ pub fn framed<S: Shown>(item: S) -> Framed<S> {
 pub fn reddened<S: Shown>(item: S, color: core::graphics::color::Color) -> Framed<S> {
     framed(item).edge(if color.r > 0.5 { '!' } else { '#' })
 }
+
+/// `item` painted by `palette` with `class`, whose bound names the
+/// `framed` module's generic alias by its path, as iced's `helpers` names
+/// `container::StyleFn`.
+pub fn painted<'a, S, P: framed::Palette>(
+    item: S,
+    palette: P,
+    class: framed::EdgeFn<'a, P>,
+) -> framed::Painted<'a, S, P>
+where
+    P::Class<'a>: From<framed::EdgeFn<'a, P>>,
+{
+    framed::Painted::new(item, palette, class.into())
+}
+
+/// A button of `content`, a crate generic type no opened module holds,
+/// whose `Message` and `Theme` only the view's later uses and output
+/// give, as iced's `button(..)` leaves them.
+pub fn pressed<'a, Message, W, Theme>(content: W) -> crate::widgets::Button<'a, Message, W, Theme> {
+    crate::widgets::button(content)
+}

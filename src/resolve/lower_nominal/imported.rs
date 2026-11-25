@@ -1612,7 +1612,11 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 parser.symbolic_only = true;
                 parser.collecting_instances = true;
                 // A body that fails here fails again where it is lowered.
-                let _ = parser.parse_function_body(definition);
+                // Its output fixes what its calls leave open, as a `-> impl
+                // Widget<Message>` fixes a theme by the trait's defaults.
+                let _ = parser
+                    .expect_output(definition.output.as_ref())
+                    .and_then(|()| parser.parse_function_body(definition));
                 let found = kept::Found {
                     templates: called_templates(&parser),
                     calls: take_instance_calls(&mut parser),
@@ -1678,7 +1682,9 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 if let Ok(mut parser) = parser {
                     parser.symbolic_only = true;
                     parser.collecting_instances = true;
-                    let _ = parser.parse_method_body(definition);
+                    let _ = parser
+                        .expect_output(Some(definition.output()))
+                        .and_then(|()| parser.parse_method_body(definition));
                     found.templates = called_templates(&parser);
                     found.calls = take_instance_calls(&mut parser);
                     found.impl_uses = take_impl_uses(&mut parser);

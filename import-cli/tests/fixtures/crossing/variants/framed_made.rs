@@ -5,7 +5,7 @@
 // program's own `Shown` type, and a frame of a frame, through `dyn Shown`.
 
 use events::framed;
-use events::framed::{shown_all, shown_one, Label, Meta, Shown};
+use events::framed::{shown_all, shown_one, EdgeFn, Ink, Label, Meta, Shown};
 
 /// A mood the program shows.
 struct Mood(&'static str);
@@ -27,4 +27,10 @@ fn main() {
     println!("{}", shown_one(&framed(Mood("lent")).edge('*')));
     let red = events::core::graphics::color::Color::from([1.0, 0.0, 0.0, 1.0]);
     println!("{}", shown_one(&events::reddened(Mood("red"), red)));
+    // A generic alias of an opened module, imported by its name.
+    let class: EdgeFn<'_, Ink> = Box::new(|_| '|');
+    println!(
+        "{}",
+        shown_one(&events::painted(Mood("painted"), Ink, class))
+    );
 }

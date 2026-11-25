@@ -1457,20 +1457,21 @@ impl<'a> Builder<'a> {
     /// no path dependency of the package, or whose file is missing, is left
     /// to the crate's native build.
     fn load_crate_sources(&mut self, package: Id) -> Result<(), Error> {
+        let mut opened = Vec::new();
         for path in super::crate_source::modules() {
             let Some(found) = self.crate_module_file(package, &path) else {
                 continue;
             };
-            let file = found.file;
-            let Ok(text) = self.read_to_string(&file) else {
+            let Ok(text) = self.read_to_string(&found.file) else {
                 continue;
             };
-            if let (Some(dependency), Some(config)) =
-                (found.dependency, self.packages[package.0].rust.as_mut())
-                && !config
-                    .dependencies
-                    .iter()
-                    .any(|known| known.alias == dependency.alias)
+            if let (Some(dependency), Some(config)) = (
+                found.dependency.clone(),
+                self.packages[package.0].rust.as_mut(),
+            ) && !config
+                .dependencies
+                .iter()
+                .any(|known| known.alias == dependency.alias)
             {
                 let mut dependencies = std::mem::take(&mut config.dependencies).into_vec();
                 dependencies.push(dependency);
@@ -1487,10 +1488,31 @@ impl<'a> Builder<'a> {
                 ),
                 None => text.clone(),
             };
-            let (name, root) = {
-                let package = &self.packages[package.0];
-                (package.name.clone(), package.root.clone())
-            };
+            opened.push((path, found, text, selected));
+        }
+        if opened.is_empty() {
+            return Ok(());
+        }
+        // The generic items the program's own modules reach, through each
+        // other across the opened modules.
+        let (name, root) = {
+            let package = &self.packages[package.0];
+            (package.name.clone(), package.root.clone())
+        };
+        let program = self
+            .sources
+            .iter()
+            .filter(|source| source.package() == name.as_str())
+            .map(source::Source::text)
+            .collect::<Vec<_>>();
+        let modules = opened
+            .iter()
+            .map(|(_, _, _, selected)| selected.as_str())
+            .collect::<Vec<_>>();
+        let reached = super::polyglot::reached_names(&program, &modules);
+        let reached = |name: &str| reached.contains(name);
+        for (path, found, text, selected) in opened {
+            let file = found.file;
             let bindings = if self.snapshot.is_some() {
                 super::crate_source::generic::Bindings::Left
             } else {
@@ -1500,8 +1522,13 @@ impl<'a> Builder<'a> {
             // stands for that path.
             let mounted = found.mount.is_some();
             let path = found.mount.unwrap_or(path);
-            let generic =
-                super::crate_source::generic::text(&selected, &path, bindings, &found.imported);
+            let generic = super::crate_source::generic::text(
+                &selected,
+                &path,
+                bindings,
+                &found.imported,
+                &reached,
+            );
             self.packages[package.0]
                 .crate_sources
                 .push((file.clone(), text));
@@ -1513,7 +1540,6 @@ impl<'a> Builder<'a> {
                     path: found.module,
                     mounted,
                 });
-            let text = generic;
             let module_root = file.parent().unwrap_or(&root).to_path_buf();
             self.load_module_text(
                 package,
@@ -1523,7 +1549,7 @@ impl<'a> Builder<'a> {
                 Box::new([super::crate_source::name(&path)]),
                 file.clone(),
                 file,
-                text,
+                generic,
                 None,
             )?;
         }

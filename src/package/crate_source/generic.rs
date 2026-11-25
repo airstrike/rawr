@@ -12,14 +12,16 @@
 /// item it can't parse is no error. The binding functions bind the
 /// derives of the types the module names from elsewhere too, `imported`.
 /// A runner's program, whose runner is built, takes no binding functions
-/// ([`Bindings::Left`]).
+/// ([`Bindings::Left`]). A generic item stays only when `reached` has its
+/// name (`polyglot::reached_names`).
 pub(crate) fn text<S: AsRef<str>>(
     text: &str,
     path: &[S],
     bindings: Bindings,
     imported: &[super::bound::Derived],
+    reached: &dyn Fn(&str) -> bool,
 ) -> String {
-    let items = super::super::polyglot::generic_items(text);
+    let items = super::super::polyglot::generic_items(text, reached);
     let mut generic = String::with_capacity(text.len());
     for (at, character) in text.char_indices() {
         let inside = items.kept.iter().any(|range| range.contains(&at));
@@ -87,7 +89,13 @@ mod tests {
                     impl Panel<u8> { pub fn first(&self) -> u8 { self.items[0] } }\n\
                     pub type Shading<'a, T> = Box<dyn Fn(&T) -> Tint + 'a>;\n\
                     pub type Named<'a> = &'a str;\n";
-        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written, &[]);
+        let generic = super::text(
+            text,
+            &["events", "tinted"],
+            super::Bindings::Written,
+            &[],
+            &|_| true,
+        );
         let (kept, bound) = generic
             .split_once("\n#[allow(dead_code)]")
             .unwrap_or((&generic, ""));
@@ -123,7 +131,13 @@ mod tests {
                     pub fn tint(&self) -> Tint { self.tint }\n\
                     pub fn retinted(self, tint: impl Into<Tint>) -> Self { Self { tint: tint.into(), ..self } }\n\
                     }\n";
-        let generic = super::text(text, &["events", "tinted"], super::Bindings::Written, &[]);
+        let generic = super::text(
+            text,
+            &["events", "tinted"],
+            super::Bindings::Written,
+            &[],
+            &|_| true,
+        );
         let (kept, bound) = generic
             .split_once("\n#[allow(dead_code)]")
             .unwrap_or((&generic, ""));
