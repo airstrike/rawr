@@ -167,3 +167,61 @@ pub fn draw<M: Clone + Into<Tint>>(title: &str, items: &[M], canvas: &mut Canvas
         canvas.fill(&label, &shade(item.clone()));
     }
 }
+
+/// The labels of what a holder shows, as iced's `widget::Tree` keeps a
+/// widget's children. The crate compiles it once.
+#[derive(Debug, Default)]
+pub struct Tally {
+    pub labels: Vec<String>,
+}
+
+impl Tally {
+    /// An empty tally.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The tally's labels made `items`', as iced's `Tree::diff_children`.
+    pub fn diff_children(&mut self, items: &mut [impl Shown]) {
+        diff_children(&mut self.labels, items);
+    }
+}
+
+/// `labels` made the labels of `items`, as iced's `tree::diff_children`:
+/// the extra ones dropped and each of the rest relabelled in place.
+pub fn diff_children(labels: &mut Vec<String>, items: &mut [impl Shown]) {
+    labels.truncate(items.len());
+    for (index, item) in items.iter_mut().enumerate() {
+        let shown = item.shown();
+        if index < labels.len() {
+            labels[index] = shown;
+        } else {
+            labels.push(shown);
+        }
+    }
+}
+
+/// `item` with a tally of it, as iced's `Container` holds its content.
+pub struct Tallied<S> {
+    item: S,
+    tally: Tally,
+}
+
+/// `item` with an empty tally.
+pub fn tallied<S: Shown>(item: S) -> Tallied<S> {
+    Tallied {
+        item,
+        tally: Tally::new(),
+    }
+}
+
+impl<S: Shown> Tallied<S> {
+    /// The tally made the one item's, as iced's `Container::diff` diffs its
+    /// content through `std::slice::from_mut`.
+    pub fn diffed(&mut self) -> &[String] {
+        self.tally
+            .diff_children(std::slice::from_mut(&mut self.item));
+        &self.tally.labels
+    }
+}

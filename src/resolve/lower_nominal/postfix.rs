@@ -1430,7 +1430,9 @@ impl<'a> Parser<'a> {
                     if let Some(error) = unscoped {
                         return Err(error);
                     }
-                    let (args, end) = self.parse_call_arguments("method arguments")?;
+                    // A `&mut` parameter's argument is a place, as a program
+                    // type's method's is.
+                    let (args, end) = self.parse_borrowing_arguments("method arguments")?;
                     let owner_name = receiver.name(&self.models);
                     value = match self.call_owner_method(
                         value,

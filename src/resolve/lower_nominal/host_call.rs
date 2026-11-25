@@ -3185,11 +3185,16 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     pub(super) fn read_imported_field(
         &mut self,
-        receiver: ParsedExpr,
+        mut receiver: ParsedExpr,
         definition: crate::host::type_def::Definition,
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // `&mut self.children` in a `&mut self` method of a crate's type
+        // run from its source: `self` is the receiver's place.
+        if receiver.lvalue.is_none() {
+            receiver.lvalue = self.mutable_receiver_place(&receiver);
+        }
         let path: ImmutableString = definition.path().into();
         let crate::host::type_def::Shape::Struct { fields, .. } = definition.shape() else {
             return Err(Error::UnknownMember {

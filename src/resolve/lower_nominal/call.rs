@@ -537,6 +537,21 @@ impl<'a> Parser<'a> {
         Ok(target)
     }
 
+    /// The place `value` is when it is `self` in a `&mut self` method:
+    /// the receiver's binding, whose fields are places too.
+    pub(super) fn mutable_receiver_place(&self, value: &ParsedExpr) -> Option<Lvalue> {
+        let receiver = value.lvalue.is_none()
+            && self.closures.is_empty()
+            && value.source.as_str() == "self"
+            && self.bindings.get("self").is_some_and(|binding| {
+                binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
+            });
+        receiver.then(|| Lvalue::Binding {
+            binding: "self".into(),
+            ty: value.ty.clone(),
+        })
+    }
+
     /// The `&mut` arguments at `indexes` of a call, each a `&mut` place
     /// borrowed once, as Rust's borrow rules have them (E0499): two
     /// borrows of one local are apart only as two of its fields.
@@ -552,18 +567,9 @@ impl<'a> Parser<'a> {
             };
             // `self` in a `&mut self` method, passed on to a `&mut`
             // parameter, is the receiver's place.
-            let receiver = place.lvalue.is_none()
-                && self.closures.is_empty()
-                && place.source.as_str() == "self"
-                && self.bindings.get("self").is_some_and(|binding| {
-                    binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
-                });
             let mut place = place.clone();
-            if receiver {
-                place.lvalue = Some(Lvalue::Binding {
-                    binding: "self".into(),
-                    ty: place.ty.clone(),
-                });
+            if place.lvalue.is_none() {
+                place.lvalue = self.mutable_receiver_place(&place);
             }
             let place = &place;
             // `twice(&mut |x| v.push(x))`: the closure is a temporary the

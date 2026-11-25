@@ -4317,6 +4317,50 @@ fn a_crate_trait_a_source_module_imports_by_name_bounds_its_generic_method() {
     assert_eq!(rawr, "1:calm\n1:BRIGHT\n");
 }
 
+/// A crate generic type run from the crate's source gives its field to a
+/// crate type's generic method as `std::slice::from_mut(&mut self.item)`,
+/// and that method, run from source over the crate's native value, lends
+/// the value's own field `&mut self.labels` to a generic function, as
+/// iced's `Container::diff` calls `Tree::diff_children`, which hands
+/// `&mut self.children` on. A program call lends a local array to the
+/// method too. The runner holds no instance of the generic items. The
+/// output is `cargo run`'s.
+#[test]
+fn a_crate_generic_method_takes_a_field_as_a_slice_and_lends_a_native_field() {
+    let root = lane(Some("tinted_tallied.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[\"calm\"]\n[\"BRIGHT\"]\n[\"NEW\"]\n");
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).unwrap() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    for generic in ["diff_children", "Tallied"] {
+        assert!(!bound.contains(generic), "{generic} is bound:\n{bound}");
+    }
+}
+
 /// A program's value boxed as a crate trait's object the runner has no
 /// stand-in for, as iced's `Widget` while its `operate(&mut dyn
 /// Operation)` can't cross, is refused at check, rustc-style at the value,
