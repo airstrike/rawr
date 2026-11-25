@@ -226,4 +226,21 @@ mod tests {
         );
         assert!(!unreached.contains("for Label {"), "{unreached}");
     }
+
+    /// A concrete method's body is native code, so a generic method only
+    /// it names is not reached, as iced's `Tag::of` named by the native
+    /// `Tag::stateless`; the impl's signatures and associated types are,
+    /// as the runner's bindings name them.
+    #[test]
+    fn a_concrete_methods_body_reaches_nothing() {
+        let module = "pub type Edge<'a, P> = Box<dyn Fn(&P) -> char + 'a>;\n\
+                      impl Tag {\n\
+                      pub fn of<T>() -> Self { Self(Made::of::<T>()) }\n\
+                      pub fn stateless(edge: Edge<'_, Ink>) -> Self { Self::of::<()>() }\n\
+                      }\n";
+        let reached = crate::package::polyglot::reached_names(&["Tag::stateless"], &[module]);
+        assert!(reached.contains("Edge"), "{reached:?}");
+        assert!(!reached.contains("of"), "{reached:?}");
+        assert!(!reached.contains("Made"), "{reached:?}");
+    }
 }

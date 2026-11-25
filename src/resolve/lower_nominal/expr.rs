@@ -1288,9 +1288,11 @@ impl<'a> Parser<'a> {
             return Ok(self.operator_expr(source, ty, name_span));
         }
         // `Self::with_text_size(..)` in an impl for a crate's type is the
-        // type's own function, by the path the impl writes (#1466).
+        // type's own function, by the path the impl writes (#1466), and
+        // `Self(..)` its tuple struct's constructor, as iced's `Tag::of`
+        // writes `Self(any::TypeId::of::<T>())`.
         if name.as_str() == "Self"
-            && matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek(), Token::DoubleColon | Token::LeftParen)
             && let Some(path) = self.self_path.clone()
         {
             let at = name_span.start();

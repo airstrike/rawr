@@ -877,12 +877,21 @@ fn into_conversions(
 /// instantiation its callers use, as `instanced` decides for a function: a
 /// generic parameter of its impl or its own touches a crate's types (D629).
 /// A crate-source module's generic inherent method is an inherent method,
-/// though its trait holds it, which no bound names.
+/// though its trait holds it, which no bound names. It is crate code, which
+/// rustc compiles only at the types its callers give: any type parameter
+/// makes it a template, as iced's `State::new<T: 'static>`, whose body
+/// boxes its `T` as `dyn Any`.
 #[cfg(feature = "rust-import")]
 pub(super) fn instanced_method(definition: &method::Definition) -> bool {
     let inherent = match definition.trait_name() {
         None => definition.builtin_owner().is_none(),
-        Some(name) => crate::package::crate_source::is_inherent(name),
+        Some(name) if crate::package::crate_source::is_inherent(name) => {
+            return definition
+                .generics()
+                .iter()
+                .any(|generic| generic.constant.is_none());
+        }
+        Some(_) => false,
     };
     inherent
         && definition

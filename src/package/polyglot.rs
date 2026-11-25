@@ -677,9 +677,13 @@ pub(crate) fn generic_items(text: &str, reached: &dyn Fn(&str) -> bool) -> Gener
             continue;
         }
         let body = &tokens[item.header.end + 1..item.end];
+        // A generic method the program reaches by no name stays native, as
+        // iced's `Tag::of<T>`, whose body makes a `TypeId`.
         let methods = module_items(text, body)
             .into_iter()
-            .filter(|method| method.keyword == "fn" && method.generic)
+            .filter(|method| {
+                method.keyword == "fn" && method.generic && method.name.is_some_and(reached)
+            })
             .collect::<Vec<_>>();
         // The owner's name: the last word of its path.
         if methods.is_empty() {
@@ -957,7 +961,36 @@ pub(crate) fn reached_names(program: &[&str], modules: &[&str]) -> BTreeSet<Stri
                     }
                     items.push((name, written));
                 }
-                "impl" if !item.generic => pending.extend(named(&text[item.bytes.clone()])),
+                // A concrete impl's signatures and associated types are
+                // what the runner's bindings of it name (`bound`). Its
+                // concrete methods' bodies stay native, and what they name
+                // is native code's to call: only its generic methods run
+                // from source, each where the program reaches it by its
+                // name, as iced's `Tag::of` doesn't where only the native
+                // `Tag::stateless` names it.
+                "impl" if !item.generic => {
+                    let mut written = text[item.bytes.clone()].to_owned();
+                    if item.header.end < item.end {
+                        let body = &tokens[item.header.end + 1..item.end];
+                        let mut methods = module_items(text, body)
+                            .into_iter()
+                            .filter(|method| method.keyword == "fn")
+                            .collect::<Vec<_>>();
+                        methods.sort_by_key(|method| std::cmp::Reverse(method.bytes.start));
+                        for method in methods {
+                            let start = method.bytes.start - item.bytes.start;
+                            let signature_end = body[method.header.end].1 - item.bytes.start;
+                            let end = method.bytes.end - item.bytes.start;
+                            if let (Some(name), true) = (method.name, method.generic) {
+                                items.push((name, text[method.bytes.clone()].to_owned()));
+                                written.replace_range(start..end, "");
+                            } else {
+                                written.replace_range(signature_end..end, ";");
+                            }
+                        }
+                    }
+                    pending.extend(named(&written));
+                }
                 // A trait's provided method the program reaches by its name
                 // runs from source where its impl leaves it to the trait
                 // (`crate_source::provided`).
