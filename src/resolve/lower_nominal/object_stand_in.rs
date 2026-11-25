@@ -7,7 +7,9 @@
 //! value and calls the member of its impl each method names, as the
 //! trait's object does (`crossing::Object`). A parameter only a shared
 //! borrow takes, as `&dyn Trait` read as `&impl Trait` is, is the trait's
-//! object itself, lent for the call.
+//! object itself, lent for the call, and so is a trait's `Self` in a
+//! method over it. A declared `&S` with `S: Trait` is `Sized`, so the
+//! object can't fill it, and it keeps its program type.
 //!
 //! Which impl members the value calls is known only once the body's types
 //! are: each argument passes through an op that [`Parser::finish_stand_ins`]
@@ -109,15 +111,26 @@ impl Parser<'_> {
             .iter()
             .map(|(name, ty, _)| (name.clone(), ty.clone()))
             .collect::<BTreeMap<_, _>>();
+        let self_member = rawr_import::surface::member::declared(&item_path);
+        let may_be_unsized = |name: &str| {
+            use rawr_import::classify::representability::signature;
+            signature::is_object_input(name)
+                || self_member && *name == *signature::argument_impl_name(0)
+        };
         let mut pending = Vec::new();
         for (position, declared) in signature.parameters().iter().enumerate() {
             let (name, owned) = match declared.shape() {
                 Shape::Parameter(name) => (name.to_string(), true),
+                // Only a parameter that may be unsized may be the object:
+                // a borrowed object input's own, or a trait's `Self` in a
+                // method over it. A declared `&S` is `Sized`.
                 Shape::Reference {
                     mutable: false,
                     target,
                 } => match target.shape() {
-                    Shape::Parameter(name) => (name.to_string(), false),
+                    Shape::Parameter(name) if may_be_unsized(&name.to_string()) => {
+                        (name.to_string(), false)
+                    }
                     _ => continue,
                 },
                 _ => continue,

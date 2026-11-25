@@ -42,6 +42,23 @@ pub fn argument_impl_name(index: u32) -> Box<str> {
     format!("{RESERVED}impl_{index}").into_boxed_str()
 }
 
+/// The name a signature declares a borrowed trait-object input's own
+/// parameter by ([`OBJECT_INPUT`]), apart from a declared `impl Trait`'s:
+/// the object, which is unsized, may fill it.
+#[must_use]
+pub fn object_input_name(index: u32) -> Box<str> {
+    format!("{RESERVED}object_{index}").into_boxed_str()
+}
+
+/// Whether `name` is a borrowed trait-object input's own parameter's
+/// ([`object_input_name`]).
+#[must_use]
+pub fn is_object_input(name: &str) -> bool {
+    name.strip_prefix(RESERVED)
+        .and_then(|rest| rest.strip_prefix("object_"))
+        .is_some_and(|index| index.parse::<u32>().is_ok())
+}
+
 /// The name a signature declares the synthetic parameter `identity`
 /// ([`projection_output`]) by: its parameter's index and its ordinal. It
 /// is reserved, as [`argument_impl_name`]'s is, so a crate's own `SOutput`
@@ -113,6 +130,10 @@ pub enum Kind {
 /// The bit that marks a synthetic type parameter: the `Output` of the
 /// future parameter in its low bits (D527).
 pub const FUTURE_OUTPUT: u32 = 0x8000_0000;
+
+/// The name's prefix of the type parameter a borrowed trait-object input
+/// (`&dyn Trait`) is read as before it is renamed ([`object_input_name`]).
+pub const OBJECT_INPUT: &str = "impl dyn#";
 
 /// The synthetic parameter that stands for `F::Output` of the future
 /// parameter at `index`.
@@ -945,7 +966,17 @@ impl Parameter {
     /// signature can declare it: rustc's own name, as `impl Into<Size>`,
     /// is what a message shows.
     pub(crate) fn into_argument_impl(mut self) -> Self {
-        let written = std::mem::replace(&mut self.name, argument_impl_name(self.index));
+        let object = self
+            .shown
+            .as_deref()
+            .unwrap_or(&self.name)
+            .starts_with(OBJECT_INPUT);
+        let name = if object {
+            object_input_name(self.index)
+        } else {
+            argument_impl_name(self.index)
+        };
+        let written = std::mem::replace(&mut self.name, name);
         self.shown.get_or_insert(written);
         self.argument_impl = true;
         self
