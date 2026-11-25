@@ -77,3 +77,82 @@ pub fn shown_all(items: &[Box<dyn Shown>]) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+/// What paints a frame's edges, as iced's `container::Catalog` styles a
+/// container: a class per frame, which a frame holds by the palette's
+/// associated type.
+pub trait Palette {
+    /// A frame's class, as iced's `Catalog::Class<'a>`.
+    type Class<'a>;
+
+    /// The edge this palette paints.
+    fn edge(&self) -> char;
+}
+
+/// The crate's palette.
+pub struct Ink;
+
+/// A class that paints by a closure of the palette, as iced's
+/// `container::StyleFn<'a, Theme>`.
+pub type EdgeFn<'a, P> = Box<dyn Fn(&P) -> char + 'a>;
+
+impl Palette for Ink {
+    type Class<'a> = EdgeFn<'a, Self>;
+
+    fn edge(&self) -> char {
+        '|'
+    }
+}
+
+/// `item` between two edges its palette paints, in the shape of iced's
+/// `Container<'a, W, Theme>`: it holds its palette's class. Its fields are
+/// private.
+pub struct Painted<'a, S, P = Ink>
+where
+    P: Palette,
+{
+    item: S,
+    palette: P,
+    class: P::Class<'a>,
+    classed: bool,
+}
+
+impl<'a, S, P> Painted<'a, S, P>
+where
+    P: Palette,
+{
+    /// `item` painted by `palette` with `class`.
+    pub fn new(item: S, palette: P, class: P::Class<'a>) -> Self {
+        Self {
+            item,
+            palette,
+            class,
+            classed: false,
+        }
+    }
+
+    /// The frame with the class `edge`, as iced's `Container::style` sets
+    /// one through a bound on the class.
+    #[must_use]
+    pub fn class(mut self, edge: impl Fn(&P) -> char + 'a) -> Self
+    where
+        P::Class<'a>: From<EdgeFn<'a, P>>,
+    {
+        self.class = (Box::new(edge) as EdgeFn<'a, P>).into();
+        self.classed = true;
+        self
+    }
+}
+
+impl<S, P> Meta for Painted<'_, S, P> where P: Palette {}
+
+impl<S: Shown, P> Shown for Painted<'_, S, P>
+where
+    P: Palette,
+{
+    fn shown(&self) -> String {
+        let edge = self.palette.edge();
+        let mark = if self.classed { "*" } else { "" };
+        format!("{edge}{mark}{}{mark}{edge}", self.item.shown())
+    }
+}

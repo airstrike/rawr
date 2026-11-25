@@ -1081,6 +1081,7 @@ impl<'a> Parser<'a> {
                 .is_some_and(|(_, declared)| {
                     declared.associated.iter().any(|name| name.text == *member)
                 })
+                || self.native_associated_type(trait_name, member)
         };
         let candidates: Vec<ImmutableString> = match self.inference.resolve(base) {
             ty @ Ty::Param(..) => self
@@ -1197,6 +1198,13 @@ impl<'a> Parser<'a> {
                 .trait_name(&header.identity)
                 .unwrap_or_else(|| path.into()),
         )
+    }
+
+    /// Whether the crate trait `trait_name` declares the associated type
+    /// `member`, as iced's `container::Catalog` declares `Class`.
+    fn native_associated_type(&self, trait_name: &str, member: &str) -> bool {
+        crate::resolve::crate_trait_associated(&self.models.host, trait_name)
+            .is_some_and(|associated| associated.iter().any(|name| name == member))
     }
 
     /// The miss of `written`, the path of a trait object's trait from the

@@ -133,7 +133,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // forwards the associated type a parameter's projection names to its own
 // parameter's, with that item (#2060). `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 104;
+const PROTOCOL_SCHEMA: u32 = 106;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2898,12 +2898,35 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             ImplementationWork::Trait if self.is_sysroot_crate(def_id.krate)? => {}
             ImplementationWork::Trait => {
                 let mut scalars = Vec::new();
+                // A trait with associated types gives each of its crate's
+                // own impls' types, which a program's copy of the crate's
+                // generic code projects on the trait's parameter, as iced's
+                // `Container` holds `Theme::Class<'a>` of iced_widget's
+                // `impl container::Catalog for Theme` (#2698). A type's
+                // own crate's impls come with the type.
+                let associated_types = self
+                    .tcx
+                    .associated_items(def_id)
+                    .in_definition_order()
+                    .any(|item| item.is_type());
                 for implementation in self.implementations(def_id)? {
                     self.budget.edge(1)?;
                     let impl_id = implementation.id();
                     let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
                         continue;
                     };
+                    if associated_types
+                        && impl_id.krate == def_id.krate
+                        && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                    {
+                        let nominal = AssociatedObligation {
+                            kind: AssociatedDemandKind::NominalSurface,
+                            trait_item: None,
+                            arguments: None,
+                            param_env: self.tcx.param_env(impl_id),
+                        };
+                        self.request_implementation(implementation, def_id, Some(nominal))?;
+                    }
                     let reference = reference.instantiate_identity().skip_norm_wip();
                     if matches!(
                         reference.self_ty().kind(),
@@ -3115,7 +3138,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         // a selected source surface: a member of a std trait is
                         // demanded where the program names it, as a crate trait's
                         // is (#709). A Rust future's `Output` is the exception:
-                        // Rawr types the future as `Task<Output>`.
+                        // Rawr types the future as `Task<Output>`. So is a
+                        // crate trait's associated type, which a program's
+                        // copy of the crate's generic code projects on the
+                        // trait's parameter, as iced's `Container` holds
+                        // `Theme::Class<'a>` (#2698).
                         AssociatedDemandKind::NominalSurface => {
                             if Some(trait_id) == self.tcx.lang_items().future_trait()
                                 && let Some(output) = self.tcx.lang_items().future_output()
@@ -3127,6 +3154,25 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                                     implementors,
                                     &mut selected,
                                 )?;
+                            }
+                            if !self.is_sysroot_crate(trait_id.krate)? {
+                                let types = self
+                                    .tcx
+                                    .associated_items(trait_id)
+                                    .in_definition_order()
+                                    .filter(|item| item.is_type())
+                                    .map(|item| item.def_id)
+                                    .collect::<Vec<_>>();
+                                self.edge(types.len())?;
+                                for item in types {
+                                    self.select_trait_item_for_impl(
+                                        impl_id,
+                                        trait_id,
+                                        item,
+                                        implementors,
+                                        &mut selected,
+                                    )?;
+                                }
                             }
                         }
                         AssociatedDemandKind::SelectedMember => {

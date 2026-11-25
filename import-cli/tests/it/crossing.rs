@@ -3941,6 +3941,43 @@ fn a_crate_generic_type_at_the_programs_arguments_crosses_as_a_trait_object() {
     assert_eq!(runners(&root.join("target/rawr/store")), built);
 }
 
+/// A crate's generic type whose field is the associated type its
+/// parameter's crate trait gives, as iced's `Container<'a, W, Theme =
+/// crate::Theme>` holds `Theme::Class<'a>`, is the program's type:
+/// `events::framed`'s `Painted<'a, S, P = Ink>` holds `P::Class<'a>`, which
+/// the crate's `impl Palette for Ink` makes a boxed closure, so the
+/// program's closure fills it. One frame keeps the class it was made with,
+/// and two take another through a bound on the projection (`P::Class<'a>:
+/// From<EdgeFn<'a, P>>`), at `Ink`, where the projection is the crate impl's
+/// type. Each crosses as the trait's stand-in. The output is `cargo run`'s.
+#[test]
+fn a_crate_generic_types_field_of_its_traits_associated_type_is_the_programs() {
+    let root = lane(Some("framed_painted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "|calm| |*~bright~*|\n<|*~lent~*|>\n");
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();

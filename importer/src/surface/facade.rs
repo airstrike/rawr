@@ -20,7 +20,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 81;
+const SCHEMA: u32 = 82;
 
 /// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
 /// outcome is of.
@@ -244,9 +244,17 @@ pub struct TraitHeader {
     /// program's type gives a value of one through a box (#2013).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     outputs: Option<representability::signature::Outputs>,
+    /// The names of its associated types.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    associated: Box<[Box<str>]>,
 }
 
 impl TraitHeader {
+    /// The names of its associated types, as `Class` of iced's
+    /// `container::Catalog`.
+    pub fn associated(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.associated.iter().map(AsRef::as_ref)
+    }
     /// The trait's path, relative to the root.
     #[must_use]
     pub fn path(&self) -> &str {
@@ -297,6 +305,9 @@ pub struct ImplHeader {
     bounds: Box<[ImplBound]>,
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     projections: Box<[ImplProjection]>,
+    /// Each associated type the impl gives, by name, at its parameters.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    associated: Box<[(Box<str>, Type)]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type:
@@ -376,6 +387,12 @@ impl ImplHeader {
     #[must_use]
     pub fn projections(&self) -> &[ImplProjection] {
         &self.projections
+    }
+    /// Each associated type the impl gives, by name, at its parameters,
+    /// as `Class` of iced's `impl Catalog for Theme` is a boxed callable.
+    #[must_use]
+    pub fn associated(&self) -> &[(Box<str>, Type)] {
+        &self.associated
     }
 }
 

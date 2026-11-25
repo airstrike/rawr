@@ -795,6 +795,13 @@ pub(super) fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_re
                 span,
             })
         }
+        // A boxed closure, as iced's `Catalog::Class<'a>` of `Theme` is:
+        // `fn(A) -> B`, as the bridge boxes it (T417).
+        Ty::Callable { inputs, output, .. } | Ty::Fn { inputs, output } => {
+            let mut types = all(inputs)?;
+            types.push(named(output)?);
+            builtin(crate::item::type_ref::FN_TYPE, types)
+        }
         _ => return None,
     })
 }

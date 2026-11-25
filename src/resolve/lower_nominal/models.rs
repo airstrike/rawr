@@ -163,6 +163,12 @@ pub(super) struct Tables {
     pub(super) trait_instances: BTreeMap<ImmutableString, Vec<Box<[type_ref::Type]>>>,
     /// `type Name = T;` of each `impl Trait for Owner`.
     pub(super) associated: Shared<AssociatedTypes>,
+    /// The crate traits a bound names whose headers declare associated
+    /// types, as iced's `container::Catalog` declares `Class`: a
+    /// projection on a parameter they bound is the impl's type once the
+    /// parameter is a crate type (`Parser::read_native_associated`).
+    #[cfg(feature = "rust-import")]
+    pub(super) native_projected: Shared<Box<[ImmutableString]>>,
     /// The std traits among `traits` (`Clone`, `Display`, ..).
     pub(super) std_traits: BTreeSet<ImmutableString>,
     /// Every function's opaque outputs by name (D1109): type parameters
@@ -1003,6 +1009,8 @@ impl Models {
         // type, as its native signatures do (#1484).
         #[cfg(feature = "rust-import")]
         super::ty::lower_mirrors(std::sync::Arc::clone(&mirrored));
+        #[cfg(feature = "rust-import")]
+        let native_projected = native_projected(&program.items, &host);
         let tables = Tables {
             runtime,
             host,
@@ -1080,6 +1088,8 @@ impl Models {
             impl_bounds,
             trait_instances,
             associated: Shared::new(associated),
+            #[cfg(feature = "rust-import")]
+            native_projected: Shared::new(native_projected),
             std_traits,
             opaque_outputs: Shared::new(opaque_outputs(&program.items)),
             index_mut: program
@@ -1996,4 +2006,23 @@ fn laid_out(program: &Program, engine: &Engine) -> LaidOut {
         }
     }
     laid_out
+}
+
+/// The crate traits of `items`' bounds whose headers declare associated
+/// types (`Models::native_projected`).
+#[cfg(feature = "rust-import")]
+fn native_projected(items: &[item::Shell], host: &crate::host::Registry) -> Box<[ImmutableString]> {
+    let mut found = items
+        .iter()
+        .flat_map(|shell| item_generics(&shell.kind))
+        .flat_map(|generic| generic.native_traits.iter())
+        .filter(|path| {
+            crate::resolve::crate_trait_associated(host, path)
+                .is_some_and(|associated| !associated.is_empty())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    found.sort();
+    found.dedup();
+    found.into_boxed_slice()
 }

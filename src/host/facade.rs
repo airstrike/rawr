@@ -201,6 +201,8 @@ pub(crate) struct TraitHeader {
     pub(crate) defaults: Box<[Option<host::type_ref::Type>]>,
     pub(crate) call: Option<host::type_ref::Type>,
     pub(crate) object: Option<Box<[ImmutableString]>>,
+    /// The names of its associated types.
+    pub(crate) associated: Box<[ImmutableString]>,
 }
 
 /// What a trait's header says of the runner's one stand-in for it
@@ -233,6 +235,8 @@ pub(crate) struct ImplHeader {
     pub(crate) self_type: host::type_ref::Type,
     pub(crate) bounds: Box<[ImplBound]>,
     pub(crate) projections: Box<[ImplProjection]>,
+    /// Each associated type the impl gives, by name, at its parameters.
+    pub(crate) associated: Box<[(ImmutableString, host::type_ref::Type)]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type,
@@ -284,6 +288,7 @@ impl TraitHeader {
                 .map(host::type_ref::Type::try_clone)
                 .transpose()?,
             object: self.object.clone(),
+            associated: self.associated.clone(),
         })
     }
 }
@@ -322,6 +327,11 @@ impl ImplHeader {
                     })
                 })
                 .collect::<Result<_, rawr_import::surface::Error>>()?,
+            associated: self
+                .associated
+                .iter()
+                .map(|(name, value)| Ok((name.clone(), value.try_clone()?)))
+                .collect::<Result<_, rawr_import::surface::Error>>()?,
         })
     }
 }
@@ -359,6 +369,7 @@ impl TraitHeader {
             defaults,
             call,
             object: self.object.clone(),
+            associated: self.associated.clone(),
         })
     }
 }
@@ -410,6 +421,12 @@ impl ImplHeader {
                 })
             })
             .collect::<Box<[_]>>();
+        // An associated type naming a type the facade lacks is left out.
+        let associated = self
+            .associated
+            .iter()
+            .filter_map(|(name, value)| Some((name.clone(), one(value)?)))
+            .collect();
         Some(Self {
             parameters: self.parameters.clone(),
             trait_identity: self.trait_identity,
@@ -417,6 +434,7 @@ impl ImplHeader {
             self_type: self_type.into_vec().pop()?,
             bounds,
             projections,
+            associated,
         })
     }
 }
@@ -834,6 +852,7 @@ impl Builder {
         defaults: Box<[Option<host::type_ref::Type>]>,
         call: Option<host::type_ref::Type>,
         object: Option<Box<[ImmutableString]>>,
+        associated: Box<[ImmutableString]>,
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         self.trait_headers
@@ -846,6 +865,7 @@ impl Builder {
             defaults,
             call,
             object,
+            associated,
         });
         Ok(self)
     }

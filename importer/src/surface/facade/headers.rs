@@ -300,6 +300,7 @@ fn trait_header(
         defaults,
         call,
         outputs: None,
+        associated: header.associated,
     }))
 }
 
@@ -357,5 +358,10 @@ fn impl_header(header: written::ImplHeader) -> Result<Option<ImplHeader>, crate:
         self_type,
         bounds,
         projections,
+        associated: header
+            .associated
+            .iter()
+            .filter_map(|(name, value)| Some((name.clone(), ty(value, &header.parameters).ok()?)))
+            .collect(),
     }))
 }

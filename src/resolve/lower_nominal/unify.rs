@@ -62,6 +62,31 @@ impl<'a> Parser<'a> {
                 self.inference.bind(id, Ty::iter(item.clone()));
                 true
             }
+            // A crate trait's associated type of a type still to be
+            // inferred, as `Self { class, .. }` of iced's `Container` holds
+            // `Theme::Class<'a>` before `Theme` is known: the crate's impl
+            // for the type it turns out to be gives it (`Inference::native`).
+            #[cfg(feature = "rust-import")]
+            (Ty::Projection(base, trait_name, name), other)
+            | (other, Ty::Projection(base, trait_name, name))
+                if matches!(self.inference.resolve(base), Ty::Infer(_))
+                    && let Some(cases) = self
+                        .inference
+                        .native
+                        .get(&(trait_name.clone(), name.clone())) =>
+            {
+                let cases = cases
+                    .iter()
+                    .map(|(this, given)| (this.clone(), given.clone(), Vec::new()))
+                    .collect();
+                self.inference.projections.push(ImplProjection {
+                    ty: (**base).clone(),
+                    value: other.clone(),
+                    cases,
+                    associated: None,
+                });
+                true
+            }
             // A literal's `{integer}` or `{float}` takes the other kind.
             (Ty::Int(Int::Var(id)), Ty::Int(_)) | (Ty::Float(Float::Var(id)), Ty::Float(_)) => {
                 self.inference.bind(*id, actual);

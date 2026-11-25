@@ -1322,6 +1322,10 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             structural_defaults: Vec::new(),
         };
+        #[cfg(feature = "rust-import")]
+        if !parser.models.native_projected.is_empty() {
+            parser.read_native_associated();
+        }
         parser.read_generics(&[]);
         parser
     }

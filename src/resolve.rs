@@ -2751,6 +2751,7 @@ fn resolve_item(
             let types = scope.as_ref().unwrap_or(types);
             for generic in generics.iter_mut() {
                 if let Some(bounds) = crate_bounded.get(&generic.name.text) {
+                    generic.native_traits = native_traits(bounds, host);
                     generic.crate_bounds = bounds
                         .iter()
                         .map(|bound| {
@@ -3176,6 +3177,7 @@ fn resolve_function(
     let mut generics = generics;
     for generic in &mut generics {
         if let Some(bounds) = crate_bounded.get(&generic.name.text) {
+            generic.native_traits = native_traits(bounds, host);
             generic.crate_bounds = bounds
                 .iter()
                 .map(|bound| {
@@ -3674,7 +3676,7 @@ fn resolve_methods(
     let impls = std_trait::impls(&mut std_traits, items, items.len(), host);
     items.extend(impls);
     let items = items.as_mut_slice();
-    resolve_projections(items, &std_traits)?;
+    resolve_projections(items, &std_traits, host)?;
     let traits = trait_table(items, std_traits)?;
     fill_trait_defaults(items, &traits);
     check_generic_arity(items, &traits)?;
@@ -4781,10 +4783,14 @@ fn check_trait_bounds(
     items: &[item::Shell],
     traits: &BTreeMap<ImmutableString, (program::source::Id, item::Trait)>,
 ) -> Result<(), LocatedError> {
-    let check = |generics: &[item::Generic]| -> Result<(), Error> {
+    // A type's parameter may have a default, as iced's `Container<'a, W,
+    // Theme = crate::Theme>` has; a function's or an impl's may not.
+    let check_with = |generics: &[item::Generic], defaults: bool| -> Result<(), Error> {
         for generic in generics {
             // Defaults are for a trait's own parameters here.
-            if let Some(default) = &generic.default {
+            if let Some(default) = &generic.default
+                && !defaults
+            {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "a default type parameter outside a trait declaration".into(),
                     source: type_span(default),
@@ -4820,10 +4826,11 @@ fn check_trait_bounds(
         }
         Ok(())
     };
+    let check = |generics: &[item::Generic]| check_with(generics, false);
     for shell in items {
         let checked = match &shell.kind {
-            item::Kind::Struct(item) => check(&item.generics),
-            item::Kind::Enum(item) => check(&item.generics),
+            item::Kind::Struct(item) => check_with(&item.generics, true),
+            item::Kind::Enum(item) => check_with(&item.generics, true),
             item::Kind::Impl(item) => check(&item.generics).and_then(|()| {
                 item.functions
                     .iter()
@@ -4903,6 +4910,7 @@ fn is_self(ty: &type_ref::Type) -> bool {
 fn resolve_projections(
     items: &mut [item::Shell],
     std_traits: &BTreeMap<ImmutableString, item::Trait>,
+    host: &host::Registry,
 ) -> Result<(), LocatedError> {
     let associated = |declared: &item::Trait| -> Box<[ImmutableString]> {
         declared
@@ -4997,10 +5005,14 @@ fn resolve_projections(
                         source: path.span,
                     });
                 };
+                // A crate trait declares the associated types its header
+                // names, as iced's `container::Catalog` declares `Class`.
                 let declares = |trait_name: &ImmutableString| {
                     declared
                         .get(trait_name)
                         .is_some_and(|names| names.contains(&path.name))
+                        || crate_trait_associated(host, trait_name)
+                            .is_some_and(|associated| associated.contains(&path.name))
                 };
                 let candidates: Vec<ImmutableString> = match &base_path.target {
                     // A trait's own associated types, then its supertraits'.
@@ -5013,8 +5025,13 @@ fn resolve_projections(
                     type_ref::Target::Parameter => generics
                         .iter()
                         .filter(|generic| generic.name.text == base_path.name)
-                        .flat_map(|generic| generic.traits.iter())
-                        .map(|name| name.text.clone())
+                        .flat_map(|generic| {
+                            generic
+                                .traits
+                                .iter()
+                                .map(|name| name.text.clone())
+                                .chain(generic.native_traits.iter().cloned())
+                        })
                         .filter(declares)
                         .collect(),
                     type_ref::Target::Script { definition, .. } => implemented
@@ -5654,6 +5671,46 @@ fn bounded_scope(
     ))
 }
 
+/// The path of each crate trait of `bounds`, written from the crate's
+/// root (`item::Generic::native_traits`).
+fn native_traits(
+    bounds: &[crate::item::type_ref::Path],
+    host: &host::Registry,
+) -> Box<[ImmutableString]> {
+    bounds
+        .iter()
+        .filter(|bound| bound.segments.len() > 1)
+        .map(|bound| {
+            bound
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+        .filter(|path| crate_trait_associated(host, path).is_some())
+        .map(ImmutableString::from)
+        .collect()
+}
+
+/// The names of the associated types of the crate trait at `path`, when a
+/// facade has its header.
+pub(crate) fn crate_trait_associated(
+    host: &host::Registry,
+    path: &str,
+) -> Option<Box<[ImmutableString]>> {
+    #[cfg(feature = "rust-import")]
+    {
+        let parsed = host::path::Path::parse(path).ok()?;
+        Some(host.trait_header(&parsed)?.associated.clone())
+    }
+    #[cfg(not(feature = "rust-import"))]
+    {
+        let _ = (host, path);
+        None
+    }
+}
+
 fn generic_scope(
     generics: Box<[crate::item::GenericParam]>,
     types: &BTreeMap<ImmutableString, type_ref::Target>,
@@ -5684,7 +5741,36 @@ fn generic_scope(
                 previous_declaration,
             });
         }
-        let (bounds, traits, trait_arguments) = resolve_bounds_with_arguments(&parameter.bounds)?;
+        let (bounds, mut traits, mut trait_arguments) =
+            resolve_bounds_with_arguments(&parameter.bounds)?;
+        // A crate trait's bound, as a type's `Theme: Catalog` is, is
+        // rustc's to prove (D629): the parameter keeps its path alone.
+        let native_traits = native_traits(&parameter.bounds, host);
+        let native_spans = parameter
+            .bounds
+            .iter()
+            .filter(|bound| {
+                let path = bound
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                native_traits.iter().any(|native| native.as_str() == path)
+            })
+            .filter_map(|bound| bound.segments.last().map(|last| last.name.span))
+            .collect::<Vec<_>>();
+        let crate_named = traits
+            .iter()
+            .filter(|name| native_spans.contains(&name.span))
+            .map(|name| name.text.clone())
+            .collect::<Vec<_>>();
+        traits = traits
+            .into_vec()
+            .into_iter()
+            .filter(|name| !native_spans.contains(&name.span))
+            .collect();
+        trait_arguments.retain(|(trait_name, _)| !crate_named.contains(&trait_name.text));
         let written = parameter
             .bounds
             .iter()
@@ -5722,6 +5808,7 @@ fn generic_scope(
             })
             .transpose()?;
         resolved.push(item::Generic {
+            native_traits,
             constant,
             name: parameter.name,
             bounds,

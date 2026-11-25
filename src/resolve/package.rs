@@ -5205,9 +5205,14 @@ fn qualify_opaque_bounds(
             .collect();
     }
     // `impl<R> Widget<M, T, R> for Quad where R: renderer::Renderer`: the
-    // impl's own bounds name a dependency's trait the same way (D629).
-    if let crate::item::Parsed::Impl(item) = item {
-        qualify_bounds(&mut item.generics, modules);
+    // impl's own bounds name a dependency's trait the same way (D629), and
+    // so do a type's, as iced's `Container<'a, W, Theme> where Theme:
+    // Catalog`.
+    match item {
+        crate::item::Parsed::Impl(item) => qualify_bounds(&mut item.generics, modules),
+        crate::item::Parsed::Struct(item) => qualify_bounds(&mut item.generics, modules),
+        crate::item::Parsed::Enum(item) => qualify_bounds(&mut item.generics, modules),
+        _ => {}
     }
     let functions: Vec<&mut crate::item::Function> = match item {
         crate::item::Parsed::Function(function) => vec![function],

@@ -3294,6 +3294,11 @@ fn build(
             defaults,
             call,
             objects.get(&header.identity).cloned(),
+            header
+                .associated
+                .iter()
+                .map(|name| ImmutableString::from(&**name))
+                .collect(),
         )?;
     }
     for header in impl_headers {
@@ -3382,6 +3387,11 @@ fn build(
             self_type,
             bounds,
             projections,
+            associated: header
+                .associated
+                .iter()
+                .filter_map(|(name, value)| Some((ImmutableString::from(&**name), convert(value)?)))
+                .collect(),
         })?;
     }
     // A re-exported variant names its enum's variant, through a path the

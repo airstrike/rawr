@@ -102,6 +102,62 @@ impl<'a> Parser<'a> {
         .ok()
     }
 
+    /// The associated types the crate's impls of each trait of
+    /// `Models::native_projected` give a crate type, which a projection on
+    /// a parameter is once the parameter is that type (`Inference::native`).
+    /// An impl with parameters of its own gives none here.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn read_native_associated(&mut self) {
+        let traits = Shared::clone(&self.models.native_projected);
+        let host = self.models.host.clone();
+        for trait_name in traits.iter() {
+            let Some(header) = crate::host::path::Path::parse(trait_name.as_str())
+                .ok()
+                .and_then(|path| host.trait_header(&path))
+            else {
+                continue;
+            };
+            for (implementation, declaring) in host.owned_impl_headers(header.identity) {
+                if !implementation.parameters.is_empty() {
+                    continue;
+                }
+                let mut parameters = BTreeMap::new();
+                let mut at = |this: &mut Self, ty| {
+                    this.instantiate_host_type(
+                        ty,
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        declaring,
+                        None,
+                    )
+                    .ok()
+                };
+                let Some(this) = at(self, &implementation.self_type) else {
+                    continue;
+                };
+                for (name, value) in implementation.associated.iter() {
+                    let Some(value) = at(self, value) else {
+                        continue;
+                    };
+                    // A boxed closure, as iced's `StyleFn<'a, Theme>`, is the
+                    // `Box<dyn Fn(A) -> B>` the program's code writes.
+                    let value = match value {
+                        Ty::Callable { inputs, output, .. } => {
+                            Ty::Boxed(Box::new(Ty::Fn { inputs, output }))
+                        }
+                        value => value,
+                    };
+                    self.inference
+                        .native
+                        .entry((trait_name.clone(), name.clone()))
+                        .or_default()
+                        .push((this.clone(), value));
+                }
+            }
+        }
+    }
+
     /// Fixes the open type parameters of `ty` by the one impl of the trait
     /// `identity` at `arguments` that fits it, then by that impl's
     /// where-clause bounds (D604). An impl for any type (`impl<T> Trait for

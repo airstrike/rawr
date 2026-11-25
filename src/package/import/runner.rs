@@ -961,6 +961,7 @@ fn build(
                 defaults,
                 header.call().and_then(|call| self::ty(call).ok()),
                 host::facade::stand_in(header.outputs()),
+                header.associated().map(ImmutableString::from).collect(),
             )
             .map_err(|source| entry_error(facade.root(), header.path(), source.into()))?;
     }
@@ -1175,6 +1176,13 @@ pub(crate) fn impl_header(header: &facade::ImplHeader) -> Option<host::facade::I
         self_type,
         bounds,
         projections,
+        associated: header
+            .associated()
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((ImmutableString::from(&**name), self::ty(value).ok()?))
+            })
+            .collect(),
     })
 }
 
