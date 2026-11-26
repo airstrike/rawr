@@ -1047,6 +1047,65 @@ impl Parser<'_> {
         signature::summary(&signature, &|target| self.declared_lifetimes(target))
     }
 
+    /// A crate call whose output keeps its `&mut` receiver and a `&mut`
+    /// input with it, beside an input it borrows for the call alone, as
+    /// iced's `overlay(tree, layout, renderer, ..)` is, refused where no
+    /// stand-in's lending region can hold it (#2698): Rawr runs such a
+    /// call only in the body of a crate trait impl's method that the call
+    /// is the same trait's method of, where native code lends the stand-in
+    /// what the output keeps.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn refuse_unlent_call(
+        &self,
+        item: &crate::host::item::Definition,
+        span: Span,
+    ) -> Result<(), Error> {
+        if !lends_only(item) || self.collecting_instances || self.in_lending_method(item) {
+            return Ok(());
+        }
+        Err(Error::InvalidHostOperation {
+            item: item.path().into(),
+            reason: "its output keeps its `&mut` receiver and a `&mut` input borrowed, which \
+                     Rawr lends only where native code calls a program's method of this shape, \
+                     as iced asks a widget for its `overlay`: calling it anywhere else isn't \
+                     supported yet"
+                .into(),
+            operation: span,
+        })
+    }
+
+    /// Whether this body is the method of a crate trait's impl that the
+    /// call `item` is the same trait's method of, as `self.content.overlay(
+    /// ..)` in a program's `Widget::overlay` is: native code calls it in a
+    /// lending region, which lends the call what it keeps.
+    #[cfg(feature = "rust-import")]
+    fn in_lending_method(&self, item: &crate::host::item::Definition) -> bool {
+        let (Some(trait_name), Some(callable)) = (&self.impl_trait, &self.callable) else {
+            return false;
+        };
+        let last = |path: &str| -> String {
+            let path = path.split('<').next().unwrap_or_default();
+            path.rsplit("::")
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        };
+        let method = callable
+            .name()
+            .rsplit("::")
+            .next()
+            .and_then(|name| name.split('#').next())
+            .unwrap_or_default();
+        let Some(owner) = item
+            .trait_of()
+            .and_then(|identity| self.models.host.trait_name(identity))
+        else {
+            return false;
+        };
+        last(&item.path()) == method && last(&owner) == last(trait_name)
+    }
+
     /// What a call of the facade or imported item `item` keeps of its
     /// inputs: the importer's lifetimes (D572.4). It admits a call whose
     /// value borrows only as a borrow guard, a lent `&str`, or a scope frame
@@ -2690,4 +2749,27 @@ fn builtin_summary(receiver: &Ty, member: &str) -> Option<Summary> {
 /// one, or the receiver `self`, which is a local when it is owned.
 fn is_place(value: &ParsedExpr) -> bool {
     value.lvalue.is_some() || value.source.as_str() == "self"
+}
+
+/// Whether a call of `item` runs only in a stand-in's lending region: its
+/// output keeps its `&mut` receiver and a `&mut` input it lends, and it
+/// borrows another input for the call alone, as iced's `overlay(&'b mut
+/// self, tree: &'b mut Tree, .., renderer: &Renderer, ..)` does, which a
+/// frame that runs the rest of the scope can't hold (#2698).
+#[cfg(feature = "rust-import")]
+fn lends_only(item: &crate::host::item::Definition) -> bool {
+    use crate::host::type_ref::Shape;
+    if item.frame() != Some(crate::host::item::Frame::Receiver)
+        || item.receiver() != Some(receiver::Mode::Mutable)
+    {
+        return false;
+    }
+    let parameters = item.signature().parameters();
+    let reference = |index: usize, exclusive: bool| {
+        parameters.get(index).is_some_and(
+            |ty| matches!(ty.shape(), Shape::Reference { mutable, .. } if *mutable || !exclusive),
+        )
+    };
+    (0..parameters.len()).any(|index| item.lends(index) && reference(index, true))
+        && (0..parameters.len()).any(|index| !item.lends(index) && reference(index, false))
 }

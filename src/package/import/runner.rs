@@ -1383,7 +1383,13 @@ pub(crate) fn item_definition(
         .instancing(item.member().map(|member| *member.as_bytes()))
         .implementing(item.trait_of().map(|trait_of| *trait_of.as_bytes()))
         .guarded(guard)
-        .opening(form.scope()))
+        .opening(form.scope())
+        .lending(
+            form.lends()
+                .iter()
+                .filter(|index| **index < 32)
+                .fold(0, |bits, index| bits | 1 << index),
+        ))
 }
 
 pub(crate) fn signature(

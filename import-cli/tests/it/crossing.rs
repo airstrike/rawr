@@ -4846,6 +4846,35 @@ fn a_crate_call_with_an_open_trait_argument_fails_at_check() {
     );
 }
 
+/// A program's own call of a native method whose output keeps its `&mut`
+/// receiver and a `&mut` input, beside an input borrowed for the call
+/// alone, as iced's `overlay(tree, layout, renderer, ..)`, is refused at
+/// check where no stand-in's lending region can hold what it keeps.
+#[test]
+fn a_native_call_that_keeps_its_receiver_outside_a_lending_method_fails_at_check() {
+    let root = lane(Some("tinted_unlent.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env_remove("RAWR_CRATE_SOURCE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("events::visits::Lift::lifted_at")
+            && stderr.contains("its output keeps its `&mut` receiver and a `&mut` input borrowed")
+            && stderr.contains("--> src/main.rs:15:"),
+        "{stderr}"
+    );
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();

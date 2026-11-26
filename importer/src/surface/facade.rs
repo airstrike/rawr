@@ -20,7 +20,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 85;
+const SCHEMA: u32 = 86;
 
 /// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
 /// outcome is of.
@@ -933,6 +933,11 @@ pub struct Signature {
     /// (`representability::signature::Scope`, D558 tier 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scope: Option<representability::signature::Scope>,
+    /// The inputs, by position, whose borrows the output keeps with the
+    /// receiver (`representability::signature::Signature::lends`), as
+    /// iced's `overlay` keeps its `&'b mut Tree` (#2698).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    lends: Box<[u32]>,
     /// Its callable parameters take a script function as a slot (D594).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     crossing: bool,
@@ -2399,6 +2404,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
                 relations: Box::default(),
                 guard: None,
                 scope: None,
+                lends: Box::default(),
                 crossing: false,
                 instance: None,
                 opaques: Box::default(),
@@ -3794,6 +3800,13 @@ impl Signature {
         self.guard
     }
 
+    /// The inputs, by position, whose borrows the output keeps with the
+    /// receiver.
+    #[must_use]
+    pub fn lends(&self) -> &[u32] {
+        &self.lends
+    }
+
     /// Whether a script function fills each callable parameter as a slot
     /// (D594).
     #[must_use]
@@ -4058,6 +4071,7 @@ fn written_item(
                 relations: Box::default(),
                 guard: None,
                 scope: None,
+                lends: Box::default(),
                 crossing: false,
                 instance: None,
                 opaques: Box::default(),
@@ -4244,6 +4258,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         relations: relations(source)?,
         guard: source.guard(),
         scope: source.scope(),
+        lends: source.lends().into(),
         crossing: false,
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),
@@ -4465,6 +4480,7 @@ fn callable_signature(
         relations: relations(source)?,
         guard: source.guard(),
         scope: source.scope(),
+        lends: source.lends().into(),
         crossing: false,
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),

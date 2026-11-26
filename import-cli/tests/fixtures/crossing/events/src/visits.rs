@@ -96,6 +96,21 @@ impl<M> crate::tinted::Diffed<M> for Lift {
     }
 }
 
+impl Lift {
+    /// `node` lifted out at `depth`, borrowed for as long as the label and
+    /// the node, beside a depth it reads for the call alone, as iced's
+    /// `overlay(&'b mut self, tree: &'b mut Tree, .., renderer: &Renderer,
+    /// ..)` is.
+    pub fn lifted_at<'b>(
+        &'b mut self,
+        node: &'b mut crate::walks::Node,
+        depth: &usize,
+    ) -> Vec<crate::walks::Lifted<'b>> {
+        node.mark(&format!("{}^{depth}", self.0));
+        vec![crate::walks::Lifted { node }]
+    }
+}
+
 /// The labels `item`'s `operate` notes, as iced's `UserInterface::operate`
 /// lends the root widget it owns a `&mut dyn Operation`. The crate
 /// compiles it.

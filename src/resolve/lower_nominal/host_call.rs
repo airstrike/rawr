@@ -489,6 +489,8 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|argument| argument.ty.clone())
             .collect::<Vec<_>>();
+        #[cfg(feature = "rust-import")]
+        self.refuse_unlent_call(&item, call)?;
         let summary = self.host_summary(&item, None, &self.inference.resolve(&ty), &types);
         let opens = item.opens();
         let frame = item.frame();
@@ -1944,6 +1946,8 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|argument| argument.ty.clone())
             .collect::<Vec<_>>();
+        #[cfg(feature = "rust-import")]
+        self.refuse_unlent_call(&item, call)?;
         let summary = self.host_summary(
             &item,
             Some(&receiver.ty),
