@@ -95,7 +95,7 @@ impl Defined {
 
 /// The selector's digest when it names a crate's definition of its own.
 #[cfg(feature = "rust-import")]
-fn crate_item(selector: &host::item::ImportedSelector) -> Option<[u8; 32]> {
+pub(crate) fn crate_item(selector: &host::item::ImportedSelector) -> Option<[u8; 32]> {
     use rawr_import::surface::identity::Selector;
     match selector {
         Selector::Function { .. }

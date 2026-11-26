@@ -7,9 +7,12 @@
 //! where-clause bounds hold, is then an instance the runner can compile
 //! whatever the program writes next, so each member of it is bound: the
 //! impl's own methods, and every member of the trait over `Self` at the
-//! impl's self type, under the shortest path the trait has in each crate,
-//! as an opened module's `crate::` spells it, which a generic body's
-//! call through its bound selects. A later save whose source runs a generic body over such a value,
+//! impl's self type, which a generic body's call through its bound
+//! selects. Each member is bound once, by the item it defines and its
+//! types, whichever of the trait's paths spells it (D1118): a trait iced
+//! re-exports under a dozen chains is one set of adapters, and a use
+//! spelled through any of them is that adapter's. A later save whose
+//! source runs a generic body over such a value,
 //! as iced's `Container<Text>::draw` calls `self.content.draw(..)`, then
 //! finds the member in the runner. This binds native items only and makes
 //! no instance of the program's.
@@ -17,6 +20,7 @@
 use super::surface::{fixed_parameter, fixed_surface_type, imported_surface_type, ImportedUse};
 use super::ty::{contains_inference, reaches_param, Ty};
 use super::Parser;
+use crate::host::defined::crate_item;
 use crate::host::facade::{Dependency, ImplHeader};
 use crate::ImmutableString;
 use crate::Span;
@@ -91,11 +95,12 @@ impl Parser<'_> {
                     self.bind_member(member, types, span);
                 }
             }
-            // The trait's members over `Self`, under its path in each crate
-            // (`shortest_by_root`): a generic body's call through its bound selects these,
-            // whether the impl overrides the member or leaves it.
+            // The trait's members over `Self`: a generic body's call through
+            // its bound selects these, whether the impl overrides the member
+            // or leaves it. Each is bound once, under the first of the
+            // trait's paths that has it (`bind_member` keys it by its item).
             let trait_parameters = header_arguments(&header_names(&host, &parsed), &given);
-            for written in shortest_by_root(host.trait_paths(&identity)) {
+            for written in host.trait_paths(&identity) {
                 for member in host.members(&format!("{written}::__rawr_self")) {
                     let types = member_parameters(member, &[], &trait_parameters, Some(&self_type));
                     self.bind_member(member, types, span);
@@ -209,7 +214,8 @@ impl Parser<'_> {
     }
 
     /// The use of `member` at `types`, its declared parameters' types, among
-    /// the body's uses once.
+    /// the body's uses once: a use of the item it defines at the same types
+    /// is that use, whichever path spells either.
     fn bind_member(
         &mut self,
         member: &crate::host::item::Definition,
@@ -251,11 +257,11 @@ impl Parser<'_> {
         }
         let path: ImmutableString = member.path().into();
         let surface = surface.into_boxed_slice();
-        if context
-            .uses
-            .iter()
-            .any(|used| used.path == path && used.selector == selector && used.types == surface)
-        {
+        if context.uses.iter().any(|used| {
+            used.selector == selector
+                && used.types == surface
+                && (used.path == path || crate_item(&selector).is_some())
+        }) {
             return;
         }
         context.uses.push(ImportedUse {
@@ -334,49 +340,7 @@ fn member_parameters(
         .collect()
 }
 
-/// Of `paths`, one trait's, the shortest under each crate root: the path
-/// an opened module's `crate::` reaches it by (iced_widget's
-/// `crate::core::Widget`), not each chain of re-exports beyond it
-/// (`graphics::core`, `renderer::wgpu::core`).
-fn shortest_by_root(paths: Vec<crate::host::path::Path>) -> Vec<String> {
-    let mut kept = BTreeMap::<String, String>::new();
-    for path in paths {
-        let written = path.to_string();
-        let root = written.split("::").next().unwrap_or_default().to_owned();
-        let depth = written.matches("::").count();
-        let shorter = kept
-            .get(&root)
-            .is_none_or(|known| depth < known.matches("::").count());
-        if shorter {
-            kept.insert(root, written);
-        }
-    }
-    kept.into_values().collect()
-}
-
 /// Whether `ty` holds nothing left to infer and no parameter.
 fn settled(ty: &Ty) -> bool {
     !contains_inference(ty) && !reaches_param(ty)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::shortest_by_root;
-    use crate::host::path::Path;
-
-    #[test]
-    fn a_traits_path_in_each_crate_is_its_shortest() {
-        let paths = [
-            "core_a::Widget",
-            "core_a::widget::Widget",
-            "outer::core::Widget",
-            "outer::graphics::core::Widget",
-            "outer::renderer::wgpu::core::Widget",
-        ]
-        .map(|path| Path::parse(path).expect("a path parses"));
-        assert_eq!(
-            shortest_by_root(paths.to_vec()),
-            ["core_a::Widget", "outer::core::Widget"]
-        );
-    }
 }
