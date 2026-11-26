@@ -331,6 +331,16 @@ struct Owner {
     ty: String,
     /// `<Ty as Trait>`, for a trait impl.
     qualified: Option<String>,
+    /// The associated types the impl gives: each name, its lifetime
+    /// parameters and its value, as `type Class<'a> = StyleFn<'a, Self>;`.
+    associated: Vec<Associated>,
+}
+
+/// An associated type a concrete impl gives (`Owner::associated`).
+struct Associated {
+    name: String,
+    parameters: Vec<String>,
+    value: String,
 }
 
 /// The binding functions written so far.
@@ -343,14 +353,60 @@ struct Bound<'t> {
 impl Bound<'_> {
     /// `text` of `range`, with `Self` written as the owner.
     fn spelled(&self, range: Range<usize>, owner: Option<&Owner>) -> String {
-        let written = &self.text[range];
+        let written = self.normalized(range, owner);
         let Some(owner) = owner else {
-            return written.to_owned();
+            return written;
         };
         let associated = owner.qualified.as_deref().unwrap_or(&owner.ty);
         written
             .replace("Self::", &format!("{associated}::"))
             .replace("Self", &owner.ty)
+    }
+
+    /// `text` of `range` with each `Self::Name<..>` the impl gives a value
+    /// of written as that value at its arguments, as rustc normalizes a
+    /// projection on a concrete impl: `&Self::Class<'_>` of an impl whose
+    /// `type Class<'a> = StyleFn<'a, Self>` is `&StyleFn<'_, Self>`. A
+    /// `Self::` the impl gives no value of is left as it is.
+    fn normalized(&self, range: Range<usize>, owner: Option<&Owner>) -> String {
+        let mut written = self.text[range].to_owned();
+        let Some(owner) = owner else {
+            return written;
+        };
+        for associated in &owner.associated {
+            let projection = format!("Self::{}", associated.name);
+            let mut at = 0;
+            while let Some(found) = written[at..].find(&projection) {
+                let start = at + found;
+                let mut end = start + projection.len();
+                if written[end..]
+                    .chars()
+                    .next()
+                    .is_some_and(|next| next.is_alphanumeric() || next == '_')
+                {
+                    at = end;
+                    continue;
+                }
+                let mut arguments = Vec::new();
+                if written[end..].starts_with('<') {
+                    let Some(close) = matching_angle(&written[end..]) else {
+                        break;
+                    };
+                    arguments = written[end + 1..end + close]
+                        .split(',')
+                        .map(|argument| argument.trim().to_owned())
+                        .collect();
+                    end += close + 1;
+                }
+                let mut value = associated.value.clone();
+                for (parameter, argument) in associated.parameters.iter().zip(&arguments) {
+                    value = value.replace(parameter.as_str(), argument);
+                }
+                written.replace_range(start..end, &value);
+                at = start + value.len();
+            }
+        }
+        written
     }
 
     /// A call of each derived method of `derived`.
@@ -453,9 +509,9 @@ impl Bound<'_> {
         // catalog's `default<'a>() -> Self::Class<'a>`, is spelled through
         // a projection rawr can't name in a signature yet: the call is
         // made and its value dropped, which binds the item all the same.
-        let raw = &self.text[output_start..output_end];
-        let output = if raw.contains("Self::") { "" } else { output };
+        let raw = self.normalized(output_start..output_end, owner);
         let discarded = raw.contains("Self::");
+        let output = if discarded { "" } else { output };
         let mut parameters = Vec::new();
         let mut arguments = Vec::new();
         for parameter in split(header, open + 1, close) {
@@ -482,7 +538,7 @@ impl Bound<'_> {
                 let colon = top_colon(&self.text[parameter.clone()])?;
                 // A parameter of one of `Self`'s associated types has no
                 // spelling a binding's signature can hold yet.
-                if self.text[parameter.clone()].contains("Self::") {
+                if self.normalized(parameter.clone(), owner).contains("Self::") {
                     return None;
                 }
                 let ty = self.spelled(parameter.start + colon + 1..parameter.end, owner);
@@ -605,9 +661,10 @@ impl Bound<'_> {
             if method.keyword != "fn" {
                 continue;
             }
-            let projected = split_parameters(body, &method)
-                .iter()
-                .any(|parameter| self.text[parameter.clone()].contains("Self::"));
+            let projected = split_parameters(body, &method).iter().any(|parameter| {
+                self.normalized(parameter.clone(), Some(&owner))
+                    .contains("Self::")
+            });
             if projected {
                 return Some(Err(PROJECTED));
             }
@@ -669,17 +726,72 @@ impl Bound<'_> {
             .split_once(" where ")
             .map_or(written, |(before, _)| before)
             .trim();
+        let associated = self.associated(&tokens[item.header.end + 1..item.end]);
         Some(match written.split_once(" for ") {
             Some((trait_name, ty)) => Owner {
                 ty: ty.trim().to_owned(),
                 qualified: Some(format!("<{} as {}>", ty.trim(), trait_name.trim())),
+                associated,
             },
             None => Owner {
                 ty: written.to_owned(),
                 qualified: None,
+                associated,
             },
         })
     }
+
+    /// The associated types an impl's `body` gives, each with only
+    /// lifetime parameters: a type parameter's is left unnormalized.
+    fn associated(&self, body: &[(Token<'_>, usize)]) -> Vec<Associated> {
+        polyglot::module_items(self.text, body)
+            .into_iter()
+            .filter(|item| item.keyword == "type" && !item.generic)
+            .filter_map(|item| {
+                let name = item.name?.to_owned();
+                let start = body.get(item.header.start).map(|(_, at)| *at)?;
+                let end = body.get(item.end).map(|(_, at)| *at)?;
+                let written = self.text[start..end].trim();
+                let (head, value) = written.split_once('=')?;
+                let parameters = head
+                    .trim()
+                    .strip_prefix('<')
+                    .and_then(|head| head.strip_suffix('>'))
+                    .map(|list| {
+                        list.split(',')
+                            .map(|parameter| parameter.trim().to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(Associated {
+                    name,
+                    parameters,
+                    value: value.trim().trim_end_matches(';').trim().to_owned(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Where the `>` that closes the `<` `written` starts with is, past any
+/// `->`.
+fn matching_angle(written: &str) -> Option<usize> {
+    let bytes = written.as_bytes();
+    let mut depth = 0_usize;
+    for (at, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'<' => depth += 1,
+            b'>' if at > 0 && bytes[at - 1] == b'-' => {}
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The byte ranges of the parameters of the function `item`, whose tokens
@@ -800,7 +912,8 @@ mod tests {
                       impl fmt::Display for Border { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { Ok(()) } }\n\
                       impl From<Hidden> for Border { fn from(_: Hidden) -> Self { Border { width: 0.0 } } }\n\
                       impl Catalog for Border { type Class = u8; fn style(&self, class: &Self::Class) -> u8 { *class } }\n\
-                      impl Palette for Border { type Class<'a> = u8; fn default<'a>() -> Self::Class<'a> { 0 } }\n\
+                      impl Palette for Border { type Class<'a> = &'a u8; fn default<'a>() -> Self::Class<'a> { &0 } }\n\
+                      impl Shade for Border { fn shade(&self, class: &Self::Tone) -> u8 { 0 } }\n\
                       impl<T> From<Vec<T>> for Border { fn from(_: Vec<T>) -> Self { Border { width: 0.0 } } }\n\
                       #[derive(Default)]\n\
                       pub struct Wrap<T>(T);\n\
@@ -814,6 +927,7 @@ mod tests {
             "fmt" => Some("std::fmt".to_owned()),
             "Catalog" => Some("crate::Catalog".to_owned()),
             "Palette" => Some("crate::Palette".to_owned()),
+            "Shade" => Some("crate::Shade".to_owned()),
             _ => None,
         };
         let imported = super::derived(border, "Border", &spell).unwrap();
@@ -829,7 +943,7 @@ mod tests {
             imported.excluded(),
             [
                 ("From<Hidden> for Border".to_owned(), super::UNNAMED),
-                ("Catalog for Border".to_owned(), super::PROJECTED),
+                ("Shade for Border".to_owned(), super::PROJECTED),
             ]
         );
         let bound = super::functions(text, &[imported]);
@@ -847,7 +961,8 @@ mod tests {
             "(__a0: f32) -> Edge {\n    <Edge as From<f32>>::from(__a0)\n}",
             "(__a0: [u16; 2]) -> Edge {\n    <Edge as From<[u16; 2]>>::from(__a0)\n}",
             "(__a0: crate::core::Pixels) -> Edge {\n    <Edge as From<crate::core::Pixels>>::from(__a0)\n}",
-            "<'a>() {\n    let _ = <Edge as crate::Palette>::default();\n}",
+            "<'a>() -> &'a u8 {\n    <Edge as crate::Palette>::default()\n}",
+            "(__a0: &Edge, __a1: &u8) -> u8 {\n    <Edge as crate::Catalog>::style(__a0, __a1)\n}",
             "(__a0: &Edge, __a1: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n    <Edge as std::fmt::Display>::fmt(__a0, __a1)\n}",
         ] {
             assert!(bound.contains(expected), "{expected}\nin\n{bound}");
