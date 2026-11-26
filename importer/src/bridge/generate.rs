@@ -16402,7 +16402,12 @@ fn render_lending_call(
     )?;
     argument_list(signature.inputs().len(), 1, &mut call)?;
     call.write_all(b")").map_err(encoding)?;
-    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    // The call lends the arena to a program value's methods it calls back,
+    // as a column's `overlay` asks each child stand-in for its own.
+    let call = format!(
+        "lend(arguments.arena, || {})",
+        String::from_utf8(call).map_err(request::unwritable)?
+    );
     let returned = substituted(signature.output(), signature, substitutions)?;
     let converted = {
         let _region = InRegion::enter();
@@ -16421,6 +16426,10 @@ fn render_lending_call(
         .collect::<Vec<_>>()
         .join(" && ");
     let mut taken = Vec::new();
+    // Each crate value the call borrows shared for the call alone, as
+    // iced's `renderer: &Renderer`, is reached where it is: native code
+    // lent it the stand-in, or the arena holds it (`reach_lender`).
+    let mut shared = Vec::new();
     for (position, ty) in signature.inputs().iter().enumerate() {
         if kept.iter().any(|input| input.position == position) {
             writeln!(
@@ -16429,6 +16438,23 @@ fn render_lending_call(
                 position + 1
             )
             .map_err(encoding)?;
+        } else if let convert::Type::Borrowed {
+            mutable: false,
+            ty: target,
+        } = substituted(ty, signature, substitutions)?
+            && let Some(rust) = viewed_native(&convert::Type::Borrowed {
+                mutable: false,
+                ty: target,
+            })
+            .and_then(concrete_type)
+        {
+            writeln!(
+                taken,
+                "        let argument_{position}_lender = Lender::of(arguments.values.get({}).ok_or(Error::MissingArgument)?)?;",
+                position + 1
+            )
+            .map_err(encoding)?;
+            shared.push((position, rust));
         } else {
             render_take_input(
                 position,
@@ -16458,6 +16484,37 @@ fn render_lending_call(
             let argument_{position}: &mut {rust} = region.lent_mut::<{rust}>(argument_{position}_lent).map_err(|error| Error::Lent(argument_{position}_lent.name(), error))?;"
         ));
     }
+    // The body, as a function of the shared inputs when there are any,
+    // which the reaches around it give it.
+    let (open, close) = if shared.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let parameters = shared
+            .iter()
+            .map(|(position, rust)| format!("argument_{position}: &{rust}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let passed = shared
+            .iter()
+            .map(|(position, _)| format!("argument_{position}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut reach = format!(
+            "(body.take().ok_or(Error::Unhandled).map_err(runtime_error)?)({passed}).map_err(runtime_error)"
+        );
+        for (position, rust) in shared.iter().rev() {
+            reach = format!(
+                "reach_lender::<{rust}>(&argument_{position}_lender, &mut |argument_{position}| {{ {reach} }})"
+            );
+        }
+        (
+            format!("let mut body = Some(|{parameters}| -> Result<Dynamic, Error> {{"),
+            format!(
+                "}});
+            {reach}.map_err(unreached)"
+            ),
+        )
+    };
     writeln!(
         output,
         "    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| {lends}) {{
@@ -16467,7 +16524,7 @@ fn render_lending_call(
             (None, None) => Some(native_handle(arguments, 0, false)?),
             _ => None,
         }};
-{taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{reached}
+{taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{open}{reached}
             let made = match (receiver_lent, receiver_handle) {{
                 (Some(lent), _) => {{
                     #[allow(unused_mut)]
@@ -16485,7 +16542,7 @@ fn render_lending_call(
                 }},
             }};
             {converted}
-        }})
+        {close}}})
         .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
     }}"
     )
