@@ -471,6 +471,12 @@ impl<'a> Parser<'a> {
             let target = self.inference.resolve(target);
             receivers.push(target);
         }
+        // A string a text member takes `&mut` as a `String` (`surface::
+        // text`) is the `&str` a bound names too: Rawr's string is one type
+        // for both.
+        if receivers.last() == Some(&Ty::String) {
+            receivers.push(Ty::Str);
+        }
         for receiver in receivers.into_iter().rev() {
             if self.fix_impl_member_at(identity, ordered, &receiver) {
                 return;

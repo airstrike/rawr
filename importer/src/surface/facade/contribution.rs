@@ -358,6 +358,9 @@ fn ops(outcome: crate::classify::Outcome<'_>) -> Result<Vec<Op>, crate::surface:
                 continue;
             }
             let body = item.made_mut();
+            // One that borrows it mutably may make it another string: it
+            // takes the program's string `&mut`, copied in and back out.
+            let mutable = matches!(body.kind, ItemKind::MutableMethod);
             body.kind = ItemKind::Function;
             let mut inputs = Vec::new();
             inputs
@@ -366,7 +369,7 @@ fn ops(outcome: crate::classify::Outcome<'_>) -> Result<Vec<Op>, crate::surface:
             // The impl's `&str`, as rustc's `<&str as Trait>::
             // method(text)` takes it, apart from a `String` (#706).
             inputs.push(Type::Reference {
-                mutable: false,
+                mutable,
                 target: Box::new(Type::String),
             });
             inputs.extend(std::mem::take(&mut body.signature.inputs).into_vec());

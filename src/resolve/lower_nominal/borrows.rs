@@ -1056,11 +1056,19 @@ impl Parser<'_> {
     /// what the output keeps.
     #[cfg(feature = "rust-import")]
     pub(super) fn refuse_unlent_call(
-        &self,
+        &mut self,
         item: &crate::host::item::Definition,
         span: Span,
     ) -> Result<(), Error> {
-        if !lends_only(item) || self.collecting_instances || self.in_lending_method(item) {
+        if !lends_only(item) || self.collecting_instances {
+            return Ok(());
+        }
+        if self.in_lending_method(item) {
+            // Only native code may call this body: a program's own call of
+            // it is refused once every body is read (`refuse_lending_calls`).
+            self.instance_uses
+                .lending
+                .get_or_insert_with(|| item.path().into());
             return Ok(());
         }
         Err(Error::InvalidHostOperation {
@@ -1080,16 +1088,22 @@ impl Parser<'_> {
     /// lending region, which lends the call what it keeps.
     #[cfg(feature = "rust-import")]
     fn in_lending_method(&self, item: &crate::host::item::Definition) -> bool {
-        let (Some(trait_name), Some(callable)) = (&self.impl_trait, &self.callable) else {
+        let Some(owner) = item
+            .trait_of()
+            .and_then(|identity| self.models.host.trait_name(identity))
+        else {
             return false;
         };
-        let last = |path: &str| -> String {
-            let path = path.split('<').next().unwrap_or_default();
-            path.rsplit("::")
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_owned()
+        self.in_method_of(&owner, &item.path())
+    }
+
+    /// Whether this body is a method of an impl of the trait `trait_path`
+    /// whose name is the last segment of `member`'s path, each trait named
+    /// by its last segment.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn in_method_of(&self, trait_path: &str, member: &str) -> bool {
+        let (Some(trait_name), Some(callable)) = (&self.impl_trait, &self.callable) else {
+            return false;
         };
         let method = callable
             .name()
@@ -1097,13 +1111,7 @@ impl Parser<'_> {
             .next()
             .and_then(|name| name.split('#').next())
             .unwrap_or_default();
-        let Some(owner) = item
-            .trait_of()
-            .and_then(|identity| self.models.host.trait_name(identity))
-        else {
-            return false;
-        };
-        last(&item.path()) == method && last(&owner) == last(trait_name)
+        last_segment(member) == method && last_segment(trait_path) == last_segment(trait_name)
     }
 
     /// What a call of the facade or imported item `item` keeps of its
@@ -2749,6 +2757,14 @@ fn builtin_summary(receiver: &Ty, member: &str) -> Option<Summary> {
 /// one, or the receiver `self`, which is a local when it is owned.
 fn is_place(value: &ParsedExpr) -> bool {
     value.lvalue.is_some() || value.source.as_str() == "self"
+}
+
+/// The last segment of `path`, its generic arguments left out:
+/// `Widget` of `iced::advanced::Widget<M, T, R>`.
+#[cfg(feature = "rust-import")]
+fn last_segment(path: &str) -> &str {
+    let path = path.split('<').next().unwrap_or_default();
+    path.rsplit("::").next().unwrap_or_default().trim()
 }
 
 /// Whether a call of `item` runs only in a stand-in's lending region: its

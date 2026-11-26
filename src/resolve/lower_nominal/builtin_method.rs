@@ -417,6 +417,28 @@ impl<'a> Parser<'a> {
         };
         let owner = self.models.item_owner(&path).cloned();
         let start = receiver.span.start();
+        // A method that borrows the `&str` mutably takes the program's
+        // string as a `&mut String`, copied in and stored back after the
+        // call, as rustc's `&mut self` lets the method make it another one.
+        let mut receiver = receiver;
+        let mutable = items.first().is_some_and(|item| {
+            item.signature().parameters().first().is_some_and(|ty| {
+                matches!(
+                    ty.shape(),
+                    crate::host::type_ref::Shape::Reference { mutable: true, .. }
+                )
+            })
+        });
+        if mutable && receiver.lvalue.is_some() {
+            if let Some(error) = self.immutable_borrow(&receiver, receiver.span) {
+                return Err(error);
+            }
+            self.mutable_use(&receiver, receiver.span);
+            receiver.ty = Ty::Reference {
+                mutable: true,
+                target: Box::new(Ty::String),
+            };
+        }
         let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
         let mut inputs = Vec::with_capacity(arguments.len() + 1);
         inputs.push(receiver);

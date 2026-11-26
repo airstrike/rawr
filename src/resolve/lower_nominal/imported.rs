@@ -76,6 +76,11 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     // What each source lowered again found so far, and whether each of its
     // bodies lowered.
     let mut lowered_sources = BTreeMap::<crate::program::source::Id, (Finding, bool)>::new();
+    // Each program method whose body runs only where native code lends,
+    // and each call of a program trait method outside its trait's method
+    // (#2698).
+    let mut lending = BTreeMap::new();
+    let mut method_calls = Vec::new();
     for checked in &bodies {
         let source = checked.source;
         if reused.contains(&source) {
@@ -147,6 +152,19 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
             dependencies.append(&mut found);
             continue;
         };
+        if let (Some(item), Body::Method(definition)) = (&lowered.instances.lending, &checked.body)
+        {
+            lending
+                .entry(definition.key().clone())
+                .or_insert_with(|| item.clone());
+        }
+        method_calls.extend(
+            lowered
+                .instances
+                .method_calls
+                .iter()
+                .map(|(callee, call)| (source, callee.clone(), *call)),
+        );
         for operation in &lowered.ops {
             found.extend(operation.dependencies());
         }
@@ -155,6 +173,13 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         dependencies.append(&mut found);
         offset = uses.len();
     }
+    super::entry::refuse_lending_calls(
+        &lending,
+        method_calls
+            .iter()
+            .map(|(source, callee, call)| (*source, callee, *call)),
+    )
+    .map_err(crate::resolve::ImportedFailure::Lowering)?;
     let checked = lowered_sources.len();
     if let Some(checks) = checks.as_mut() {
         for (source, (found, lowered)) in lowered_sources {

@@ -124,6 +124,44 @@ impl Lift {
     }
 }
 
+/// What a holder raises out of a node, borrowed for as long as the holder
+/// and the node, beside a depth it reads for the call alone, as iced's
+/// `Widget::overlay` keeps its widget and tree beside the renderer.
+pub trait Raised {
+    /// The nodes raised out of `node` at `depth`.
+    fn raised<'b>(
+        &'b mut self,
+        node: &'b mut crate::walks::Node,
+        depth: &usize,
+    ) -> Vec<crate::walks::Lifted<'b>>;
+}
+
+impl Raised for Lift {
+    fn raised<'b>(
+        &'b mut self,
+        node: &'b mut crate::walks::Node,
+        depth: &usize,
+    ) -> Vec<crate::walks::Lifted<'b>> {
+        self.lifted_at(node, depth)
+    }
+}
+
+/// A text that trims itself, as a `&mut self` method of a trait's impl
+/// for `&str` may make the string another one.
+pub trait Trimmed {
+    /// How many bytes the trim cut.
+    fn trimmed(&mut self) -> usize;
+}
+
+/// The crate compiles it.
+impl Trimmed for &str {
+    fn trimmed(&mut self) -> usize {
+        let before = self.len();
+        *self = self.trim();
+        before - self.len()
+    }
+}
+
 /// The labels `item`'s `operate` notes, as iced's `UserInterface::operate`
 /// lends the root widget it owns a `&mut dyn Operation`. The crate
 /// compiles it.

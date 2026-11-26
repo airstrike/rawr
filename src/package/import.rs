@@ -3184,7 +3184,22 @@ fn build(
             representability::convert::Type::Builtin(representability::convert::Builtin::Str),
         );
         // A `&str` receiver, as rustc's `<&str as Trait>::method(text)`
-        // takes it, not a `String` (#706).
+        // takes it, not a `String` (#706). A method that borrows the `&str`
+        // mutably may make it another string: it takes the program's string
+        // as a `&mut String`, copied in and back out (D558 slice 2).
+        let instance = if plan.receiver() == Some(representability::ownership::Receiver::Mutable)
+            && instance
+                == representability::convert::Type::Builtin(representability::convert::Builtin::Str)
+        {
+            representability::convert::Type::Borrowed {
+                mutable: true,
+                ty: Box::new(representability::convert::Type::Builtin(
+                    representability::convert::Builtin::String,
+                )),
+            }
+        } else {
+            instance
+        };
         let receiver = types.convert_input(&instance, &[], allocation)?;
         let signature = signature_with(&types, plan.signature(), Some(receiver), allocation)?;
         let lent = (lent_static(plan.signature()) << 1)

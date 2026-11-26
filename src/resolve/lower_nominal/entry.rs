@@ -258,6 +258,10 @@ struct Assembly {
     instances: Vec<(Option<crate::item::Key>, Uses)>,
     /// The instances lowered so far, by key.
     instanced: BTreeSet<crate::item::Key>,
+    /// Each program method whose body (an instance's or its own) makes a
+    /// crate call that runs only in a lending region, with that call's
+    /// item (#2698).
+    lending: BTreeMap<crate::item::Key, ImmutableString>,
 }
 
 /// One source's part being lowered, and what its lowering reads.
@@ -315,10 +319,15 @@ impl Assembly {
         }
         self.hidden
             .push((body.source(), std::mem::take(&mut lowered.hidden)));
-        self.instances.push((
-            body.template(unit.models),
-            std::mem::take(&mut lowered.instances),
-        ));
+        let uses = std::mem::take(&mut lowered.instances);
+        if let (Some(item), Body::Method(definition) | Body::MethodInstance(definition, ..)) =
+            (&uses.lending, &body)
+        {
+            self.lending
+                .entry(definition.key().clone())
+                .or_insert_with(|| item.clone());
+        }
+        self.instances.push((body.template(unit.models), uses));
         match body {
             Body::Function(shell, definition) | Body::Instance(shell, definition, ..) => {
                 let instance = match body {
@@ -871,6 +880,60 @@ fn erased_needed(
     Ok(())
 }
 
+/// Whether no body calls a program method that runs only where native
+/// code calls it, outside a method of the same trait (#2698): its body
+/// makes a crate call, as iced's `overlay`, whose output keeps what native
+/// code lends the program's method in a lending region, and a program's
+/// own call opens none, so the call is refused where the program lowers,
+/// as a program's own call of the crate's item is (`refuse_unlent_call`).
+/// The check refuses it for a body it lowers (`imported`); a template's
+/// instance lowers only here, when the program starts.
+fn lending_called(assembly: &Assembly) -> Result<(), LoweringFailure> {
+    let calls =
+        assembly
+            .instances
+            .iter()
+            .zip(&assembly.hidden)
+            .flat_map(|((_, uses), (source, _))| {
+                uses.method_calls
+                    .iter()
+                    .map(|(callee, call)| (*source, callee, *call))
+            });
+    refuse_lending_calls(&assembly.lending, calls)
+}
+
+/// The first of `calls`, each a source, the program method it calls and
+/// the call, whose method is one of `lending`'s, refused with the crate
+/// call its body makes (#2698).
+pub(super) fn refuse_lending_calls<'k>(
+    lending: &BTreeMap<crate::item::Key, ImmutableString>,
+    mut calls: impl Iterator<Item = (crate::program::source::Id, &'k crate::item::Key, Span)>,
+) -> Result<(), LoweringFailure> {
+    if lending.is_empty() {
+        return Ok(());
+    }
+    let Some((source, callee, call, item)) = calls.find_map(|(source, callee, call)| {
+        lending.get(callee).map(|item| (source, callee, call, item))
+    }) else {
+        return Ok(());
+    };
+    Err(LoweringFailure::original(
+        source,
+        Error::InvalidHostOperation {
+            item: callee.name().into(),
+            reason: format!(
+                "its body calls `{item}`, whose output keeps its `&mut` receiver and a `&mut` \
+                 input borrowed, which Rawr lends only where native code calls a program's \
+                 method of this shape, as iced asks a widget for its `overlay`: calling it \
+                 from the program isn't supported yet"
+            )
+            .into(),
+            operation: call,
+        }
+        .into(),
+    ))
+}
+
 /// Move the demands of the bodies `assembly` placed from `from` on into
 /// `queue`, each `depth` instances deep.
 fn demands(
@@ -1046,6 +1109,7 @@ pub(super) fn lower_with_context(
         hidden: Vec::new(),
         instances: Vec::new(),
         instanced: BTreeSet::new(),
+        lending: BTreeMap::new(),
     };
     // A compile lent a runner's lowerings lowers again only the sources
     // whose lowering reads something that changed (#1646).
@@ -1180,6 +1244,7 @@ pub(super) fn lower_with_context(
         &assembly,
         &mut gaps,
     )?;
+    lending_called(&assembly)?;
     sent_hidden(engine, &assembly.hidden, &models)?;
     #[cfg(feature = "rust-import")]
     if let Some(session) = &mut session {
@@ -1198,6 +1263,7 @@ pub(super) fn lower_with_context(
         hidden: _,
         instances: _,
         instanced: _,
+        lending: _,
     } = assembly;
     // The dispatchers' ops are numbered apart from every source's.
     let ops = dispatch_ops

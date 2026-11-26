@@ -4916,6 +4916,68 @@ fn a_native_call_that_keeps_its_receiver_outside_a_lending_method_fails_at_check
     );
 }
 
+/// A program's own call of its generic impl's method whose instance calls
+/// a native method that keeps its `&mut` receiver and a `&mut` input
+/// beside a call-only borrow, as a program's `Widget::overlay` asks its
+/// content for its overlay, is refused at check: the body runs only where
+/// native code calls it, in the region that lends what the output keeps
+/// (#2698).
+#[test]
+fn a_programs_own_call_of_a_method_that_runs_only_where_native_code_lends_fails_at_check() {
+    let root = lane(Some("tinted_raised.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env_remove("RAWR_CRATE_SOURCE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("its body calls `events::visits::Lift::raised`")
+            && stderr.contains("--> src/main.rs:23:"),
+        "{stderr}"
+    );
+}
+
+/// A crate trait's `&mut self` method of its impl for `&str` that makes
+/// the string another one, called through a generic body's bound, gives
+/// it back: the program's string is copied in and stored back after the
+/// call, as a `&mut String` input is. The output is `cargo run`'s.
+#[test]
+fn a_crate_str_impls_mut_self_method_gives_the_program_its_new_string() {
+    let root = lane(Some("tinted_trimmed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .env_remove("RAWR_CRATE_SOURCE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "4 [calm]\n");
+}
+
 /// Each runner executable under `store`, with when it was written.
 fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
     let mut found = Vec::new();

@@ -15211,12 +15211,24 @@ fn render_adapter_steps(
                         argument_list(signature.inputs().len(), 1, output)?;
                         output.write_all(b"));\n").map_err(request::unwritable)?;
                         // Rawr's string is a value the runner lends a `&str`
-                        // of: a method that makes its `&mut self` another
-                        // string can't give it back yet.
+                        // of: the string the method left in its `&mut self`
+                        // goes back to the program first among the copies
+                        // after the call's value, as a `&mut String` input
+                        // does (D558 slice 2), and the program stores it.
                         if matches!(receiver, Receiver::Mutable) {
-                            output
-                                .write_all(b"    if !std::ptr::eq(receiver_place, receiver_given) {\n        return Err(Error::Value(\"a `&mut &str` receiver the method made another string isn't given back to the program yet\".to_owned()));\n    }\n")
-                                .map_err(request::unwritable)?;
+                            let mut given = Vec::new();
+                            render_give(
+                                &substituted(signature.output(), signature, substitutions)?,
+                                "output",
+                                &mut given,
+                            )?;
+                            let given = String::from_utf8(given).map_err(request::unwritable)?;
+                            let copied = copied_back(signature, substitutions)?;
+                            writeln!(
+                                output,
+                                "    let _ = receiver_given;\n    let receiver_copy = Dynamic::from(ImmutableString::from(receiver_place));\n    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given, receiver_copy{copied}]))"
+                            )
+                            .map_err(request::unwritable)?;
                         }
                     }
                     Receiver::Owned => {
@@ -15407,6 +15419,8 @@ fn render_adapter_steps(
                 // future holds no borrow, as wgpu's `request_device`.
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 match future_output(returned) {
+                    // The str branch gave its value and the string back.
+                    _ if str_member(signature) && matches!(receiver, Receiver::Mutable) => {}
                     Some(element)
                         if matches!(receiver, Receiver::Owned) || signature.detached_future() =>
                     {
