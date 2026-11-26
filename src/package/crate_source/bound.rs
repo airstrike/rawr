@@ -25,28 +25,224 @@ const DERIVES: [(&str, &str, &str); 3] = [
     ),
 ];
 
+/// The names of the prelude, which a binding written in another module
+/// spells as the defining module does: rustc resolves them alike in both.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+const PRELUDE: [&str; 37] = [
+    "From",
+    "Into",
+    "TryFrom",
+    "TryInto",
+    "Default",
+    "Clone",
+    "Copy",
+    "PartialEq",
+    "Eq",
+    "PartialOrd",
+    "Ord",
+    "AsRef",
+    "AsMut",
+    "Iterator",
+    "IntoIterator",
+    "DoubleEndedIterator",
+    "ExactSizeIterator",
+    "Extend",
+    "Drop",
+    "Fn",
+    "FnMut",
+    "FnOnce",
+    "Send",
+    "Sync",
+    "Sized",
+    "Unpin",
+    "ToOwned",
+    "ToString",
+    "Option",
+    "Some",
+    "None",
+    "Result",
+    "Ok",
+    "Err",
+    "Vec",
+    "String",
+    "Box",
+];
+
+/// The primitive types and the keywords a signature may hold, which every
+/// module spells alike.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+const PRIMITIVES: [&str; 20] = [
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
+    "i128", "isize", "f32", "f64", "mut", "dyn", "as",
+];
+
 /// A concrete type a crate-source module names, by the name it is in
-/// scope by there, and the traits of [`DERIVES`] its definition derives.
+/// scope by there, the traits of [`DERIVES`] its definition derives, and
+/// a call of each method of its concrete trait impls in the defining
+/// module that the crate-source module can spell.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Derived {
     name: String,
     derives: Vec<&'static str>,
+    impls: Vec<Binding>,
+    /// Each concrete trait impl of the type that has no binding, by its
+    /// header, with the rule that leaves it out.
+    excluded: Vec<(String, &'static str)>,
 }
 
-/// The derives of the concrete type `defined` that `text` defines, which
-/// a crate-source module names `name` (`located::imported`). `None` when
-/// `text` defines no such type, it is generic, or it derives none of
-/// [`DERIVES`].
+/// Why a concrete trait impl of a type a crate-source module names has no
+/// binding: it names an item the naming module has no path to, as a
+/// private type of another module.
 #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
-pub(crate) fn derived(text: &str, defined: &str, name: &str) -> Option<Derived> {
+pub(crate) const UNNAMED: &str = "it names an item the opening module has no path to";
+/// Why an impl has no binding: a method's parameter is of an associated
+/// type of `Self`, which a binding's signature can't spell yet.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+pub(crate) const PROJECTED: &str = "a method's parameter is of an associated type of `Self`";
+/// Why an impl has no binding: a method is unsafe, async, extern or
+/// generic, so no call of it is written as it is.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+pub(crate) const UNCALLED: &str = "a method is unsafe, async, extern or generic";
+
+/// A binding function's signature and body, its name left to the module
+/// it is written in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Binding {
+    /// Its lifetime parameters, with their `<..>`, or nothing.
+    lifetimes: String,
+    parameters: Vec<String>,
+    /// Its output type, or nothing for `()`.
+    output: String,
+    /// The call's value is dropped, its type unspelled.
+    discarded: bool,
+    /// The path of the item it calls.
+    path: String,
+    arguments: Vec<String>,
+}
+
+/// What the concrete type `defined` that `text` defines gives a
+/// crate-source module that names it (`located::imported`): its derives
+/// of [`DERIVES`], and its concrete trait impls in `text`, which the crate
+/// compiles once whatever the program instantiates, as iced's `impl
+/// From<u16> for Padding` and `impl From<Pixels> for Padding`. `spell`
+/// gives the path by which the naming module writes a name the defining
+/// module's text starts a path with, `defined` included, or `None` when it
+/// has none. An impl that has a name with no such path, or a method no
+/// call can be written of, is left out with its rule (`excluded`). A
+/// generic impl is left to the program's uses. `None` when `text` defines
+/// no such type, it is generic, or it gives neither.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+pub(crate) fn derived(
+    text: &str,
+    defined: &str,
+    spell: &dyn Fn(&str) -> Option<String>,
+) -> Option<Derived> {
     let tokens = polyglot::placed(text);
-    let item = polyglot::module_items(text, &tokens)
-        .into_iter()
+    let items = polyglot::module_items(text, &tokens);
+    let item = items
+        .iter()
         .find(|item| matches!(item.keyword, "struct" | "enum") && item.name == Some(defined))?;
-    derives_of(&tokens, &item).map(|derives| Derived {
-        name: name.to_owned(),
+    let header = &tokens[item.header.clone()];
+    let parameters = header
+        .first()
+        .is_some_and(|(token, _)| *token == Token::Punct(b'<'));
+    let name = spell(defined)?;
+    // A type whose every parameter has a default is named alone at those
+    // defaults, as iced's `Rectangle` is `Rectangle<f32>`: its derives are
+    // that instance's, which the crate compiles once the module names it.
+    if parameters {
+        return defaulted(text, header).then(|| Derived {
+            name,
+            derives: derived_traits(&tokens, item),
+            impls: Vec::new(),
+            excluded: Vec::new(),
+        });
+    }
+    let derives = derives_of(&tokens, item).unwrap_or_default();
+    let bound = Bound {
+        text,
+        written: String::new(),
+        count: 0,
+    };
+    let mut impls = Vec::new();
+    let mut excluded = Vec::new();
+    for item in items
+        .iter()
+        .filter(|item| item.keyword == "impl" && !item.generic)
+    {
+        match bound.trait_impl_bindings(&tokens, item, defined, spell) {
+            Some(Ok(mut bindings)) => impls.append(&mut bindings),
+            Some(Err(rule)) => {
+                let start = tokens[item.header.start].1;
+                let header = text[start..tokens[item.header.end].1].trim().to_owned();
+                excluded.push((header, rule));
+            }
+            None => {}
+        }
+    }
+    (!derives.is_empty() || !impls.is_empty() || !excluded.is_empty()).then_some(Derived {
+        name,
         derives,
+        impls,
+        excluded,
     })
+}
+
+impl Derived {
+    /// Each concrete trait impl of the type with no binding, by its header,
+    /// with the rule that leaves it out.
+    #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+    pub(crate) fn excluded(&self) -> &[(String, &'static str)] {
+        &self.excluded
+    }
+}
+
+/// `written`, text of the defining module, with each name that starts a
+/// path spelled as `spell` gives it; a primitive's, a keyword's, the
+/// prelude's and a lifetime's are kept as they are. `None` when a name
+/// has no spelling.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+fn respelled(written: &str, spell: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let bytes = written.as_bytes();
+    let mut spelled = String::with_capacity(written.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if !(bytes[at].is_ascii_alphabetic() || bytes[at] == b'_') {
+            let character = written[at..].chars().next()?;
+            spelled.push(character);
+            at += character.len_utf8();
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+            at += 1;
+        }
+        let word = &written[start..at];
+        let lifetime = start > 0 && bytes[start - 1] == b'\'';
+        let inner = written[..start].ends_with("::");
+        if lifetime || inner || PRIMITIVES.contains(&word) || PRELUDE.contains(&word) {
+            spelled.push_str(word);
+        } else {
+            spelled.push_str(&spell(word)?);
+        }
+    }
+    Some(spelled)
+}
+
+/// Whether every parameter of the generic list `header` starts with is a
+/// type parameter with a default, as `<T = f32>`: no lifetime, and no
+/// parameter left to the program.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+fn defaulted(text: &str, header: &[(Token<'_>, usize)]) -> bool {
+    let Some(close) = closing(header, 0, b'<', b'>') else {
+        return false;
+    };
+    let parameters = split(header, 1, close);
+    !parameters.is_empty()
+        && parameters.iter().all(|parameter| {
+            let written = text[parameter.clone()].trim();
+            !written.starts_with('\'') && written.contains('=')
+        })
 }
 
 /// The traits of [`DERIVES`] the concrete struct or enum `item` derives.
@@ -57,6 +253,13 @@ fn derives_of(tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) -> Option<Ve
     if item.generic || lifetimes {
         return None;
     }
+    let derives = derived_traits(tokens, item);
+    (!derives.is_empty()).then_some(derives)
+}
+
+/// The traits of [`DERIVES`] the attributes of `item` derive, whatever its
+/// parameters.
+fn derived_traits(tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) -> Vec<&'static str> {
     let attributes = tokens
         .iter()
         .filter(|(_, at)| item.bytes.contains(at))
@@ -80,7 +283,7 @@ fn derives_of(tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) -> Option<Ve
             _ => {}
         }
     }
-    (!derives.is_empty()).then_some(derives)
+    derives
 }
 
 /// The functions that bind `text`'s concrete items, one per item, and the
@@ -107,9 +310,12 @@ pub(crate) fn functions(text: &str, imported: &[Derived]) -> String {
         if let (Some(name), "struct" | "enum") = (item.name, item.keyword)
             && let Some(derives) = derives_of(&tokens, &item)
         {
+            // The module's own trait impls are bound as its items.
             bound.derives(&Derived {
                 name: name.to_owned(),
                 derives,
+                impls: Vec::new(),
+                excluded: Vec::new(),
             });
         }
     }
@@ -162,6 +368,9 @@ impl Bound<'_> {
                 "\n#[allow(dead_code)]\nfn {binding}{signature} {{\n    {call}\n}}"
             );
         }
+        for binding in &derived.impls {
+            self.write(binding);
+        }
     }
 
     fn next_name(&mut self) -> String {
@@ -176,9 +385,40 @@ impl Bound<'_> {
         item: &ModuleItem<'_>,
         owner: Option<&Owner>,
     ) {
-        let Some(name) = item.name else {
-            return;
+        if let Some(binding) = self.binding(tokens, item, owner) {
+            self.write(&binding);
+        }
+    }
+
+    /// The binding function of `binding`, named next.
+    fn write(&mut self, binding: &Binding) {
+        let name = self.next_name();
+        let output = if binding.output.is_empty() {
+            String::new()
+        } else {
+            format!(" -> {}", binding.output)
         };
+        let discard = if binding.discarded { "let _ = " } else { "" };
+        let end = if binding.discarded { ";" } else { "" };
+        let _ = writeln!(
+            self.written,
+            "\n#[allow(dead_code)]\nfn {name}{}({}){output} {{\n    {discard}{}({}){end}\n}}",
+            binding.lifetimes,
+            binding.parameters.join(", "),
+            binding.path,
+            binding.arguments.join(", "),
+        );
+    }
+
+    /// The binding of the function `item`, a method of `owner` when given:
+    /// `None` for one that isn't called as written.
+    fn binding(
+        &self,
+        tokens: &[(Token<'_>, usize)],
+        item: &ModuleItem<'_>,
+        owner: Option<&Owner>,
+    ) -> Option<Binding> {
+        let name = item.name?;
         let header = &tokens[item.header.clone()];
         // Only a safe, synchronous function is called as written.
         let qualified = tokens.iter().any(|(token, at)| {
@@ -187,31 +427,20 @@ impl Bound<'_> {
                 && matches!(token, Token::Ident("unsafe" | "async" | "extern", _))
         });
         if qualified || header.is_empty() {
-            return;
+            return None;
         }
         // The lifetimes it has, and its parameters' list.
         let (lifetimes, open) = match header.first() {
             Some((Token::Punct(b'<'), start)) => {
-                let Some(close) = closing(header, 0, b'<', b'>') else {
-                    return;
-                };
+                let close = closing(header, 0, b'<', b'>')?;
                 (self.text[*start..header[close].1 + 1].to_owned(), close + 1)
             }
             _ => (String::new(), 0),
         };
         if header.get(open).map(|(token, _)| *token) != Some(Token::Punct(b'(')) {
-            return;
+            return None;
         }
-        let Some(close) = closing(header, open, b'(', b')') else {
-            return;
-        };
-        // A trait impl's method whose signature names one of `Self`'s
-        // associated types, such as a catalog's `Self::Class<'a>`, is
-        // spelled through a projection the binding can't name yet.
-        let signature = &self.text[header[open].1..tokens[item.header.end].1];
-        if owner.is_some_and(|owner| owner.qualified.is_some()) && signature.contains("Self::") {
-            return;
-        }
+        let close = closing(header, open, b'(', b')')?;
         let output_start = header[close].1 + 1;
         let output_end = header
             .iter()
@@ -220,6 +449,13 @@ impl Bound<'_> {
             .map_or_else(|| tokens[item.header.end].1, |(_, at)| *at);
         let output = self.spelled(output_start..output_end, owner);
         let output = output.trim().trim_start_matches("->").trim();
+        // An output that names one of `Self`'s associated types, as a
+        // catalog's `default<'a>() -> Self::Class<'a>`, is spelled through
+        // a projection rawr can't name in a signature yet: the call is
+        // made and its value dropped, which binds the item all the same.
+        let raw = &self.text[output_start..output_end];
+        let output = if raw.contains("Self::") { "" } else { output };
+        let discarded = raw.contains("Self::");
         let mut parameters = Vec::new();
         let mut arguments = Vec::new();
         for parameter in split(header, open + 1, close) {
@@ -233,9 +469,7 @@ impl Bound<'_> {
             });
             let argument = format!("__a{}", arguments.len());
             if receiver == "self" || receiver == "mut self" {
-                let Some(owner) = owner else {
-                    return;
-                };
+                let owner = owner?;
                 let borrow = if written.starts_with("&mut") {
                     "&mut "
                 } else if written.starts_with('&') {
@@ -245,9 +479,12 @@ impl Bound<'_> {
                 };
                 parameters.push(format!("{argument}: {borrow}{}", owner.ty));
             } else {
-                let Some(colon) = top_colon(&self.text[parameter.clone()]) else {
-                    return;
-                };
+                let colon = top_colon(&self.text[parameter.clone()])?;
+                // A parameter of one of `Self`'s associated types has no
+                // spelling a binding's signature can hold yet.
+                if self.text[parameter.clone()].contains("Self::") {
+                    return None;
+                }
                 let ty = self.spelled(parameter.start + colon + 1..parameter.end, owner);
                 parameters.push(format!("{argument}: {}", ty.trim()));
             }
@@ -261,18 +498,14 @@ impl Bound<'_> {
             Some(owner) => format!("{}::{name}", owner.ty),
             None => name.to_owned(),
         };
-        let binding = self.next_name();
-        let output = if output.is_empty() {
-            String::new()
-        } else {
-            format!(" -> {output}")
-        };
-        let _ = writeln!(
-            self.written,
-            "\n#[allow(dead_code)]\nfn {binding}{lifetimes}({}){output} {{\n    {path}({})\n}}",
-            parameters.join(", "),
-            arguments.join(", "),
-        );
+        Some(Binding {
+            lifetimes,
+            parameters,
+            output: output.to_owned(),
+            discarded,
+            path,
+            arguments,
+        })
     }
 
     /// A borrow of the static `item`.
@@ -338,9 +571,85 @@ impl Bound<'_> {
 
     /// A call of each function of the concrete impl `item`.
     fn methods(&mut self, tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) {
+        let Some(owner) = self.impl_owner(tokens, item) else {
+            return;
+        };
+        let body = &tokens[item.header.end + 1..item.end];
+        for method in polyglot::module_items(self.text, body) {
+            if method.keyword == "fn" && !method.generic {
+                self.function(body, &method, Some(&owner));
+            }
+        }
+    }
+
+    /// The bindings of the methods of `item`, a concrete trait impl for the
+    /// type `defined` of this text, each name spelled by `spell`
+    /// ([`respelled`]). `None` for an impl of another type or of no trait;
+    /// the rule that leaves it out where no call of a method can be
+    /// written.
+    #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+    fn trait_impl_bindings(
+        &self,
+        tokens: &[(Token<'_>, usize)],
+        item: &ModuleItem<'_>,
+        defined: &str,
+        spell: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<Result<Vec<Binding>, &'static str>> {
+        let owner = self.impl_owner(tokens, item)?;
+        if owner.qualified.is_none() || owner.ty != defined {
+            return None;
+        }
+        let body = &tokens[item.header.end + 1..item.end];
+        let mut bindings = Vec::new();
+        for method in polyglot::module_items(self.text, body) {
+            if method.keyword != "fn" {
+                continue;
+            }
+            let projected = split_parameters(body, &method)
+                .iter()
+                .any(|parameter| self.text[parameter.clone()].contains("Self::"));
+            if projected {
+                return Some(Err(PROJECTED));
+            }
+            let binding = if method.generic {
+                None
+            } else {
+                self.binding(body, &method, Some(&owner))
+            };
+            let Some(binding) = binding else {
+                return Some(Err(UNCALLED));
+            };
+            let spelled = |written: &str| respelled(written, spell);
+            let parameters = binding
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    let (argument, ty) = parameter.split_once(": ")?;
+                    Some(format!("{argument}: {}", spelled(ty)?))
+                })
+                .collect::<Option<Vec<_>>>();
+            let (Some(parameters), Some(output), Some(path)) =
+                (parameters, spelled(&binding.output), spelled(&binding.path))
+            else {
+                return Some(Err(UNNAMED));
+            };
+            bindings.push(Binding {
+                lifetimes: binding.lifetimes,
+                parameters,
+                output,
+                discarded: binding.discarded,
+                path,
+                arguments: binding.arguments,
+            });
+        }
+        Some(Ok(bindings))
+    }
+
+    /// The type the concrete impl `item` is for, and its trait: `None` for
+    /// an impl with lifetime parameters, or of a generic type's instance,
+    /// which is left to the program's uses.
+    fn impl_owner(&self, tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) -> Option<Owner> {
         let header = &tokens[item.header.clone()];
-        // An impl with lifetime parameters, or of a generic type's instance,
-        // is left to the program's uses.
         let owner_tokens = header
             .iter()
             .position(|(token, _)| matches!(token, Token::Ident("for", _)))
@@ -352,7 +661,7 @@ impl Bound<'_> {
                 .iter()
                 .any(|(token, _)| *token == Token::Punct(b'<'));
         if arguments || item.header.end >= item.end {
-            return;
+            return None;
         }
         let start = header.first().map_or(0, |(_, at)| *at);
         let written = self.text[start..tokens[item.header.end].1].trim();
@@ -360,7 +669,7 @@ impl Bound<'_> {
             .split_once(" where ")
             .map_or(written, |(before, _)| before)
             .trim();
-        let owner = match written.split_once(" for ") {
+        Some(match written.split_once(" for ") {
             Some((trait_name, ty)) => Owner {
                 ty: ty.trim().to_owned(),
                 qualified: Some(format!("<{} as {}>", ty.trim(), trait_name.trim())),
@@ -369,13 +678,28 @@ impl Bound<'_> {
                 ty: written.to_owned(),
                 qualified: None,
             },
-        };
-        let body = &tokens[item.header.end + 1..item.end];
-        for method in polyglot::module_items(self.text, body) {
-            if method.keyword == "fn" && !method.generic {
-                self.function(body, &method, Some(&owner));
-            }
-        }
+        })
+    }
+}
+
+/// The byte ranges of the parameters of the function `item`, whose tokens
+/// are among `tokens`: none where its header isn't a function's.
+#[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+fn split_parameters(tokens: &[(Token<'_>, usize)], item: &ModuleItem<'_>) -> Vec<Range<usize>> {
+    let header = &tokens[item.header.clone()];
+    let open = match header.first() {
+        Some((Token::Punct(b'<'), _)) => match closing(header, 0, b'<', b'>') {
+            Some(close) => close + 1,
+            None => return Vec::new(),
+        },
+        _ => 0,
+    };
+    if header.get(open).map(|(token, _)| *token) != Some(Token::Punct(b'(')) {
+        return Vec::new();
+    }
+    match closing(header, open, b'(', b')') {
+        Some(close) => split(header, open + 1, close),
+        None => Vec::new(),
     }
 }
 
@@ -455,7 +779,11 @@ fn top_colon(written: &str) -> Option<usize> {
 mod tests {
     /// A module's static, struct, function, inherent method and trait
     /// impl's method each get a function that names it, and so does each
-    /// derive of its concrete types and of a type it names from elsewhere.
+    /// derive of its concrete types and of a type it names from elsewhere,
+    /// and each method of that type's concrete trait impls, its names
+    /// spelled by the module's paths to them. An impl with a name the
+    /// module has no path to, or a method no binding can spell, is left
+    /// out with its rule.
     #[test]
     fn each_concrete_item_is_named_by_a_function() {
         let text = "static SHADED: Counter = Counter { count: 0 };\n\
@@ -466,10 +794,44 @@ mod tests {
                     impl From<[u8; 3]> for Tint { fn from([r, g, b]: [u8; 3]) -> Self { Tint { r, g, b } } }\n";
         let border = "#[derive(Debug, Clone, Copy, PartialEq, Default)]\n\
                       pub struct Border { pub width: f32 }\n\
+                      impl From<f32> for Border { fn from(width: f32) -> Self { Border { width } } }\n\
+                      impl From<[u16; 2]> for Border { fn from(p: [u16; 2]) -> Border { Border { width: 0.0 } } }\n\
+                      impl From<Pixels> for Border { fn from(p: Pixels) -> Self { Border { width: p.0 } } }\n\
+                      impl fmt::Display for Border { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { Ok(()) } }\n\
+                      impl From<Hidden> for Border { fn from(_: Hidden) -> Self { Border { width: 0.0 } } }\n\
+                      impl Catalog for Border { type Class = u8; fn style(&self, class: &Self::Class) -> u8 { *class } }\n\
+                      impl Palette for Border { type Class<'a> = u8; fn default<'a>() -> Self::Class<'a> { 0 } }\n\
+                      impl<T> From<Vec<T>> for Border { fn from(_: Vec<T>) -> Self { Border { width: 0.0 } } }\n\
                       #[derive(Default)]\n\
-                      pub struct Wrap<T>(T);\n";
-        let imported = super::derived(border, "Border", "Edge").unwrap();
-        assert!(super::derived(border, "Wrap", "Wrap").is_none());
+                      pub struct Wrap<T>(T);\n\
+                      #[derive(Default, Clone)]\n\
+                      pub struct Frame<T = f32> { pub x: T }\n";
+        // The naming module writes `Border` as `Edge`, and reaches `Pixels`
+        // and `fmt` by paths of its own; it has none to `Hidden`.
+        let spell = |name: &str| match name {
+            "Border" => Some("Edge".to_owned()),
+            "Pixels" => Some("crate::core::Pixels".to_owned()),
+            "fmt" => Some("std::fmt".to_owned()),
+            "Catalog" => Some("crate::Catalog".to_owned()),
+            "Palette" => Some("crate::Palette".to_owned()),
+            _ => None,
+        };
+        let imported = super::derived(border, "Border", &spell).unwrap();
+        assert!(super::derived(border, "Wrap", &spell).is_none());
+        // `Frame` alone is `Frame<f32>`, whose derives the module binds.
+        let frame = |name: &str| (name == "Frame").then(|| "Frame".to_owned());
+        let framed = super::functions("", &[super::derived(border, "Frame", &frame).unwrap()]);
+        assert!(
+            framed.contains("() -> Frame {\n    <Frame as Default>::default()\n}"),
+            "{framed}"
+        );
+        assert_eq!(
+            imported.excluded(),
+            [
+                ("From<Hidden> for Border".to_owned(), super::UNNAMED),
+                ("Catalog for Border".to_owned(), super::PROJECTED),
+            ]
+        );
         let bound = super::functions(text, &[imported]);
         for expected in [
             "() -> &'static Counter {\n    &SHADED\n}",
@@ -482,8 +844,15 @@ mod tests {
             "() -> Edge {\n    <Edge as Default>::default()\n}",
             "(__a0: &Edge) -> Edge {\n    <Edge as Clone>::clone(__a0)\n}",
             "(__a0: &Edge, __a1: &Edge) -> bool {\n    <Edge as PartialEq>::eq(__a0, __a1)\n}",
+            "(__a0: f32) -> Edge {\n    <Edge as From<f32>>::from(__a0)\n}",
+            "(__a0: [u16; 2]) -> Edge {\n    <Edge as From<[u16; 2]>>::from(__a0)\n}",
+            "(__a0: crate::core::Pixels) -> Edge {\n    <Edge as From<crate::core::Pixels>>::from(__a0)\n}",
+            "<'a>() {\n    let _ = <Edge as crate::Palette>::default();\n}",
+            "(__a0: &Edge, __a1: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n    <Edge as std::fmt::Display>::fmt(__a0, __a1)\n}",
         ] {
             assert!(bound.contains(expected), "{expected}\nin\n{bound}");
         }
+        // A generic impl is left to the program's uses.
+        assert!(!bound.contains("Vec"), "{bound}");
     }
 }

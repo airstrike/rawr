@@ -221,9 +221,11 @@ impl Engine {
         // (`scope::Lent`), which reaches the crate value itself. A copy of
         // the lend reaches it as well, and a store into the copy, as a
         // `&mut` argument's copy back after a call, changes nothing the
-        // lend doesn't already reach.
+        // lend doesn't already reach. So does a native place (D651), as an
+        // element of a crate's `Vec<Tree>` that `iter_mut` lends where it
+        // is: a copy of it is authority over the same storage.
         let local = scope.get_mut_by_index(index);
-        if local.is::<crate::scope::Lent>() {
+        if local.is::<crate::scope::Lent>() || crate::place::get(local).is_some() {
             return Ok(Target::TempValue(local.flatten_clone()));
         }
         let (root, steps) =

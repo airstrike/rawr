@@ -1185,6 +1185,11 @@ impl<'a> Parser<'a> {
         if instance.is_none() && self.collecting_instances {
             return Ok(function);
         }
+        if instance.is_none()
+            && let Some(miss) = self.missing_conversion(call)
+        {
+            return Err(miss);
+        }
         instance.ok_or_else(|| {
             let name = &function.definition.name.text;
             Error::InvalidMethodCall {
@@ -1270,6 +1275,35 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    /// The native miss of a conversion a pending bound needs and the
+    /// runner lacks: an open literal for `Into<T>`, or `T: From<_>`, of a
+    /// crate type `T` that has no `from` yet. Rustc gives the literal its
+    /// kind from `T`'s impls, so the impls are demanded (`demand_from`)
+    /// rather than the literal left open, and no instance is ever chosen
+    /// at a kind a missing impl header left unsettled.
+    #[cfg(feature = "rust-import")]
+    fn missing_conversion(&mut self, call: Span) -> Option<Error> {
+        let pending = self.pending_traits.clone();
+        for (ty, trait_name, arguments, ..) in pending {
+            let [argument] = &arguments[..] else {
+                continue;
+            };
+            let (target, source) = match trait_name.as_str() {
+                "Into" => (argument, &ty),
+                "From" => (&ty, argument),
+                _ => continue,
+            };
+            let source = self.inference.resolve(source);
+            let target = self.inference.resolve(target);
+            if contains_open_literal(&source)
+                && let Err(miss) = self.demand_from(&target, call)
+            {
+                return Some(miss);
+            }
+        }
+        None
     }
 
     /// Give `source`, an open literal's type, the source type of the one
@@ -1373,6 +1407,11 @@ impl<'a> Parser<'a> {
         // with its template's signature.
         if instance.is_none() && self.collecting_instances {
             return Ok(definition);
+        }
+        if instance.is_none()
+            && let Some(miss) = self.missing_conversion(call)
+        {
+            return Err(miss);
         }
         instance.ok_or_else(|| Error::InvalidMethodCall {
             owner: definition.owner_name().into(),

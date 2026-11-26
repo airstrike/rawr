@@ -154,7 +154,39 @@ impl Graph {
         let declared = |path: &[&str]| path.len() >= 2 && self.rust_declares(path[0]);
         let mut paths = Vec::new();
         for source in self.sources() {
+            // A crate module's program module names its own crate by
+            // `crate` and `super`, which are the defining crate's paths
+            // (`crate_source`), so they are demanded with the program's.
+            let opened = source
+                .modules()
+                .first()
+                .filter(|module| super::crate_source::is_name(module));
             for path in seed::paths(source.text()) {
+                if let Some(module) = opened {
+                    let own = path
+                        .first()
+                        .filter(|first| path.len() >= 2 && declares(source.text(), first));
+                    let segments = match own {
+                        Some(_) => entry.crate_source_own(
+                            module,
+                            &path
+                                .iter()
+                                .map(|segment| crate::ImmutableString::from(segment.as_str()))
+                                .collect::<Vec<_>>(),
+                        ),
+                        None => crate_source_seed(entry, module, &path),
+                    };
+                    if let Some(segments) = segments {
+                        let segments = segments
+                            .iter()
+                            .map(|segment| segment.as_str())
+                            .collect::<Vec<_>>();
+                        if declared(&segments) {
+                            paths.push(segments.join("::"));
+                        }
+                        continue;
+                    }
+                }
                 let segments = match app {
                     Some(app) if source.package() == entry.name() => {
                         app_crate_path(entry, app, source.modules(), &path)
@@ -236,6 +268,47 @@ fn crate_paths(ty: &str) -> impl Iterator<Item = String> + '_ {
     .filter_map(|path| path.strip_prefix("crate::"))
     .filter(|path| !path.is_empty())
     .map(str::to_owned)
+}
+
+/// Whether `text` declares a type or trait named `name` at any depth, as
+/// a crate module's program module declares its own (`struct Style`).
+fn declares(text: &str, name: &str) -> bool {
+    ["struct", "enum", "trait", "type", "union"]
+        .iter()
+        .any(|keyword| {
+            text.match_indices(&format!("{keyword} {name}"))
+                .any(|(at, matched)| {
+                    let before = text[..at].chars().next_back();
+                    let after = text[at + matched.len()..].chars().next();
+                    !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                        && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                })
+        })
+}
+
+/// The program's path that `path`, written in the program module `module`
+/// of a crate module's generic items, names by `crate` or `super`
+/// (`Package::crate_source_path`). `None` for a path that starts
+/// otherwise.
+fn crate_source_seed(
+    entry: &super::graph::Package,
+    module: &str,
+    path: &[String],
+) -> Option<Vec<crate::ImmutableString>> {
+    let supers = path
+        .iter()
+        .take_while(|segment| *segment == "super")
+        .count();
+    let rest = match path.first()?.as_str() {
+        "crate" => &path[1..],
+        _ if supers > 0 => &path[supers..],
+        _ => return None,
+    };
+    let rest = rest
+        .iter()
+        .map(|segment| crate::ImmutableString::from(segment.as_str()))
+        .collect::<Vec<_>>();
+    entry.crate_source_path(module, supers, &rest)
 }
 
 /// A script path (`crate::model::Thing`, `super::model::Thing`, or
@@ -1585,6 +1658,13 @@ mod seed {
                 _ => index += 1,
             }
         }
+        // `<Style as From<Color>>::from`: the member of the type, which a
+        // demand of `Style::from` brings from each trait it implements.
+        for (ty, member) in qualified_members(text) {
+            let mut segments = ty;
+            segments.push(member);
+            qualified.push((segments, false));
+        }
         // A `use` path starts at any name in scope, as rustc resolves it:
         // `use keyboard::key;` beside `use iced::keyboard;`, at module level
         // or in a block, names `iced::keyboard::key`.
@@ -1622,6 +1702,55 @@ mod seed {
             }
         }
         paths
+    }
+
+    /// Each `<T as Trait>::m` of `text`, as `T`'s path and `m`: the member
+    /// a qualified call names of the type.
+    fn qualified_members(text: &str) -> Vec<(Vec<&str>, &str)> {
+        let bytes = text.as_bytes();
+        let word = |at: usize| {
+            let end = bytes[at..]
+                .iter()
+                .position(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
+                .map_or(bytes.len(), |length| at + length);
+            (&text[at..end], end)
+        };
+        let mut found = Vec::new();
+        for (open, _) in text.match_indices('<') {
+            let mut at = open + 1;
+            let mut ty = Vec::new();
+            while at < bytes.len() && (bytes[at].is_ascii_alphabetic() || bytes[at] == b'_') {
+                let (segment, end) = word(at);
+                ty.push(segment);
+                at = end;
+                if text[at..].starts_with("::") {
+                    at += 2;
+                } else {
+                    break;
+                }
+            }
+            if ty.is_empty() || !text[at..].starts_with(" as ") {
+                continue;
+            }
+            let mut depth = 1_usize;
+            while at < bytes.len() && depth > 0 {
+                match bytes[at] {
+                    b'<' => depth += 1,
+                    b'>' if bytes[at - 1] != b'-' => depth -= 1,
+                    _ => {}
+                }
+                at += 1;
+            }
+            if depth == 0
+                && text[at..].starts_with("::")
+                && bytes
+                    .get(at + 2)
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            {
+                found.push((ty, word(at + 2).0));
+            }
+        }
+        found
     }
 
     /// What one `use` item binds and demands, as its tree is walked.
@@ -1859,6 +1988,24 @@ mod seed {
                     "image::open",
                     "image::save_buffer",
                 ]
+            );
+        }
+
+        /// The seed names the member a qualified call `<T as Trait>::m`
+        /// calls, through `T`'s binding, as a demand of `T::m` brings it.
+        #[test]
+        fn seed_names_a_qualified_calls_member_of_its_type() {
+            let text = "use iced::core::Color;\n\
+                fn bind(a: Color) -> Style { <Style as From<Color>>::from(a) }\n\
+                fn deref(a: &Color) { let _ = <Color as std::ops::Deref>::deref(a); }\n";
+            let joined = joined(text);
+            assert!(
+                joined.iter().any(|path| path == "Style::from"),
+                "{joined:?}"
+            );
+            assert!(
+                joined.iter().any(|path| path == "iced::core::Color::deref"),
+                "{joined:?}"
             );
         }
 

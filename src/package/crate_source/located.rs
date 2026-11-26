@@ -227,7 +227,21 @@ pub(crate) fn imported(manifest: &Path, path: &[ImmutableString]) -> Vec<super::
         else {
             continue;
         };
-        if let Some(derived) = super::bound::derived(&defined.text, last, name) {
+        let spell = |word: &str| {
+            if word == last.as_str() {
+                return Some(name.clone());
+            }
+            graph.spelling(&module, &defined, word)
+        };
+        if let Some(derived) = super::bound::derived(&defined.text, last, &spell) {
+            if std::env::var_os("RAWR_VERBOSE").is_some_and(|verbose| verbose == "1") {
+                for (header, rule) in derived.excluded() {
+                    eprintln!(
+                        "rawr: `impl {header}` has no binding in `{}`: {rule}",
+                        path.join("::")
+                    );
+                }
+            }
             found.push(derived);
         }
     }
@@ -560,6 +574,127 @@ impl Graph {
             .filter(|import| matches!(import.bound, Bound::Glob))
             .filter_map(|import| self.resolve(module, &import.path, hops))
             .find_map(|globbed| self.definition(&globbed, name, hops))
+    }
+
+    /// The path by which `opening` writes `word`, a name the text of
+    /// `defining` starts a path with, so both name one item: `word` itself
+    /// where `opening` binds it to the item `defining` does, else a path
+    /// through the crate that defines it (`crate_path`) or std's own.
+    /// `None` when `opening` has no such path, as for a private item of
+    /// another crate or a name only a glob brings in.
+    fn spelling(&self, opening: &Module, defining: &Module, word: &str) -> Option<String> {
+        match word {
+            "crate" => return self.crate_path(opening, defining.package),
+            "self" => return self.module_path(opening, defining),
+            "super" => return self.module_path(opening, &self.parent(defining)?),
+            _ => {}
+        }
+        let home = self.home(defining, word, HOPS);
+        if home.is_some() && self.home(opening, word, HOPS) == home {
+            return Some(word.to_owned());
+        }
+        let tokens = polyglot::placed(&defining.text);
+        let items = polyglot::module_items(&defining.text, &tokens);
+        let import = imports(&tokens, &items)
+            .into_iter()
+            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == word));
+        let Some(import) = import else {
+            // A path from std's crates, which every module names alike
+            // unless it binds the name to an item of its own.
+            if home.is_none() && matches!(word, "std" | "core" | "alloc") {
+                return Some(word.to_owned());
+            }
+            // The defining module's own item.
+            home.filter(|(package, path)| *package == defining.package && *path == defining.path)?;
+            let module = self.module_path(opening, defining)?;
+            return Some(format!("{module}::{word}"));
+        };
+        let (first, rest) = import.path.split_first()?;
+        if matches!(first.as_str(), "std" | "core" | "alloc") {
+            return Some(import.path.join("::"));
+        }
+        let start = match first.as_str() {
+            "crate" => self.crate_path(opening, defining.package)?,
+            "self" => self.module_path(opening, defining)?,
+            "super" => self.module_path(opening, &self.parent(defining)?)?,
+            _ => match self.dependency(defining.package, first) {
+                Some(package) => self.crate_path(opening, package)?,
+                None => format!("{}::{first}", self.module_path(opening, defining)?),
+            },
+        };
+        Some(
+            std::iter::once(start)
+                .chain(rest.iter().cloned())
+                .collect::<Vec<_>>()
+                .join("::"),
+        )
+    }
+
+    /// The path by which `opening` writes the module `module`.
+    fn module_path(&self, opening: &Module, module: &Module) -> Option<String> {
+        let root = self.crate_path(opening, module.package)?;
+        Some(
+            std::iter::once(root)
+                .chain(module.path.iter().map(ToString::to_string))
+                .collect::<Vec<_>>()
+                .join("::"),
+        )
+    }
+
+    /// The path by which `opening` writes the root of the package
+    /// `package`: `crate` for its own, or `crate::alias` where its crate's
+    /// root binds the package's root, as `iced_widget`'s `pub use
+    /// iced_renderer::core` binds iced_core's through iced_renderer's own
+    /// re-export, since an opened module reaches another crate only
+    /// through its own crate's paths.
+    fn crate_path(&self, opening: &Module, package: usize) -> Option<String> {
+        if opening.package == package {
+            return Some("crate".to_owned());
+        }
+        let root = self.root_module(opening.package)?;
+        let tokens = polyglot::placed(&root.text);
+        let items = polyglot::module_items(&root.text, &tokens);
+        imports(&tokens, &items).into_iter().find_map(|import| {
+            let Bound::Name(alias) = &import.bound else {
+                return None;
+            };
+            self.resolve(&root, &import.path, HOPS)
+                .filter(|module| module.package == package && module.path.is_empty())
+                .map(|_| format!("crate::{alias}"))
+        })
+    }
+
+    /// The package and module path of the module that defines the type
+    /// or trait `name` names in `module` (as [`Graph::definition`]).
+    fn home(
+        &self,
+        module: &Module,
+        name: &str,
+        hops: usize,
+    ) -> Option<(usize, Vec<ImmutableString>)> {
+        let hops = hops.checked_sub(1)?;
+        let tokens = polyglot::placed(&module.text);
+        let items = polyglot::module_items(&module.text, &tokens);
+        if items.iter().any(|item| {
+            matches!(item.keyword, "struct" | "enum" | "union" | "trait" | "type")
+                && item.name == Some(name)
+        }) {
+            return Some((module.package, module.path.clone()));
+        }
+        let imports = imports(&tokens, &items);
+        let named = imports
+            .iter()
+            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == name));
+        if let Some(import) = named {
+            let (last, parent) = import.path.split_last()?;
+            let parent = self.resolve(module, parent, hops)?;
+            return self.home(&parent, last, hops);
+        }
+        imports
+            .iter()
+            .filter(|import| matches!(import.bound, Bound::Glob))
+            .filter_map(|import| self.resolve(module, &import.path, hops))
+            .find_map(|globbed| self.home(&globbed, name, hops))
     }
 
     /// Whether the module that declares `module` declares it privately

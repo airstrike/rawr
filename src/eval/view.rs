@@ -220,6 +220,16 @@ impl Engine {
             .split_first()
             .filter(|(handle, _)| handle.is_shared())
             .ok_or_else(|| "a view is no stored reference".to_string())?;
+        // A native vector a stored `&mut` names, as a crate's `&mut
+        // Vec<Tree>` field lent where it is (D651): its elements are the
+        // places of its own elements, each claimed for its use.
+        if path.is_empty()
+            && let Some(place) = handle
+                .read_lock::<Dynamic>()
+                .and_then(|held| crate::place::get(&held))
+        {
+            return native_view(&place, code, argument);
+        }
         let reached = Reached::new(handle.clone(), path)?;
         let len = reached.len()?;
         let count = || usize::try_from(argument.as_int().unwrap_or(-1)).ok();
@@ -243,5 +253,30 @@ impl Engine {
             _ => return Err("an unknown view".into()),
         };
         Ok(Dynamic::from_array(views))
+    }
+}
+
+/// [`Engine::view`] of a native place: an element by its index, or the
+/// place of each element. A native vector's range has no view yet.
+fn native_view(
+    place: &crate::place::Place,
+    code: INT,
+    argument: &Dynamic,
+) -> Result<Dynamic, String> {
+    let failed = |error: Box<ERR>| error.to_string();
+    match code {
+        PART if argument.as_int().is_ok() => place.element(argument).map_err(failed),
+        ELEMENTS => {
+            let len = place
+                .invoke(crate::place::Operation::Len, &mut [])
+                .map_err(failed)?
+                .as_int()
+                .map_err(|_| "a native vector's length is no integer".to_string())?;
+            let elements = (0..len)
+                .map(|index| place.element(&Dynamic::from_int(index)).map_err(failed))
+                .collect::<Result<Array, _>>()?;
+            Ok(Dynamic::from_array(elements))
+        }
+        _ => Err("a range of a native vector lent where it is isn't supported yet".into()),
     }
 }

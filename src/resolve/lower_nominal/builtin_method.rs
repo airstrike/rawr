@@ -2020,7 +2020,11 @@ impl<'a> Parser<'a> {
                         });
                     }
                     // An imported type's `default` comes from its crate's
-                    // `impl Default`, demanded as `Type::default`.
+                    // `impl Default`, demanded as `Type::default`: a native
+                    // miss, which a resident check prepares for.
+                    #[cfg(feature = "rust-import")]
+                    return Err(self.demanded_member(owner.into(), "default", span));
+                    #[cfg(not(feature = "rust-import"))]
                     return Err(Error::UnknownMember {
                         owner: owner.into(),
                         member: "default".into(),

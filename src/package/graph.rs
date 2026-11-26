@@ -353,6 +353,30 @@ impl Package {
         Some(path)
     }
 
+    /// The program's path to `rest`, an item the crate module whose program
+    /// module is `module` declares, and what follows it: `Style::from` of
+    /// `container`'s own `Style`.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    pub(crate) fn crate_source_own(
+        &self,
+        module: &str,
+        rest: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let found = self
+            .crate_source_roots
+            .iter()
+            .find(|root| root.module.as_str() == module)?;
+        Some(
+            found
+                .root
+                .iter()
+                .chain(&found.path)
+                .chain(rest)
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Whether the program module `module` stands for the module its crate
     /// module is globbed into, whose other items stay native.
     pub(crate) fn crate_source_mounted(&self, module: &str) -> bool {

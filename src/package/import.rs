@@ -325,6 +325,7 @@ impl crate::Engine {
                     None => None,
                 };
                 let hidden = hidden_member_misses(contract, &failure.error);
+                said_misses("resolve", demand.iter().chain(&hidden));
                 let error = super::Error::resolution(sources.clone(), failure);
                 return Err(match demand {
                     Some((path, through_alias, member)) => {
@@ -447,6 +448,7 @@ impl crate::Engine {
                     }
                     _ => None,
                 };
+                said_misses("lowering", demand.iter().chain(&misses));
                 if let Some(report) =
                     imported_lowering_report(&evidence, &error, &sources, &paths, &project)
                         .map_err(super::Error::diagnostic)?
@@ -1155,6 +1157,18 @@ impl ImportedNamespace {
             ),
             Self::Either => true,
         }
+    }
+}
+
+/// Under `RAWR_VERBOSE=1`, one line on stderr naming what a pass of the
+/// check, `pass`, missed and the next round demands.
+fn said_misses<'m>(pass: &str, misses: impl Iterator<Item = &'m (String, bool, bool)>) {
+    if std::env::var_os("RAWR_VERBOSE").is_none_or(|verbose| verbose != "1") {
+        return;
+    }
+    let paths = misses.map(|(path, ..)| path.as_str()).collect::<Vec<_>>();
+    if !paths.is_empty() {
+        eprintln!("rawr-import: the {pass} pass missed {}", paths.join(", "));
     }
 }
 

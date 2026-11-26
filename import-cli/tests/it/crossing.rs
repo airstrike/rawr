@@ -4539,6 +4539,42 @@ fn a_crate_generic_methods_self_call_runs_from_source_at_the_programs_types() {
     );
 }
 
+/// A crate's generic code run from source reads a native `Vec<Node>` it
+/// borrows of a native node as the native vector it is, as iced's
+/// `diff_children_custom` reads `&mut self.children` of a `Tree`: its
+/// `len`, `truncate` and `extend` are the vector's own, and `iter_mut`
+/// lends each node where it is. The output is `cargo run`'s.
+#[test]
+fn a_crate_generic_body_reads_a_lent_native_vector_as_its_own() {
+    let root = lane(Some("tinted_regrown.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"1:a\", \"1:b\"]\n[\"1:a\", \"1:c\", \"1:b\", \"1:d\", \"1:e\", \"1:f\"]\n"
+    );
+}
+
 /// Native code lends a program's impl a crate trait's object, `&mut dyn
 /// Visit`, through the trait's stand-in, as iced's `UserInterface` lends
 /// a widget's `operate` its `&mut dyn Operation<()>`: the program calls

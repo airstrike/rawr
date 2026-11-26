@@ -209,6 +209,32 @@ pub fn tally_of<M>(item: &mut impl Diffed<M>) -> Tally {
     Tally::of(item)
 }
 
+/// `node`'s children made one per item, each marked with its item's
+/// label, as iced's `Tree::diff_children_custom` makes a tree's children
+/// its widgets'.
+pub fn regrow<M>(node: &mut crate::walks::Node, items: &mut [impl Diffed<M>]) {
+    regrow_children(&mut node.children, items);
+}
+
+/// `children` made one per item, as iced's `tree::diff_children_custom`:
+/// the extra ones dropped, a new one made for each item past the rest,
+/// and each marked in place with its item's label.
+pub fn regrow_children<M>(children: &mut Vec<crate::walks::Node>, items: &mut [impl Diffed<M>]) {
+    if children.len() > items.len() {
+        children.truncate(items.len());
+    }
+    if children.len() < items.len() {
+        children.extend(
+            items[children.len()..]
+                .iter()
+                .map(|_| crate::walks::Node::default()),
+        );
+    }
+    for (child, item) in children.iter_mut().zip(items.iter_mut()) {
+        child.mark(&item.label());
+    }
+}
+
 /// `item` with a tally of it, as iced's `Container` holds its content.
 pub struct Tallied<S> {
     item: S,

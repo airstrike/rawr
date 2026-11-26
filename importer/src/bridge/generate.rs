@@ -11942,23 +11942,50 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
     let rust =
         concrete_type(field.ty()).ok_or_else(|| request::drift("a lent field's concrete type"))?;
     render_field_family(0, &rust, true, output)?;
+    let lent = format!(
+        "{} rest({}))",
+        lend_field(0, true),
+        lent_field(0, &rust, true)
+    );
+    // A std collection of crate values is lent as the native place it is
+    // (D651), so the program calls the collection's own methods on its
+    // native storage, each element lent where a method gives one, as
+    // `diff_children_custom`'s `old_children.truncate(n)` and
+    // `iter_mut()` of iced's `&mut self.children`. The call's witness of
+    // the field's type proves the place; with none, the field is lent as
+    // its type.
+    let placed = lendable_sequence(field.ty()) && place::available(field.ty());
+    let lent = if placed {
+        let policy = place::policy(field.ty())?;
+        format!(
+            "match witness.as_ref().filter(|witness| <{policy} as __rawr_internal::place::Policy>::accepts(witness)) {{
+                Some(witness) => __rawr_internal::place::lend::<{policy}>(field_0, witness, rest),
+                None => {lent},
+            }}"
+        )
+    } else {
+        lent
+    };
     writeln!(
         output,
         "    let lender = match lent_value(arguments, 0) {{
         Some(lent) => Lender::Lent(lent),
         None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+    }};{witness}
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
         reach_lender_mut::<{path}>(&lender, &mut |input| {{
             let field_0 = &mut input.{};
-            {} rest({}))
+            {lent}
         }})
     }})))
 }}
 ",
         field.name(),
-        lend_field(0, true),
-        lent_field(0, &rust, true),
+        witness = if placed {
+            "\n    let witness = output_witness();"
+        } else {
+            ""
+        },
     )
     .map_err(request::unwritable)
 }
