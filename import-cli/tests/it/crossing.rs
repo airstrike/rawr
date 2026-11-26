@@ -4235,14 +4235,16 @@ fn framed_and_cargo(root: &std::path::Path) -> (String, String) {
 /// one of the trait `P: Palette` names, as rustc selects it; the
 /// box native code makes crosses back to native code's `paint(&self,
 /// &EdgeFn)` as itself, and so does the program's closure, boxed by the
-/// runner, which lends the closure the crate's `&Ink`. The output is
-/// `cargo run`'s.
+/// runner, which lends the closure the crate's `&Ink`. A crate function
+/// given as the class, as iced's `.style(container::rounded_box)`, takes
+/// the `&Ink` as its own type though the box the program made carries no
+/// witness of it. The output is `cargo run`'s.
 #[test]
 fn a_crate_boxed_closure_crosses_from_native_code_and_from_the_program() {
     let root = lane(Some("framed_classed.rs"));
     let (rawr, cargo) = framed_and_cargo(&root);
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "+\n#\n");
+    assert_eq!(rawr, "+\n#\n=\n");
 }
 
 /// A crate module's generic code that calls another crate's generic code
@@ -4629,8 +4631,10 @@ fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
 /// children)`, whose items borrow the children, and passes each child on to
 /// the item's impl. The children are lent where they are for the rest of
 /// the scope, and each item's `&mut Node` and `&Node` is lent from the
-/// frame's region, lazily, as rustc runs the iterator. The output is `cargo
-/// run`'s.
+/// frame's region, lazily, as rustc runs the iterator. A native item's
+/// `seen` takes the `&Node` `Spot::iter` lends, as iced's native `Text`
+/// takes the `&Tree` in `Container::mouse_interaction`. The output is
+/// `cargo run`'s.
 #[test]
 fn a_crate_iterator_over_a_lent_slice_lends_each_item_to_the_program() {
     let root = lane(Some("tinted_walked.rs"));
@@ -4660,7 +4664,8 @@ fn a_crate_iterator_over_a_lent_slice_lends_each_item_to_the_program() {
         rawr,
         "[\"0:tallied@0\", \"1:calm@1\", \"tallied\", \"-calm\", \"[calm11]\"]\n\
          [\"0:tallied@0\", \"1:tallied@1\", \"2:deep@2\", \"tallied\", \"-tallied\", \"--deep\", \"[[deep11]1]\"]\n\
-         [\"0:tallied@0\", \"tallied\", \"[1]\"]\n"
+         [\"0:tallied@0\", \"tallied\", \"[1]\"]\n\
+         [\"0:tallied@0\", \"tallied\", \"[leaf!01]\"]\n"
     );
 }
 

@@ -120,6 +120,17 @@ pub struct Ink;
 /// `container::StyleFn<'a, Theme>`.
 pub type EdgeFn<'a, P> = Box<dyn Fn(&P) -> char + 'a>;
 
+/// A class the crate writes as a function of its palette, as iced's
+/// `container::rounded_box`.
+#[must_use]
+pub fn inked(ink: &Ink) -> char {
+    if ink.edge() == '|' {
+        '='
+    } else {
+        '?'
+    }
+}
+
 impl Palette for Ink {
     type Class<'a> = EdgeFn<'a, Self>;
 

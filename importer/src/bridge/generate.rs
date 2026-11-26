@@ -1857,12 +1857,13 @@ impl Error {
     }
 
     /// The error as the program sees it. One that only a rawr bug causes
-    /// panics, naming the bug.
+    /// panics, naming the bug and, for a lent value, its type.
     pub fn reported(self) -> Self {
-        if let Some(bug) = self.bug() {
-            panic!("rawr bug: {bug}");
+        match (self.bug(), &self) {
+            (Some(bug), Self::Lent(ty, _)) => panic!("rawr bug: {bug}: `{ty}`"),
+            (Some(bug), _) => panic!("rawr bug: {bug}"),
+            (None, _) => self,
         }
-        self
     }
 
     pub fn code(&self) -> u8 {
@@ -5015,6 +5016,27 @@ pub fn attest_input(
         Some(Some(witness)) => attest_nested(arena, value, witness),
         _ => Ok(value),
     }
+}
+
+/// [`attest_input`], or, where the callable carries no witness of the
+/// input, as a program's function a box made of does not, the value marked
+/// as the imported type `identity`, which has no arguments and which its
+/// Rust type is: it takes that type's witness where it is first checked as
+/// it, as a value its type's `Default` made does.
+#[allow(dead_code)]
+pub fn attest_input_as(
+    arena: &mut Arena,
+    value: Dynamic,
+    witness: Option<&Option<__rawr_internal::host::runtime::Witness>>,
+    identity: [u8; 32],
+) -> Result<Dynamic, Error> {
+    if let Some(Some(witness)) = witness {
+        return attest_nested(arena, value, witness);
+    }
+    if let Ok(handle) = value.clone().try_cast_result::<NativeHandle>() {
+        arena.made_by_default(&handle, identity);
+    }
+    Ok(value)
 }
 
 /// `value` with each native value in it attested, as [`attest_within`]
@@ -22203,6 +22225,19 @@ enum Witnesses<'a> {
     Coerced(&'a str),
 }
 
+/// The definition of `ty`, or of what it borrows, when it is a crate's
+/// type with no arguments: the one type a value of it is.
+fn plain_nominal(ty: &convert::Type) -> Option<&crate::surface::identity::Definition> {
+    match ty {
+        convert::Type::Borrowed { ty, .. } => plain_nominal(ty),
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if arguments.is_empty() => Some(definition),
+        _ => None,
+    }
+}
+
 /// The block that makes a Rust closure calling the script callable
 /// `source` gives, for [`render_take_callable`], its inputs attested by
 /// `witnesses`. With `pins`, the pins of the region its call is made in,
@@ -22403,9 +22438,19 @@ fn render_callable_closure(
         // So does a value that holds one, as a slot's input does.
         if native(input) || holds_native(input) {
             attested = true;
-            converted = format!(
-                "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
-            );
+            converted = match plain_nominal(input) {
+                Some(definition) => {
+                    let mut identity = Vec::new();
+                    byte_array(&mut identity, definition.as_bytes())?;
+                    let identity = String::from_utf8(identity).map_err(request::unwritable)?;
+                    format!(
+                        "({converted}).and_then(|value| attest_input_as(arguments.arena, value, witnesses.get({position}), {identity}))"
+                    )
+                }
+                None => format!(
+                    "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
+                ),
+            };
         }
         values.push(if native_inputs {
             format!("({converted})?")

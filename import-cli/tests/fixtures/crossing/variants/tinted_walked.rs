@@ -5,11 +5,14 @@
 // `Spot::iter_mut` and `Spot::iter`, whose items borrow the children, and
 // passes each child's node on to the item's impl, which runs from source
 // too, or, for the program's `Note`, the trait's provided `walk` natively
-// through its stand-in, given the visit native code lent the closure.
+// through its stand-in, given the visit native code lent the closure. A
+// native `Mark` is given each child's node `Spot::iter` lends, as iced's
+// `Container::mouse_interaction` passes its native `Text` the child's
+// `&Tree`.
 
 use events::framed::Label;
 use events::tinted::{self, Diffed};
-use events::walks;
+use events::{visits, walks};
 
 struct Note;
 
@@ -31,4 +34,5 @@ fn main() {
         walked(tinted::tallied(tinted::tallied(Label("deep".into()))))
     );
     println!("{:?}", walked(tinted::tallied(Note)));
+    println!("{:?}", walked(tinted::tallied(visits::Mark("leaf".into()))));
 }
