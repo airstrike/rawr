@@ -66,6 +66,31 @@ impl Parser<'_> {
         else {
             return;
         };
+        self.bind_trait_instance(identity, &given, None, span, true);
+    }
+
+    /// Binds each member of every native impl of the crate trait
+    /// `identity` at the trait arguments `given`, for the self type `fixed`
+    /// when there is one. With `bounds`, each where-clause bound of a
+    /// fitting impl at settled types is such an instance too, for its
+    /// bounded type, one level down: an opened impl's body runs from
+    /// source and calls through them, as `Container`'s `draw` calls
+    /// `Catalog::style` at iced's `Theme` and `Renderer::fill_quad` at its
+    /// renderer, and rustc compiles each for the impl's instance.
+    fn bind_trait_instance(
+        &mut self,
+        identity: [u8; 32],
+        given: &[Ty],
+        fixed: Option<&Ty>,
+        span: Span,
+        bounds: bool,
+    ) {
+        let host = self.models.host.clone();
+        let paths = host.trait_paths(&identity);
+        let Some(first) = paths.first() else {
+            return;
+        };
+        let names = header_names(&host, first);
         let mut headers = Vec::<(&ImplHeader, Option<&Dependency>)>::new();
         for (header, owner) in host.owned_impl_headers(identity) {
             if !headers.iter().any(|(kept, _)| *kept == header) {
@@ -73,10 +98,10 @@ impl Parser<'_> {
             }
         }
         for &(header, owner) in &headers {
-            let Some((self_type, parameters)) = self.exact_instance(header, owner, &given) else {
+            let Some(found) = self.exact_instance(header, owner, given, fixed) else {
                 continue;
             };
-            let Ty::Host { proof, .. } = &self_type else {
+            let Ty::Host { proof, .. } = &found.self_type else {
                 continue;
             };
             let owner_path = proof.definition.path();
@@ -91,7 +116,8 @@ impl Parser<'_> {
             }
             for member in host.members(&owner_path) {
                 if member.trait_of() == Some(&identity) {
-                    let types = member_parameters(member, &header.parameters, &parameters, None);
+                    let types =
+                        member_parameters(member, &header.parameters, &found.parameters, None);
                     self.bind_member(member, types, span);
                 }
             }
@@ -99,29 +125,38 @@ impl Parser<'_> {
             // its bound selects these, whether the impl overrides the member
             // or leaves it. Each is bound once, under the first of the
             // trait's paths that has it (`bind_member` keys it by its item).
-            let trait_parameters = header_arguments(&header_names(&host, &parsed), &given);
-            for written in host.trait_paths(&identity) {
+            let trait_parameters = header_arguments(&names, given);
+            for written in &paths {
                 for member in host.members(&format!("{written}::__rawr_self")) {
-                    let types = member_parameters(member, &[], &trait_parameters, Some(&self_type));
+                    let types =
+                        member_parameters(member, &[], &trait_parameters, Some(&found.self_type));
                     self.bind_member(member, types, span);
+                }
+            }
+            if bounds {
+                for (bounded, inner, arguments) in &found.bounds {
+                    self.bind_trait_instance(*inner, arguments, Some(bounded), span, false);
                 }
             }
         }
     }
 
-    /// `header` at the trait arguments `given`: its self type and its own
-    /// parameters, when `given` fixes each and its where-clause bounds hold.
+    /// `header` at the trait arguments `given`, for the self type `fixed`
+    /// when there is one: its self type, its own parameters and its
+    /// where-clause bounds at settled types, when `given` fixes each
+    /// parameter and the bounds hold.
     fn exact_instance(
         &mut self,
         header: &ImplHeader,
         owner: Option<&Dependency>,
         given: &[Ty],
-    ) -> Option<(Ty, BTreeMap<ImmutableString, Ty>)> {
+        fixed: Option<&Ty>,
+    ) -> Option<Exact> {
         if header.arguments.len() != given.len() {
             return None;
         }
         let checkpoint = self.inference.checkpoint();
-        let found = self.exact_at(header, owner, given);
+        let found = self.exact_at(header, owner, given, fixed);
         self.inference.rollback(checkpoint);
         found
     }
@@ -131,7 +166,8 @@ impl Parser<'_> {
         header: &ImplHeader,
         owner: Option<&Dependency>,
         given: &[Ty],
-    ) -> Option<(Ty, BTreeMap<ImmutableString, Ty>)> {
+        fixed: Option<&Ty>,
+    ) -> Option<Exact> {
         let mut parameters = BTreeMap::new();
         for name in &header.parameters {
             parameters.insert(name.clone(), self.inference.fresh());
@@ -154,6 +190,11 @@ impl Parser<'_> {
                 None,
             )
             .ok()?;
+        if let Some(fixed) = fixed
+            && !self.unify_type(&self_type, fixed)
+        {
+            return None;
+        }
         let self_type = self.inference.resolve(&self_type);
         if !settled(&self_type) {
             return None;
@@ -165,14 +206,26 @@ impl Parser<'_> {
                 settled(&ty).then_some((name, ty))
             })
             .collect::<Option<BTreeMap<_, _>>>()?;
-        let bounds = self.apply_impl(header, &self_type, given, owner)?;
-        bounds
-            .traits
-            .iter()
-            .all(|(bounded, identity, arguments)| {
-                self.bound_holds(bounded, *identity, arguments, owner, 0)
-            })
-            .then_some((self_type, parameters))
+        let held = self.apply_impl(header, &self_type, given, owner)?;
+        let mut bounds = Vec::with_capacity(held.traits.len());
+        for (bounded, identity, arguments) in &held.traits {
+            if !self.bound_holds(bounded, *identity, arguments, owner, 0) {
+                return None;
+            }
+            let bounded = self.inference.resolve(bounded);
+            let arguments = arguments
+                .iter()
+                .map(|argument| self.inference.resolve(argument))
+                .collect::<Vec<_>>();
+            if settled(&bounded) && arguments.iter().all(settled) {
+                bounds.push((bounded, *identity, arguments));
+            }
+        }
+        Some(Exact {
+            self_type,
+            parameters,
+            bounds,
+        })
     }
 
     /// Whether some impl of the crate trait `identity` at `arguments` fits
@@ -279,6 +332,15 @@ impl Parser<'_> {
             span,
         });
     }
+}
+
+/// An impl header at an instance (`exact_instance`).
+struct Exact {
+    self_type: Ty,
+    parameters: BTreeMap<ImmutableString, Ty>,
+    /// Its where-clause bounds at settled types: the bounded type, the
+    /// trait's identity and its arguments.
+    bounds: Vec<(Ty, [u8; 32], Vec<Ty>)>,
 }
 
 /// The trait header's parameter names at `parsed`.
