@@ -11406,10 +11406,7 @@ fn render_lent_fields(
     };
     writeln!(
         output,
-        "    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({ty:?}, move |rest| {{
         {reach}::<{ty}>(&lender, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
@@ -11968,10 +11965,7 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
     };
     writeln!(
         output,
-        "    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};{witness}
+        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;{witness}
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
         reach_lender_mut::<{path}>(&lender, &mut |input| {{
             let field_0 = &mut input.{};
@@ -12043,10 +12037,7 @@ fn render_field_lender(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request:
     .map_err(request::unwritable)?;
     writeln!(
         output,
-        "    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
         reach_lender::<{path}>(&lender, &mut |input| {{
             let field_0 = &input.{};
@@ -15160,6 +15151,19 @@ fn render_adapter_body(
                                     "`{container}` is invariant in its lifetime, so one made outside the view can't join those the view makes"
                                 )
                             )
+                        } else if lifetime_free
+                            && !container.contains(['\'', '&'])
+                            && !container
+                                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                                .any(|word| word == "_")
+                        {
+                            // A receiver native code lent where the method
+                            // takes it by value, as `limits.width(w)` of a
+                            // `limits: &Limits`, is a copy of it, as rustc
+                            // copies the `Copy` place autoderef reaches.
+                            format!(
+                                "match lent_copy!(arguments, 0, {container}) {{ Some(copy) => copy, None => take_native(arguments, 0) }}"
+                            )
                         } else {
                             "take_native(arguments, 0)".to_owned()
                         };
@@ -18146,10 +18150,7 @@ fn render_lender_slice(
     writeln!(
         output,
         "    let witness = output_witness().ok_or(Error::Unwitnessed)?;
-    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;
     let held = lender.clone();
     let lends = lends::<{container}>();
     __rawr_internal::place::slice::lent_by_holding::<{policy}>(
