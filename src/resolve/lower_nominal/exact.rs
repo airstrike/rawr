@@ -85,11 +85,27 @@ impl Parser<'_> {
         if self.collecting_instances {
             self.seed_demand(identity, &given);
         }
-        if !self.collecting_instances || self.demand.is_some() {
-            self.bind_trait_instance(identity, &given, None, span, true);
-        }
         if self.demand.is_some() {
-            self.bind_through_bound(item, requirements, identity, &given, span);
+            // A pass of demand reads binds each instance once.
+            let names = given
+                .iter()
+                .map(|ty| ImmutableString::from(ty.name(&self.models).to_string()))
+                .collect::<Box<[_]>>();
+            if self.demand_bound.insert((identity, None, names.clone())) {
+                self.bind_trait_instance(identity, &given, None, span, true);
+            }
+            let member = Some(ImmutableString::from(path.as_str()));
+            if !self
+                .demand_bound
+                .contains(&(identity, member.clone(), names.clone()))
+            {
+                let bound = self.bind_through_bound(item, requirements, identity, &given, span);
+                if bound {
+                    self.demand_bound.insert((identity, member, names));
+                }
+            }
+        } else if !self.collecting_instances {
+            self.bind_trait_instance(identity, &given, None, span, true);
         }
     }
 
@@ -100,6 +116,7 @@ impl Parser<'_> {
     /// with the call's other types, as rustc compiles it for each `W` the
     /// runner holds. The call gives what the trait's members alone don't,
     /// as the object `dyn Operation<()>` the `&mut dyn Operation` input is.
+    /// Whether the call was such a call.
     fn bind_through_bound(
         &mut self,
         item: &crate::host::item::Definition,
@@ -107,7 +124,7 @@ impl Parser<'_> {
         identity: [u8; 32],
         given: &[Ty],
         span: Span,
-    ) {
+    ) -> bool {
         use rawr_import::classify::representability::signature::argument_impl_name;
         let own = argument_impl_name(0);
         let mut receiver = None;
@@ -119,11 +136,11 @@ impl Parser<'_> {
             } else if settled(&ty) {
                 types.push((name.clone(), ty));
             } else {
-                return;
+                return false;
             }
         }
         if !matches!(receiver, Some(Ty::Param(..))) {
-            return;
+            return false;
         }
         let host = self.models.host.clone();
         let mut headers = Vec::<(&ImplHeader, Option<&Dependency>)>::new();
@@ -152,6 +169,7 @@ impl Parser<'_> {
             at.sort_by_key(|(name, _)| order.iter().position(|declared| declared == name));
             self.bind_member(item, Some(at), None, span);
         }
+        true
     }
 
     /// Each script impl of the crate trait `identity` from an opened

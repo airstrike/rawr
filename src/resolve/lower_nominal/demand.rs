@@ -35,6 +35,11 @@ pub(super) struct Seed {
     pub(super) fixed: Vec<(ImmutableString, Ty)>,
 }
 
+/// The exact native instances a pass of demand reads bound, each by its
+/// trait, the member a call through a bound names (none for the whole
+/// trait), and its types' names (`Parser::demand_bound`).
+pub(super) type Bound = BTreeSet<([u8; 32], Option<ImmutableString>, Box<[ImmutableString]>)>;
+
 /// The templates read for demand, each once.
 pub(super) type Done = crate::resolve::Demanded;
 
@@ -57,6 +62,7 @@ pub(super) fn read(
     // call are read whoever declares them.
     pending.retain(|(template, _)| opened(template));
     let mut demanded = Vec::new();
+    let mut bound = Bound::new();
     while let Some((template, fixed)) = pending.pop() {
         let names = fixed
             .iter()
@@ -70,7 +76,14 @@ pub(super) fn read(
         if !done.insert((template.clone(), names)) {
             continue;
         }
-        let Some(read) = read_one(engine, program, models, allocation, &template, &fixed) else {
+        let Some(read) = read_one(
+            engine,
+            program,
+            models,
+            allocation,
+            (&template, &fixed[..]),
+            &mut bound,
+        ) else {
             continue;
         };
         demanded.extend(read.uses);
@@ -306,8 +319,8 @@ fn read_one(
     program: &Program,
     models: &Models,
     allocation: &mut dyn crate::host::ImportAllocation,
-    template: &crate::item::Key,
-    fixed: &[(ImmutableString, Ty)],
+    (template, fixed): (&crate::item::Key, &[(ImmutableString, Ty)]),
+    bound: &mut Bound,
 ) -> Option<Read> {
     let substituted = fixed
         .iter()
@@ -342,10 +355,14 @@ fn read_one(
                 })
                 .collect::<BTreeMap<_, _>>();
         };
-    let finish = |parser: &mut Parser<'_>| Read {
-        uses: parser.demanded_uses(),
-        calls: take_instance_calls(parser),
-        impl_uses: take_impl_uses(parser),
+    let finish = |parser: &mut Parser<'_>, bound: &mut Bound| {
+        let read = Read {
+            uses: parser.demanded_uses(),
+            calls: take_instance_calls(parser),
+            impl_uses: take_impl_uses(parser),
+        };
+        *bound = std::mem::take(&mut parser.demand_bound);
+        read
     };
     if let Some(definition) = method_of(program, template) {
         let instance = definition.demand_instance(
@@ -380,10 +397,11 @@ fn read_one(
         )
         .ok()?;
         setup(&mut parser, definition.generics(), definition.parameters());
+        parser.demand_bound = std::mem::take(bound);
         let _ = parser
             .expect_output(Some(instance.output()))
             .and_then(|()| parser.parse_method_body(&instance));
-        return Some(finish(&mut parser));
+        return Some(finish(&mut parser, bound));
     }
     let (shell, definition) = program.items.iter().find_map(|shell| match &shell.kind {
         item::Kind::Function(definition) if shell.key.as_ref() == Some(template) => {
@@ -440,8 +458,9 @@ fn read_one(
         Some(context),
     );
     setup(&mut parser, &definition.generics, &definition.parameters);
+    parser.demand_bound = std::mem::take(bound);
     let _ = parser
         .expect_output(instance.output.as_ref())
         .and_then(|()| parser.parse_function_body(&instance));
-    Some(finish(&mut parser))
+    Some(finish(&mut parser, bound))
 }
