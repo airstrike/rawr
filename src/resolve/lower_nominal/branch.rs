@@ -2305,22 +2305,22 @@ impl<'a> Parser<'a> {
                     self.closure_hint.clone_from(&closure_hint);
                     self.closure_output.clone_from(&closure_output);
                 }
-                match self.peek() {
-                    Token::Let => self.parse_binding(true)?,
+                self.tolerant(|parser| match parser.peek() {
+                    Token::Let => parser.parse_binding(true),
                     // `const fn f()` is a nested `fn` item.
-                    Token::Const if matches!(self.peek_second(), Token::Fn) => {
-                        self.next();
-                        self.skip_nested_fn()?;
+                    Token::Const if matches!(parser.peek_second(), Token::Fn) => {
+                        parser.next();
+                        parser.skip_nested_fn()
                     }
-                    Token::Const => self.parse_binding(false)?,
-                    _ if self.static_ahead() => self.parse_block_statics()?,
-                    Token::Fn => self.skip_nested_fn()?,
-                    Token::Use => self.skip_nested_use()?,
-                    _ if self.macro_definition_ahead() => self.parse_local_macro()?,
-                    _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
-                    _ if self.nested_item_ahead() => self.skip_nested_item()?,
-                    _ => self.parse_tail_expecting(expected.as_ref())?,
-                }
+                    Token::Const => parser.parse_binding(false),
+                    _ if parser.static_ahead() => parser.parse_block_statics(),
+                    Token::Fn => parser.skip_nested_fn(),
+                    Token::Use => parser.skip_nested_use(),
+                    _ if parser.macro_definition_ahead() => parser.parse_local_macro(),
+                    _ if parser.macro_statement_ahead() => parser.parse_macro_statement(),
+                    _ if parser.nested_item_ahead() => parser.skip_nested_item(),
+                    _ => parser.parse_tail_expecting(expected.as_ref()),
+                })?;
             }
             // A block's own macros and statics end with it.
             self.local_macros.truncate(outer_macros);

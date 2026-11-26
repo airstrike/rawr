@@ -161,6 +161,13 @@ impl Inference {
         self.projections.truncate(checkpoint.projections);
     }
 
+    /// [`Inference::rollback`] to `checkpoint` after a read that failed
+    /// between checkpoints of its own and their ends: those end with it.
+    pub(super) fn unwind(&mut self, checkpoint: Checkpoint) {
+        self.depth = checkpoint.depth + 1;
+        self.rollback(checkpoint);
+    }
+
     pub(super) fn commit(&mut self, checkpoint: Checkpoint) {
         debug_assert_eq!(self.depth, checkpoint.depth + 1);
         self.depth = checkpoint.depth;

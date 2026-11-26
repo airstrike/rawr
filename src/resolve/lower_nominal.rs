@@ -913,6 +913,9 @@ struct Parser<'a> {
     /// the template's instances (`selections`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     selecting: bool,
+    /// Whether such a read dropped a statement it couldn't lower
+    /// (`tolerant`): its body is read no further than its statements.
+    dropped: bool,
     /// The crate trait each call of the generic read on a parameter
     /// selects through the parameter's bound, by the method's position:
     /// `self.content.size()` of `W: Widget<..>` is `Widget`'s.
@@ -1300,6 +1303,7 @@ impl<'a> Parser<'a> {
             pending_stand_ins: Vec::new(),
             template_read: false,
             selecting: false,
+            dropped: false,
             selections: Vec::new(),
             generic_crate_bounds: BTreeMap::new(),
             reaches_host: false,

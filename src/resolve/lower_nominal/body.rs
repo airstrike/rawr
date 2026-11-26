@@ -184,30 +184,31 @@ impl<'a> Parser<'a> {
         self.open_formatter(definition.body());
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
-            match self.peek() {
-                Token::Let => self.parse_binding(true)?,
+            self.tolerant(|parser| match parser.peek() {
+                Token::Let => parser.parse_binding(true),
                 // `const fn f()` is a nested `fn` item.
-                Token::Const if matches!(self.peek_second(), Token::Fn) => {
-                    self.next();
-                    self.skip_nested_fn()?;
+                Token::Const if matches!(parser.peek_second(), Token::Fn) => {
+                    parser.next();
+                    parser.skip_nested_fn()
                 }
-                Token::Const => self.parse_binding(false)?,
-                _ if self.static_ahead() => self.parse_block_statics()?,
-                Token::Fn => self.skip_nested_fn()?,
-                Token::Use => self.skip_nested_use()?,
-                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
-                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
-                _ if self.nested_item_ahead() => self.skip_nested_item()?,
+                Token::Const => parser.parse_binding(false),
+                _ if parser.static_ahead() => parser.parse_block_statics(),
+                Token::Fn => parser.skip_nested_fn(),
+                Token::Use => parser.skip_nested_use(),
+                _ if parser.macro_definition_ahead() => parser.parse_local_macro(),
+                _ if parser.macro_statement_ahead() => parser.parse_macro_statement(),
+                _ if parser.nested_item_ahead() => parser.skip_nested_item(),
                 // The method's output reaches its tail, as a function's
                 // does: each arm of a tail `match` coerces to it.
                 _ => {
-                    let expected = self.tail_expected(Some(definition.output()));
-                    self.parse_tail_expecting(Some(&expected))?;
+                    let expected = parser.tail_expected(Some(definition.output()));
+                    parser.parse_tail_expecting(Some(&expected))
                 }
-            }
+            })?;
         }
 
         self.expect(Token::RightBrace, "'}' to close a method body")?;
+        self.read_whole()?;
         if !matches!(self.peek(), Token::EOF) {
             return Err(self.unsupported("tokens after a method body"));
         }
@@ -883,29 +884,29 @@ impl<'a> Parser<'a> {
         self.open_formatter(definition.body.span);
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
-            match self.peek() {
-                Token::Let => self.parse_binding(true)?,
+            self.tolerant(|parser| match parser.peek() {
+                Token::Let => parser.parse_binding(true),
                 // `const fn f()` is a nested `fn` item.
-                Token::Const if matches!(self.peek_second(), Token::Fn) => {
-                    self.next();
-                    self.skip_nested_fn()?;
+                Token::Const if matches!(parser.peek_second(), Token::Fn) => {
+                    parser.next();
+                    parser.skip_nested_fn()
                 }
-                Token::Const => self.parse_binding(false)?,
-                _ if self.static_ahead() => self.parse_block_statics()?,
-                Token::Fn => self.skip_nested_fn()?,
-                Token::Use => self.skip_nested_use()?,
-                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
-                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
-                _ if self.nested_item_ahead() => self.skip_nested_item()?,
+                Token::Const => parser.parse_binding(false),
+                _ if parser.static_ahead() => parser.parse_block_statics(),
+                Token::Fn => parser.skip_nested_fn(),
+                Token::Use => parser.skip_nested_use(),
+                _ if parser.macro_definition_ahead() => parser.parse_local_macro(),
+                _ if parser.macro_statement_ahead() => parser.parse_macro_statement(),
+                _ if parser.nested_item_ahead() => parser.skip_nested_item(),
                 _ => {
-                    let expected = self.tail_expected(definition.output.as_ref());
-                    self.parse_tail_expecting(Some(&expected))?;
+                    let expected = parser.tail_expected(definition.output.as_ref());
+                    parser.parse_tail_expecting(Some(&expected))
                 }
-            }
+            })?;
         }
 
         self.expect(Token::RightBrace, "'}' to close a function body")?;
-        Ok(())
+        self.read_whole()
     }
 
     /// rustc's error for the inference variable `unknown`, which the use at
