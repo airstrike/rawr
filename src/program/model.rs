@@ -1176,6 +1176,13 @@ impl Model {
             if names_parameter(expected) && parameters.is_empty() {
                 continue;
             }
+            // Nor does it carry what a projection of a parameter is at those
+            // arguments, as `class: Theme::Class<'a>` of iced's `Container`
+            // at iced's `Theme`: the impl the arguments select gives it, and
+            // the member holds that value.
+            if names_projection(expected) {
+                continue;
+            }
             let ty =
                 crate::host::runtime::type_ref::Type::from_resolved_in(expected, self, parameters)?;
             ty.validate(member, self, registry).map_err(|source| {
@@ -1187,6 +1194,23 @@ impl Model {
             })?;
         }
         Ok(())
+    }
+}
+
+/// Whether `ty` names a projection anywhere, as `Theme::Class<'a>`.
+fn names_projection(ty: &crate::resolve::type_ref::Type) -> bool {
+    use crate::resolve::type_ref::{Argument, Target, Type};
+    match ty {
+        Type::Unit(_) => false,
+        Type::Tuple { members, .. } => members.iter().any(names_projection),
+        Type::Reference { target, .. } => names_projection(target),
+        Type::Path(path) => {
+            matches!(path.target, Target::Projection(..))
+                || path.arguments.iter().any(|argument| match argument {
+                    Argument::Type(ty) => names_projection(ty),
+                    Argument::Lifetime(_) => false,
+                })
+        }
     }
 }
 

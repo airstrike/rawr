@@ -124,6 +124,38 @@ impl<'a> Parser<'a> {
                         && self.trait_known_as(&candidate.path) == known
                 })
             }
+            // Rawr's string, whose trait impl for `&str` leaves it, as
+            // iced's `impl Widget<..> for &str` leaves `overlay`.
+            ty if ty.is_text() => {
+                let host = self.models.host.clone();
+                host.owned_impl_headers(header.identity)
+                    .filter(|(implementation, _)| {
+                        implementation
+                            .defaulted
+                            .iter()
+                            .any(|name| name.as_str() == member)
+                    })
+                    .any(|(implementation, declaring)| {
+                        let checkpoint = self.inference.checkpoint();
+                        let mut parameters = implementation
+                            .parameters
+                            .iter()
+                            .map(|name| (name.clone(), self.inference.fresh()))
+                            .collect();
+                        let text = self
+                            .instantiate_host_type(
+                                &implementation.self_type,
+                                &mut parameters,
+                                "impl",
+                                Span::NONE,
+                                declaring,
+                                None,
+                            )
+                            .is_ok_and(|self_type| self.inference.resolve(&self_type).is_text());
+                        self.inference.rollback(checkpoint);
+                        text
+                    })
+            }
             _ => false,
         }
     }

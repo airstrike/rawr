@@ -319,6 +319,37 @@ impl<'a> Parser<'a> {
             }
         }
         self.impl_uses.push((chosen.index, types, full));
+        // The runner's impl at this instance needs the trait's supertraits'
+        // at it too, as rustc proves `Container<W>: Meta` for iced's `impl
+        // Widget for Container<W>`: each is selected for the same type.
+        let supertraits = self
+            .models
+            .host
+            .trait_paths(&identity)
+            .iter()
+            .find_map(|path| self.models.host.trait_header(path)?.object.clone())
+            .unwrap_or_default();
+        for (_, supertrait) in supertraits.iter() {
+            let Some(header) = self
+                .models
+                .host
+                .trait_paths(supertrait)
+                .iter()
+                .find_map(|path| self.models.host.trait_header(path).cloned())
+            else {
+                continue;
+            };
+            let arguments = header
+                .parameters
+                .iter()
+                .map(|_| self.inference.fresh())
+                .collect::<Vec<_>>();
+            let checkpoint = self.inference.checkpoint();
+            match self.select_script_impl(ty, header.identity, &arguments) {
+                Some(()) => self.inference.commit(checkpoint),
+                None => self.inference.rollback(checkpoint),
+            }
+        }
         Some(())
     }
 

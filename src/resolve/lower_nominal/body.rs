@@ -434,6 +434,39 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The crate trait the body's param-env bounds Rawr's string by that
+    /// gives it `member`, by the path the bound writes it: the trait's impl
+    /// for `&str` has the member (`surface::text`), or leaves a provided
+    /// one to the trait, as `self.content.overlay(..)` in iced's
+    /// `Container` at `W = &str` selects `Widget`'s, which rustc's probe
+    /// reaches through the bound once `str` has no inherent `overlay`.
+    /// `None` unless exactly one does.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn text_bound_trait(&mut self, member: &str) -> Option<ImmutableString> {
+        let bounds = self.param_env()?;
+        let mut found = bounds
+            .iter()
+            .filter(|(bounded, _)| Ty::from_resolved(bounded).is_text())
+            .filter_map(|(_, bound)| bound.opaque_trait())
+            .filter(|trait_path| {
+                let text = rawr_import::surface::text::path(trait_path, member);
+                self.models.host_items(&text).is_some()
+                    || self.models.functions_by_key.values().any(|function| {
+                        let name = function.definition.name.text.as_str();
+                        trait_path.rsplit("::").next().is_some_and(|last| {
+                            name == crate::package::crate_source::provided(last, member)
+                        })
+                    })
+            })
+            .map(ImmutableString::from)
+            .collect::<Vec<_>>();
+        found.dedup();
+        match <[_; 1]>::try_from(found) {
+            Ok([trait_path]) => Some(trait_path),
+            Err(_) => None,
+        }
+    }
+
     /// The identities of the crate traits the body's param-env bounds
     /// `ty` by.
     #[cfg(feature = "rust-import")]

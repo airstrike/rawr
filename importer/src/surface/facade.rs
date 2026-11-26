@@ -20,7 +20,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 86;
+const SCHEMA: u32 = 87;
 
 /// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
 /// outcome is of.

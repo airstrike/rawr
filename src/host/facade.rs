@@ -192,7 +192,7 @@ impl TypeAlias {
 /// a program's function or closure fills it as, through the crate's impl
 /// of it for every callable (#1981), and, when the runner has one
 /// stand-in for it that a program's value of any type fills (#2698), the
-/// paths of the supertraits the stand-in implements too.
+/// path and identity of each supertrait the stand-in implements too.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TraitHeader {
     pub(crate) path: host::path::Path,
@@ -200,25 +200,34 @@ pub(crate) struct TraitHeader {
     pub(crate) parameters: Box<[ImmutableString]>,
     pub(crate) defaults: Box<[Option<host::type_ref::Type>]>,
     pub(crate) call: Option<host::type_ref::Type>,
-    pub(crate) object: Option<Box<[ImmutableString]>>,
+    pub(crate) object: Option<Supertraits>,
     /// The names of its associated types.
     pub(crate) associated: Box<[ImmutableString]>,
 }
 
+/// The supertraits a trait's stand-in implements too, each by its path and
+/// identity (`TraitHeader::object`).
+pub(crate) type Supertraits = Box<[(ImmutableString, [u8; 32])]>;
+
 /// What a trait's header says of the runner's one stand-in for it
-/// (`TraitHeader::object`): the paths of its supertraits, when its
-/// classified `outputs` hold the trait's vtable.
+/// (`TraitHeader::object`): the path and identity of each of its
+/// supertraits, when its classified `outputs` hold the trait's vtable.
 #[cfg(feature = "rust-import")]
 pub(crate) fn stand_in(
     outputs: Option<&rawr_import::classify::representability::signature::Outputs>,
-) -> Option<Box<[ImmutableString]>> {
+) -> Option<Supertraits> {
     let outputs = outputs?;
     outputs.object()?;
     Some(
         outputs
             .supertraits()
             .iter()
-            .map(|supertrait| ImmutableString::from(supertrait.path()))
+            .map(|supertrait| {
+                (
+                    ImmutableString::from(supertrait.path()),
+                    *supertrait.identity(),
+                )
+            })
             .collect(),
     )
 }
@@ -856,7 +865,7 @@ impl Builder {
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
         call: Option<host::type_ref::Type>,
-        object: Option<Box<[ImmutableString]>>,
+        object: Option<Supertraits>,
         associated: Box<[ImmutableString]>,
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);

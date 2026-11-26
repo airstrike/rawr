@@ -10782,12 +10782,8 @@ fn witness_mode(plan: &Plan) -> u8 {
         | Operation::Function { .. }
         | Operation::Constant { .. } => 1,
         // A trait's method on Rawr's string, which Rawr calls as a function
-        // (`surface::text`).
-        Operation::Method {
-            receiver: Receiver::Owned,
-            signature,
-            ..
-        } if str_member(signature) => 1,
+        // (`surface::text`), whether it takes the `&str` or borrows it.
+        Operation::Method { signature, .. } if str_member(signature) => 1,
         Operation::StructField { field, .. } if !shared_field(field.ty()) => 2,
         Operation::Method {
             receiver: Receiver::Owned,
@@ -17239,12 +17235,8 @@ fn render_scoped_receiver(
         )
     };
     // A native call made on a value a region holds lends the arena to the
-    // program's code it calls back, as a call on an arena value does.
-    let call = if call.starts_with("lend(") {
-        call
-    } else {
-        format!("lend(arguments.arena, || {call})")
-    };
+    // program's code it calls back, as a call on an arena value does: the
+    // call above already does, whether or not its output is annotated.
     // A shared borrow of the receiver claims its region shared, and a
     // `&mut` one takes its slot alone, so a call back into the program
     // reaches the region's other values meanwhile, as iced's `Column`
@@ -23531,7 +23523,7 @@ fn render_give(
         // one that leaves an argument to rustc is held as any native value.
         convert::Type::Nominal { .. }
             if IN_REGION.get()
-                && carries_lifetime(ty)
+                && (carries_lifetime(ty) || holds_borrowing_script(ty))
                 && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
         {
             writeln!(
@@ -23897,7 +23889,7 @@ fn render_from_dynamic(
         // the program's impl gave (#2698).
         convert::Type::Nominal { .. }
             if IN_REGION.get()
-                && carries_lifetime(ty)
+                && (carries_lifetime(ty) || holds_borrowing_script(ty))
                 && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
         {
             write!(
@@ -24257,7 +24249,7 @@ fn render_to_dynamic(
         // argument to rustc is held as any native value.
         convert::Type::Nominal { .. }
             if IN_REGION.get()
-                && carries_lifetime(ty)
+                && (carries_lifetime(ty) || holds_borrowing_script(ty))
                 && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
         {
             write!(
@@ -27179,6 +27171,18 @@ fn spelled_scoped(ty: &convert::Type, opaque: &mut Option<OpaqueSpelling<'_>>) -
         {
             Some(format!("&'x mut {}", borrowed_target(ty)?))
         }
+        // A program's value of a crate-source type at a borrow, as iced's
+        // `Container<'a, &'a str>`: its proxy, written as `concrete_type`
+        // writes it, at the borrow's lifetime.
+        convert::Type::Script { arguments, .. } if arguments.iter().any(carries_lifetime) => {
+            let named = concrete_type(ty)?;
+            let (named, _) = named.split_once('<')?;
+            let arguments = arguments
+                .iter()
+                .map(|ty| spelled_scoped(ty, opaque))
+                .collect::<Option<Vec<_>>>()?;
+            Some(format!("{named}<{}>", arguments.join(", ")))
+        }
         ty => concrete_type(ty),
     }
 }
@@ -27321,6 +27325,18 @@ fn carries_lifetime(ty: &convert::Type) -> bool {
     }
 }
 
+/// Whether `ty` holds a program's value of a crate-source type at a
+/// borrow, as iced's `Row<Container<'a, &'a str>>` of `row(..)` over
+/// `container("")` does: the runner writes the value's proxy at the
+/// borrow's lifetime, so a region holds what holds it.
+fn holds_borrowing_script(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Script { arguments, .. } => arguments.iter().any(carries_lifetime),
+        convert::Type::Nominal { arguments, .. } => arguments.iter().any(holds_borrowing_script),
+        _ => false,
+    }
+}
+
 /// The name of the scope family of the imported type spelled `text` at
 /// `'x`, whose own path and lifetimes are `path` and `lifetimes`. The
 /// family is declared in `rawr_families`. A type that leaves an argument
@@ -27410,7 +27426,7 @@ fn family_of(ty: &convert::Type) -> Option<family::Family> {
     else {
         return None;
     };
-    if !carries_lifetime(ty) {
+    if !carries_lifetime(ty) && !holds_borrowing_script(ty) {
         return None;
     }
     if is_opaque(definition) {
@@ -28189,6 +28205,25 @@ fn render_impl(
     }
     let mut items = String::new();
     for function in script.functions() {
+        // The inputs a method's output keeps borrowed at its receiver's
+        // lifetime are the trait's, as its stand-in's method has them: an
+        // impl of iced's `Widget` for a program's type runs its `overlay` in
+        // a lending region as the stand-in's does (#2698).
+        let kept_function;
+        let function = match revealed
+            .as_ref()
+            .and_then(|revealed| revealed.outputs.object())
+            .and_then(|methods| {
+                methods
+                    .iter()
+                    .find(|method| method.name() == function.name())
+            }) {
+            Some(method) if function.kept().is_empty() && !method.kept().is_empty() => {
+                kept_function = function.clone().with_kept(method.kept().into());
+                &kept_function
+            }
+            _ => function,
+        };
         let frame = if function.generics().is_empty() {
             None
         } else {

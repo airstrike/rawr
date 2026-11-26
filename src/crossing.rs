@@ -136,6 +136,26 @@ impl Proxy {
         self.value.clone()
     }
 
+    /// A call of the impl's method whose output borrows the value `&'b
+    /// mut`, and each `&'b mut` input native code lends it, past the call,
+    /// as [`Object::lending`] makes one for a trait's stand-in: the runner's
+    /// impl of iced's `Widget` for a program's type gives its `overlay`'s
+    /// elements so (#2698).
+    #[cfg(feature = "rust-import")]
+    pub fn lending<'b, R>(
+        &'b mut self,
+        call: impl FnOnce(&mut Self, crate::scope::Nonce) -> Dynamic,
+        give: impl FnOnce(&mut crate::scope::Region<'b>, Dynamic) -> R,
+    ) -> R {
+        let mut region = crate::scope::Region::<'b>::lending();
+        let nonce = region.nonce();
+        let value = crate::scope::open_anchored(&mut region, || call(self, nonce));
+        let output = give(&mut region, value);
+        let leases = region.take_leases();
+        self.pins.lease(leases, region);
+        output
+    }
+
     /// Store what a script function that took the value `&mut` left in
     /// its place: the value it changed in place through the lent handle,
     /// or one it assigned whole.

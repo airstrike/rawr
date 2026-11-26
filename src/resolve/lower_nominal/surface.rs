@@ -57,6 +57,25 @@ pub(super) fn impl_surface_type(
         } if lends_object(&Inference::default(), models, target) => {
             instance_surface_type(&Inference::default(), models, target)?
         }
+        // `&mut dyn Trait` of a crate's trait is the object's mutable
+        // pointer, as native code lends a script impl's `operate(.., operation:
+        // &mut dyn Operation)` one for the call, as `imported_surface_type`
+        // reads it.
+        Ty::Reference {
+            mutable: true,
+            target,
+        } if lends_object(&Inference::default(), models, target) => {
+            match instance_surface_type(&Inference::default(), models, target)? {
+                Type::Object(object) => Type::Object(Box::new(
+                    object
+                        .behind(rawr_import::classify::representability::object::Pointer::Mutable),
+                )),
+                other => Type::Borrowed {
+                    mutable: true,
+                    ty: Box::new(other),
+                },
+            }
+        }
         Ty::Reference { mutable, target } => Type::Borrowed {
             mutable: *mutable,
             ty: Box::new(impl_surface_type(models, target, generics)?),

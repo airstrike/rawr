@@ -629,10 +629,15 @@ impl Parser<'_> {
         // A `$crate::name!` path through its crate's hidden segment is
         // the macro rustc names from the dependency's root, as the facade
         // holds a crate's macros (`Registry::hidden_macro`).
+        // Its literals as the program writes them, as rustc's expansion
+        // reads them: a macro may stringify one.
+        let key = self.models.sources.key(self.models.context.index());
+        let source = self.models.sources.resolve(key).ok();
+        let input = token_text_in(&tokens, source.as_ref().map(|source| source.text()));
         let call = call::Call {
             path: crate::host::path::visible(path),
             delimiter,
-            input: token_text(&tokens),
+            input,
             place: match place {
                 Place::Expression => call::Place::Expression,
                 Place::Statement => call::Place::Statements,
@@ -674,11 +679,16 @@ impl Parser<'_> {
         // items among them are declared.
         let expansion = match self.models.laid_out(at) {
             Some(laid_out) => laid_out.to_vec(),
-            None => lex_rust(&crate::Engine::new_raw(), text)
-                .into_iter()
-                .filter(|(token, _)| *token != Token::EOF)
-                .map(|(token, _)| (token, at))
-                .collect(),
+            None => {
+                let lexed = lex_rust(&crate::Engine::new_raw(), text)
+                    .into_iter()
+                    .filter(|(token, _)| *token != Token::EOF)
+                    .collect();
+                super::tokens::stringified(text, lexed)
+                    .into_iter()
+                    .map(|(token, _)| (token, at))
+                    .collect()
+            }
         };
         self.splice_expanded(expansion, at, end, place, remaining);
         Ok(None)

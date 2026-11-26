@@ -227,7 +227,7 @@ impl Parser<'_> {
                     other == trait_name
                         || supertraits
                             .iter()
-                            .any(|supertrait| within_crate(supertrait) == within_crate(other))
+                            .any(|(supertrait, _)| within_crate(supertrait) == within_crate(other))
                 })
                 .then(|| (*relation, trait_name.clone()))
         })

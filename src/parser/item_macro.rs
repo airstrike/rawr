@@ -172,8 +172,9 @@ pub(super) fn lay_out(
     }
     let hygiene = with(|layout| (layout.depth < DEPTH).then_some(HYGIENE + layout.lines + 1))??;
     let expansion = rules.expand(&input, krate, *at, *end, hygiene).ok()?;
+    let rendered = with(|layout| render(&expansion, &layout.text))?;
     let (text, mark) = place(
-        &render(&expansion),
+        &rendered,
         Span::new(*at, past(*end, last)),
         rules.name(),
         braced_statements,
@@ -308,8 +309,9 @@ fn past(mut position: Position, token: &Token) -> Position {
 }
 
 /// The text of `tokens`, as the lexer reads them back: a line ends after
-/// each `;`, `{`, `}` and comment, which keeps each line short.
-fn render(tokens: &[(Token, Position)]) -> String {
+/// each `;`, `{`, `}` and comment, which keeps each line short. A literal
+/// a call passed in is as `source`, the text laid out so far, writes it.
+fn render(tokens: &[(Token, Position)], source: &str) -> String {
     let mut text = String::new();
     let mut line = Vec::new();
     for (token, position) in tokens {
@@ -318,12 +320,18 @@ fn render(tokens: &[(Token, Position)]) -> String {
             token,
             Token::SemiColon | Token::LeftBrace | Token::RightBrace | Token::Comment(_)
         ) {
-            text.push_str(&crate::resolve::lower_nominal::token_text(&line));
+            text.push_str(&crate::resolve::lower_nominal::token_text_in(
+                &line,
+                Some(source),
+            ));
             text.push('\n');
             line.clear();
         }
     }
-    text.push_str(&crate::resolve::lower_nominal::token_text(&line));
+    text.push_str(&crate::resolve::lower_nominal::token_text_in(
+        &line,
+        Some(source),
+    ));
     text
 }
 

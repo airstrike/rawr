@@ -176,6 +176,8 @@ use crate::{
     Position, RawrResult, Scope, Shared, Span, INT,
 };
 use builtin_method::default_value;
+#[cfg(feature = "rust-import")]
+use builtin_method::is_string_method;
 pub(crate) use builtin_method::slice_window;
 use builtin_method::{
     char_method, int_method, primitive_size, slice_value, str_change, str_method, str_pieces,
@@ -320,7 +322,7 @@ use tokens::{
     split_arguments, split_first_argument, standard_function, stringify_tokens, template_tokens,
     text_end, without_borrow, without_reference, without_references, Continuation,
 };
-pub(crate) use tokens::{lex_rust, token_text};
+pub(crate) use tokens::{lex_rust, token_text, token_text_in};
 // A hover reads where each token of a line ends.
 #[cfg(feature = "debugging")]
 pub(crate) use tokens::token_length;

@@ -493,7 +493,7 @@ impl Parser<'_> {
             .and_then(|path| self.models.host.trait_header(&path))
             .and_then(|header| header.object.clone())
             .unwrap_or_default();
-        for (position, supertrait) in supertraits.iter().enumerate() {
+        for (position, (supertrait, _)) in supertraits.iter().enumerate() {
             let last = supertrait.rsplit("::").next().unwrap_or_default();
             let by_name =
                 self.impl_functions(owner, |written| written.rsplit("::").next() == Some(last));

@@ -4698,7 +4698,9 @@ fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
 /// from source at `S = &str` and calls the string's `label(&mut self)` and
 /// `width(&self)` at the program's `Note`, which its bound gives, as
 /// iced's `Container` over `container("")` calls the string's
-/// `Widget::tag`. The output is `cargo run`'s.
+/// `Widget::tag`. Native code's ask for what it lifts runs the provided
+/// `lifted` the impl leaves to the trait from the trait's source, as
+/// iced's `overlay` of a string does. The output is `cargo run`'s.
 #[test]
 fn a_crate_generic_impl_for_str_runs_its_borrowing_methods_at_the_programs_string() {
     let root = lane(Some("tinted_texted.rs"));
@@ -4724,7 +4726,10 @@ fn a_crate_generic_impl_for_str_runs_its_borrowing_methods_at_the_programs_strin
     cargo.args(["run", "-q"]);
     let (rawr, cargo) = (output(rawr), output(cargo));
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "(\"['leaf']\", 6)\n");
+    assert_eq!(
+        rawr,
+        "(\"['leaf']\", 6)\n(0, [\"0:tallied\", \"0:'leaf'\"])\n"
+    );
 }
 
 /// Native code lends a program's impl a node it owns, as iced's

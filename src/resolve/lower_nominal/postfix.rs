@@ -1858,6 +1858,17 @@ impl<'a> Parser<'a> {
                 value = self.parse_text_member(value, &trait_path, member, member_span)?;
                 continue;
             }
+            // A crate trait's member the body's bound gives the string, where
+            // `str` has no method of the name.
+            #[cfg(feature = "rust-import")]
+            if (builtin.is_text()
+                || matches!(&builtin, Ty::Reference { target, .. } if target.is_text()))
+                && !is_string_method(&member)
+                && let Some(trait_path) = self.text_bound_trait(&member)
+            {
+                value = self.parse_text_member(value, &trait_path, member, member_span)?;
+                continue;
+            }
             if builtin.is_text()
                 || matches!(&builtin, Ty::Reference { target, .. }
                     if target.is_text() || **target == Ty::UnsizedStr)

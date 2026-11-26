@@ -400,6 +400,14 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let path = rawr_import::surface::text::path(trait_path, &member);
         let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            // A provided method the impl leaves to the trait whose signature
+            // can't cross runs from the trait's source, as iced's `overlay`
+            // of `impl Widget<..> for &str` does (`provided_body_call`).
+            let receiver = match self.provided_body_call(receiver, &member, member_span)? {
+                Ok(value) => return Ok(value),
+                Err(receiver) => receiver,
+            };
+            drop(receiver);
             let error = Error::UnknownMember {
                 owner: trait_path.clone(),
                 member,
@@ -2365,6 +2373,19 @@ pub(super) fn vec_method(
 }
 
 /// The `String` methods `StrChange` runs in place, by code.
+/// Whether `member` is a method Rawr's string has, as `str` or `String`
+/// does (`parse_string_method`).
+#[cfg(feature = "rust-import")]
+pub(super) fn is_string_method(member: &str) -> bool {
+    STR_CHANGES.contains(&member)
+        || STR_PIECES.contains(&member)
+        || STR_METHODS.iter().any(|(name, ..)| *name == member)
+        || matches!(
+            member,
+            "parse" | "as_mut_str" | "drain" | "replace_range" | "to_string" | "clone"
+        )
+}
+
 pub(super) const STR_CHANGES: &[&str] = &[
     "pop",
     "clear",
