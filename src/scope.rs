@@ -690,6 +690,7 @@ pub fn with_slot<F: Regional, R>(
     f: impl for<'x> FnOnce(&mut F::Of<'x>) -> R,
 ) -> Result<R, Error> {
     let place = with::<RegionF, _>(scoped.nonce, |region| {
+        region.settle();
         region.slot_of::<F>(scoped)?;
         let slot = region.slots[scoped.index as usize]
             .take()
@@ -838,6 +839,10 @@ pub struct Region<'r> {
     /// they drop first.
     holds: RefCell<Vec<Hold>>,
     slots: Vec<Option<Box<dyn Erased<'r> + 'r>>>,
+    /// Slots given back while the region was claimed shared, each by its
+    /// index ([`SlotLease`]): its value is back where it was, and the
+    /// region's next `&mut` reach puts it in its slot ([`Region::settle`]).
+    returned: RefCell<Vec<(u32, Box<dyn Erased<'r> + 'r>)>>,
     /// Where script strings a call in the region borrows live for `'r`,
     /// in a region a slot opens at the lifetime of a script value it lent
     /// (D594).
@@ -871,16 +876,29 @@ struct SlotLease<F: Regional> {
 impl<F: Regional> Drop for SlotLease<F> {
     fn drop(&mut self) {
         let place = self.place;
-        let index = self.index as usize;
-        let _ = with::<RegionF, _>(self.nonce, |region| {
+        let index = self.index;
+        let back = with::<RegionF, _>(self.nonce, |region| {
+            region.settle();
             // SAFETY: `Box::into_raw` made the place of a slot of this
             // region at its lifetime (`Region::lease_scoped`), and it is
             // turned back once, here.
             let slot: Box<Slot<'_, F>> = unsafe { Box::from_raw(place.cast()) };
-            if let Some(empty) = region.slots.get_mut(index) {
+            if let Some(empty) = region.slots.get_mut(index as usize) {
                 *empty = Some(slot);
             }
         });
+        // A region a crate call claims shared, as a view's region is while
+        // native code asks a widget that calls back into the program, takes
+        // the slot back beside its others: the program code that runs
+        // meanwhile reaches the value where it was, as rustc's borrow of it
+        // has ended.
+        if back == Err(Error::Busy) {
+            let _ = with_ref::<RegionF, _>(self.nonce, |region| {
+                // SAFETY: as above.
+                let slot: Box<Slot<'_, F>> = unsafe { Box::from_raw(place.cast()) };
+                region.returned.borrow_mut().push((index, slot));
+            });
+        }
     }
 }
 
@@ -954,6 +972,7 @@ impl<'r> Region<'r> {
             nonce: fresh(),
             holds: RefCell::new(Vec::new()),
             slots: Vec::new(),
+            returned: RefCell::new(Vec::new()),
             pins: None,
             lending: false,
             leases: RefCell::new(Vec::new()),
@@ -1086,6 +1105,7 @@ impl<'r> Region<'r> {
             return Err(Error::Mismatch);
         }
         let taken = with::<RegionF, _>(scoped.nonce, |region| {
+            region.settle();
             region.slot_of::<F>(scoped)?;
             let slot = region.slots[scoped.index as usize]
                 .take()
@@ -1157,7 +1177,7 @@ impl<'r> Region<'r> {
         let Some(pins) = self.pins else {
             return;
         };
-        if self.slots.iter().all(Option::is_none) {
+        if self.holds_nothing() {
             return;
         }
         let kept = KeptRegion::new(self, site);
@@ -1277,11 +1297,36 @@ impl<'r> Region<'r> {
 
     fn slot(&self, index: u32) -> Result<&(dyn Erased<'r> + 'r), Error> {
         self.unhold(index, None);
-        self.slots
-            .get(index as usize)
-            .ok_or(Error::Mismatch)?
-            .as_deref()
-            .ok_or(Error::Moved)
+        let slot = self.slots.get(index as usize).ok_or(Error::Mismatch)?;
+        if let Some(slot) = slot.as_deref() {
+            return Ok(slot);
+        }
+        let returned = self.returned.borrow();
+        let slot = returned
+            .iter()
+            .find(|(at, _)| *at == index)
+            .map(|(_, slot)| std::ptr::from_ref::<dyn Erased<'r> + 'r>(&**slot))
+            .ok_or(Error::Moved)?;
+        // SAFETY: the box stays where it is till `settle` moves it into its
+        // slot, which takes `&mut self`, so not while the reference, which
+        // lives no longer than `&self`, does. A push onto the list moves
+        // the box's pointer, not what it points to.
+        Ok(unsafe { &*slot })
+    }
+
+    /// Put each slot given back while the region was claimed shared
+    /// ([`Region::returned`]) in its place.
+    fn settle(&mut self) {
+        for (index, slot) in self.returned.get_mut().drain(..) {
+            if let Some(empty) = self.slots.get_mut(index as usize) {
+                *empty = Some(slot);
+            }
+        }
+    }
+
+    /// Whether the region holds no value, in its slots or given back.
+    fn holds_nothing(&self) -> bool {
+        self.slots.iter().all(Option::is_none) && self.returned.borrow().is_empty()
     }
 
     fn slot_of<F: Regional>(&self, handle: Scoped) -> Result<&(dyn Erased<'r> + 'r), Error> {
@@ -1307,6 +1352,7 @@ impl<'r> Region<'r> {
 
     /// The value `handle` names, mutably, as the family `F`.
     pub fn get_mut<F: Regional>(&mut self, handle: Scoped) -> Result<&mut F::Of<'r>, Error> {
+        self.settle();
         self.slot_of::<F>(handle)?;
         let slot = self.slots[handle.index as usize]
             .as_deref_mut()
@@ -1324,6 +1370,7 @@ impl<'r> Region<'r> {
         if handle.nonce != self.nonce {
             return self.take_enclosing::<F>(handle);
         }
+        self.settle();
         self.slot_of::<F>(handle)?;
         let slot = self.slots[handle.index as usize]
             .take()
@@ -1369,6 +1416,7 @@ impl<'r> Region<'r> {
         if handle.nonce != self.nonce {
             return Err(Error::Mismatch);
         }
+        self.settle();
         self.slot(handle.index)?;
         let slot = self.slots[handle.index as usize]
             .take()
@@ -2198,8 +2246,7 @@ impl Pins {
         static SITE: Site = Site::new();
         self.end_leases();
         let thread = std::thread::current().id();
-        let region =
-            (!region.slots.iter().all(Option::is_none)).then(|| KeptRegion::new(region, &SITE));
+        let region = (!region.holds_nothing()).then(|| KeptRegion::new(region, &SITE));
         let mut held = self.held();
         held.leased_regions.extend(region);
         held.leases.extend(leases.into_iter().map(|lease| Kept {
@@ -2846,6 +2893,39 @@ mod tests {
         assert_eq!(depth(), 0);
         drop(region);
         assert_eq!(count, 2);
+    }
+
+    /// A view's value a lending region leased goes back where it was when
+    /// the lease ends while a crate call holds the view's region shared,
+    /// as iced asks a program's container for its mouse interaction while
+    /// its `Column` holds the view (#2698): a shared reach finds it there,
+    /// and the region's next `&mut` reach puts it in its slot.
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_leased_slot_goes_back_while_its_region_is_claimed_shared() {
+        let mut count = 1_usize;
+        let mut view = super::Region::new();
+        let handle = view.insert::<CountRefF>(&mut count);
+        let nonce = view.nonce();
+        super::open(&mut view, || {
+            let lending = super::Region::lending();
+            lending
+                .lease_scoped::<CountRefF, _>(handle, |value| **value += 1)
+                .unwrap();
+            let leases = lending.take_leases();
+            let read = super::with_ref::<super::RegionF, _>(nonce, |region| {
+                assert_eq!(region.get::<CountRefF>(handle).err(), Some(Error::Moved));
+                drop(leases);
+                region.get::<CountRefF>(handle).map(|value| **value)
+            });
+            assert_eq!(read, Ok(Ok(2)));
+            super::with::<super::RegionF, _>(nonce, |region| {
+                **region.get_mut::<CountRefF>(handle).unwrap() += 1;
+            })
+            .unwrap();
+        });
+        drop(view);
+        assert_eq!(count, 3);
     }
 
     fn next_owned(nonce: Nonce) -> Result<Option<String>, Error> {
