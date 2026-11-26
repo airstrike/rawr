@@ -49,3 +49,15 @@ where
     let class: framed::EdgeFn<'a, P> = Box::new(|_| '+');
     framed::Painted::new(item, palette, class.into())
 }
+
+/// `item` painted by `palette` with a class of a closure, whose bound
+/// names a generic alias through a module that re-exports it by a glob,
+/// as iced's `helpers::iced` names `text::StyleFn`.
+pub fn marked<'a, S, P>(item: S, palette: P) -> framed::Painted<'a, S, P>
+where
+    P: framed::Palette + 'a,
+    <P as framed::Palette>::Class<'a>: From<crate::marked::MarkFn<'a, P>>,
+{
+    let class: crate::marked::MarkFn<'a, P> = Box::new(|_| '*');
+    framed::Painted::new(item, palette, class.into())
+}

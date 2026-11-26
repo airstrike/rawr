@@ -4072,6 +4072,39 @@ fn a_crate_helpers_qualified_projection_bound_names_its_trait_by_its_path() {
     assert_eq!(rawr, "<|~badged~|>\n");
 }
 
+/// A crate helper of an opened module whose `where` clause names a generic
+/// alias through a module that re-exports it from another crate by a glob,
+/// as iced's `helpers::iced` writes `From<text::StyleFn<'a, Theme>>` and
+/// iced_widget's `text` is `pub use crate::core::widget::text::*;`, finds
+/// the alias there, as rustc does. The output is `cargo run`'s.
+#[test]
+fn a_crate_helpers_bound_names_a_generic_alias_a_glob_re_exports() {
+    let root = lane(Some("framed_marked.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "<|~marked~|>\n");
+}
+
 /// A crate helper of an opened module that returns a crate generic type
 /// no opened module holds, as iced's `button(..)` returns `Button<'a,
 /// Message, W, Theme>`, takes the types its arguments leave open from the

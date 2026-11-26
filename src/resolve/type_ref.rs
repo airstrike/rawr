@@ -1310,6 +1310,24 @@ fn host_type(
             convert(std::slice::from_ref(element.as_ref()), owner)?,
         ),
         Shape::Keyed(name, types) => path(name, Target::Builtin, convert(types, owner)?),
+        // A `dyn Fn(A..) -> B` a crate's alias boxes, as iced_core's
+        // `text::StyleFn<'a, Theme>` is `Box<dyn Fn(&Theme) -> Style +
+        // 'a>`: the function type the program writes so, its inputs then
+        // its output.
+        Shape::Callable { input, output } => {
+            let inputs = match input.shape() {
+                Shape::Unit => Vec::new(),
+                Shape::Tuple(members) => members.to_vec(),
+                _ => vec![input.as_ref().clone()],
+            };
+            let mut types = convert(&inputs, owner)?.into_vec();
+            types.extend(convert(std::slice::from_ref(output.as_ref()), owner)?);
+            path(
+                item::type_ref::FN_TYPE,
+                Target::Builtin,
+                types.into_boxed_slice(),
+            )
+        }
         Shape::Reference { mutable, target } => Type::Reference {
             mutable: *mutable,
             lifetime: None,

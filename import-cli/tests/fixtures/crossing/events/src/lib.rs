@@ -29,6 +29,7 @@ pub mod image;
 pub mod keyed;
 pub mod keys;
 mod made;
+pub mod marked;
 pub mod matched;
 pub mod named;
 pub mod nested;
