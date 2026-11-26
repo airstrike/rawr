@@ -37,7 +37,9 @@ pub(super) struct Seed {
 
 /// The exact native instances a pass of demand reads bound, each by its
 /// trait, the member a call through a bound names (none for the whole
-/// trait), and its types' names (`Parser::demand_bound`).
+/// trait), and its types' names (`Parser::demand_bound`); and the types
+/// whose inherent members were bound (`exact.rs::bind_inherent_members`),
+/// each by its definition and its name, with no member.
 pub(super) type Bound = BTreeSet<([u8; 32], Option<ImmutableString>, Box<[ImmutableString]>)>;
 
 /// The templates read for demand, each once.

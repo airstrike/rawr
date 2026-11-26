@@ -19,8 +19,10 @@
 //! spelled through any of them is that adapter's. A later save whose
 //! source runs a generic body over such a value,
 //! as iced's `Container<Text>::draw` calls `self.content.draw(..)`, then
-//! finds the member in the runner. This binds native items only and makes
-//! no instance of the program's.
+//! finds the member in the runner. Each native self type an instance
+//! settles so has its inherent members bound at it too, as `row!`'s
+//! `Row::with_children` and the `.spacing(..)` after it are (decision 5).
+//! This binds native items only and makes no instance of the program's.
 
 use super::surface::{fixed_parameter, fixed_surface_type, imported_surface_type, ImportedUse};
 use super::ty::{contains_inference, reaches_param, Ty};
@@ -169,6 +171,7 @@ impl Parser<'_> {
             }
             for found in self.exact_instances(header, owner, given, None, &filling) {
                 let mut at = types.clone();
+                self.bind_inherent_members(&found.self_type, span);
                 at.push((own.as_ref().into(), found.self_type));
                 at.sort_by_key(|(name, _)| order.iter().position(|declared| declared == name));
                 self.bind_member(item, Some(at), None, span);
@@ -337,12 +340,179 @@ impl Parser<'_> {
                     self.bind_member(member, types, None, span);
                 }
             }
+            self.bind_inherent_members(&found.self_type, span);
             if bounds {
                 for (bounded, inner, arguments) in &found.bounds {
                     self.bind_trait_instance(*inner, arguments, Some(bounded), span, false);
                 }
             }
         }
+    }
+
+    /// Binds each member of the native inherent impls of `self_type`, a
+    /// type an exact instance settles, at that type (decision 5): a
+    /// program makes and shapes such a value with them, as `row!` is
+    /// `Row::with_children` and `.spacing(..)` follows it, both of `impl<W>
+    /// Row<W>` at `Row<Element>`. A parameter of the member's own is each
+    /// type a call can give it: one the signature erased, as the `impl
+    /// IntoIterator<Item = W>` it reads as a `Vec<W>`, is left to the
+    /// adapter, as the program's call leaves it, and one a crate trait's
+    /// impls list in full is each type they're for, as `impl Into<Pixels>`
+    /// is `u32` or `f32`, of which rustc selects one. A member that leaves
+    /// any other type open, or takes a callable, isn't bound. Each type
+    /// once.
+    fn bind_inherent_members(&mut self, self_type: &Ty, span: Span) {
+        let Ty::Host { proof, arguments } = self_type else {
+            return;
+        };
+        let Some(identity) = proof.definition.identity().imported() else {
+            return;
+        };
+        let name = ImmutableString::from(self_type.name(&self.models).to_string());
+        if !self
+            .demand_bound
+            .insert((*identity.as_bytes(), None, Box::new([name])))
+        {
+            return;
+        }
+        let host = self.models.host.clone();
+        let definition = proof.alias.as_ref().unwrap_or(&proof.definition);
+        let mut owners = vec![proof.definition.path()];
+        if definition.path() != owners[0] {
+            owners.push(definition.path());
+        }
+        let owner = host.type_owner(&proof.definition.path()).cloned();
+        let mut members = Vec::<&crate::host::item::Definition>::new();
+        for path in &owners {
+            for member in host.members(path) {
+                let inherent = member.trait_of().is_none()
+                    && matches!(
+                        member.kind(),
+                        crate::host::item::Kind::Method
+                            | crate::host::item::Kind::AssociatedFunction
+                    );
+                if inherent && !members.contains(&member) {
+                    members.push(member);
+                }
+            }
+        }
+        for member in members {
+            let checkpoint = self.inference.checkpoint();
+            let mut parameters = member
+                .receiver_parameters()
+                .unwrap_or_else(|| definition.parameters())
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect::<BTreeMap<_, _>>();
+            let fits = member.signature().instance().is_none_or(|instance| {
+                self.instantiate_host_type(
+                    instance,
+                    &mut parameters,
+                    "impl",
+                    Span::NONE,
+                    owner.as_ref(),
+                    None,
+                )
+                .is_ok_and(|instance| self.unify_type(&instance, self_type))
+            });
+            let instances = fits
+                .then(|| self.inherent_instances(member, &mut parameters, owner.as_ref()))
+                .flatten()
+                .unwrap_or_default();
+            for types in instances {
+                self.bind_member(member, Some(types), None, span);
+            }
+            self.inference.rollback(checkpoint);
+        }
+    }
+
+    /// The instances of the inherent `member` at `parameters`, its impl's,
+    /// each its declared parameters' types in order: a parameter of its
+    /// own is each type `bind_inherent_members` says. `None` when one has
+    /// none.
+    fn inherent_instances(
+        &mut self,
+        member: &crate::host::item::Definition,
+        parameters: &mut BTreeMap<ImmutableString, Ty>,
+        owner: Option<&Dependency>,
+    ) -> Option<Vec<Vec<(ImmutableString, Ty)>>> {
+        let mut instances = vec![Vec::new()];
+        for name in member.signature().declared_type_parameters() {
+            let choices = match parameters.get(&name) {
+                Some(ty) => vec![self.inference.resolve(ty)],
+                None if fixed_parameter(member, &name) || erased(member, &name) => {
+                    vec![self.inference.fresh()]
+                }
+                None => self.listed_types(member, &name, parameters, owner)?,
+            };
+            let choices = choices
+                .into_iter()
+                .filter(|ty| matches!(ty, Ty::Infer(_)) || settled(ty))
+                .collect::<Vec<_>>();
+            if choices.is_empty() {
+                return None;
+            }
+            instances = instances
+                .into_iter()
+                .flat_map(|types: Vec<(ImmutableString, Ty)>| {
+                    let name = &name;
+                    choices.iter().map(move |ty| {
+                        let mut types = types.clone();
+                        types.push((name.clone(), ty.clone()));
+                        types
+                    })
+                })
+                .collect();
+        }
+        Some(instances)
+    }
+
+    /// The types the impls of a crate trait list in full for the bound on
+    /// `member`'s own parameter `name`, each a type with no parameter of
+    /// its own (`impl Into<Pixels>`: `u32` and `f32`), in every such bound
+    /// on it. `None` when no bound lists them.
+    fn listed_types(
+        &mut self,
+        member: &crate::host::item::Definition,
+        name: &str,
+        parameters: &mut BTreeMap<ImmutableString, Ty>,
+        owner: Option<&Dependency>,
+    ) -> Option<Vec<Ty>> {
+        use crate::host::signature::Pattern;
+        let path = member.path();
+        let mut listed: Option<Vec<Ty>> = None;
+        for relation in member.signature().relations() {
+            if relation.parameter() != name || !relation.is_exhaustive() {
+                continue;
+            }
+            let mut types = Vec::new();
+            for case in relation.cases() {
+                if matches!(case.this(), Pattern::Variable(_) | Pattern::Parameter(_)) {
+                    continue;
+                }
+                let ty = self
+                    .pattern_type(
+                        case.this(),
+                        &mut BTreeMap::new(),
+                        parameters,
+                        (&path, Span::NONE),
+                        owner,
+                    )
+                    .ok()
+                    .map(|ty| self.inference.resolve(&ty));
+                if let Some(ty) = ty.filter(|ty| settled(ty) && listable(ty))
+                    && !types.contains(&ty)
+                {
+                    types.push(ty);
+                }
+            }
+            listed = Some(match listed {
+                Some(kept) => kept.into_iter().filter(|ty| types.contains(ty)).collect(),
+                None => types,
+            });
+        }
+        listed
     }
 
     /// The settled types the outputs of the crate trait `identity`'s own
@@ -815,6 +985,44 @@ fn member_parameters(
             Some((name, ty))
         })
         .collect()
+}
+
+/// Whether `member`'s parameter `name` is an iterable its signature
+/// erased: no input or output names it, and no bound but the one that
+/// gives its `Item`, as the `impl IntoIterator<Item = W>` of
+/// `Row::with_children`, whose input is read as a `Vec<W>`, is. A call
+/// leaves it to the adapter, which gives it the `Vec` it makes. An `impl
+/// Into<T>` read as its `T` is not one: a call gives it its own type.
+fn erased(member: &crate::host::item::Definition, name: &str) -> bool {
+    let signature = member.signature();
+    let mut bounds = signature
+        .relations()
+        .iter()
+        .filter(|relation| relation.parameter() == name)
+        .peekable();
+    bounds.peek().is_some()
+        && bounds.all(|relation| {
+            relation
+                .associated()
+                .is_some_and(|(_, associated)| associated.as_str() == "Item")
+        })
+        && !signature
+            .parameters()
+            .iter()
+            .chain([signature.output()])
+            .any(|ty| ty.mentions_parameter(name))
+}
+
+/// Whether a crate trait's impl for `ty` gives an instance the runner
+/// can bind: a scalar, or a crate type of such types. An array, as
+/// `impl From<[u16; 2]> for Padding` is for, crosses as a `Vec` the impl
+/// isn't for.
+fn listable(ty: &Ty) -> bool {
+    match ty {
+        Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_) => true,
+        Ty::Host { arguments, .. } => arguments.iter().all(listable),
+        _ => false,
+    }
 }
 
 /// Whether `ty` holds nothing left to infer and no parameter.
