@@ -21883,8 +21883,9 @@ fn render_lease(
     };
     let rust = concrete_type(ty).ok_or_else(|| request::drift("borrowed input type"))?;
     if around && *mutable && carries_lifetime(ty) && matches!(**ty, convert::Type::Nominal { .. }) {
-        render_reached_around(local, index, &rust);
-        return Ok(());
+        return output
+            .write_all(render_reached_around(local, index, &rust).as_bytes())
+            .map_err(request::unwritable);
     }
     let borrow = if *mutable { "" } else { "&*" };
     let (held, lease) = if future {
@@ -21952,16 +21953,21 @@ fn render_lease(
 /// `lent_object_input` nests an object. A `'static` value in the arena is
 /// leased for the call. The opening goes before the body, as it reads only
 /// `arguments`, and the closing (`REACHED_AROUND`) calls the closure with
-/// whichever it is.
-fn render_reached_around(local: usize, index: usize, rust: &str) {
+/// whichever it is. A value a region holds, as a receiver the view made,
+/// is the region branch's own (`scoped_value`), so the closure runs with
+/// none. The body takes the value where it would make the argument, in
+/// each branch it renders the argument in, and the scope opens once
+/// however many branches do.
+fn render_reached_around(local: usize, index: usize, rust: &str) -> String {
     let opening = format!(
         "    let argument_{local}_lent = lent_value(arguments, {index});
     #[allow(unused_mut)]
     let mut argument_{local}_held: Option<PlaceHeld<{rust}>> = match argument_{local}_lent {{
         Some(_) => None,
+        None if scoped_value(arguments, {index}).is_some() => None,
         None => Some({{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease_place(handle)? }}),
     }};
-    let mut argument_{local}_rest = Some(|argument_{local}: &mut {rust}| -> Result<Dynamic, Error> {{
+    let mut argument_{local}_rest = Some(|#[allow(unused_mut)] mut argument_{local}_reached: Option<&mut {rust}>| -> Result<Dynamic, Error> {{
 "
     );
     let closing = format!(
@@ -21971,16 +21977,23 @@ fn render_reached_around(local: usize, index: usize, rust: &str) {
             let failed = |error| Error::Lent(lent.name(), error);
             let access: fn(u64, &mut dyn FnMut(&mut {rust})) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
             let mut result = None;
-            access(lent.nonce().bits(), &mut |value| result = argument_{local}_rest.take().map(|#[allow(unused_mut)] mut rest| rest(value)))
+            access(lent.nonce().bits(), &mut |value| result = argument_{local}_rest.take().map(|#[allow(unused_mut)] mut rest| rest(Some(value))))
                 .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
             result.unwrap_or(Err(failed(__rawr_internal::scope::Error::Busy)))
         }}
-        (None, Some(held)) => (argument_{local}_rest.take().ok_or(Error::MissingArgument)?)(held.get_mut()),
-        (None, None) => Err(Error::MissingArgument),
+        (None, Some(held)) => (argument_{local}_rest.take().ok_or(Error::MissingArgument)?)(Some(held.get_mut())),
+        (None, None) => (argument_{local}_rest.take().ok_or(Error::MissingArgument)?)(None),
     }}
 "
     );
-    REACHED_AROUND.with_borrow_mut(|scopes| scopes.push((opening, closing)));
+    REACHED_AROUND.with_borrow_mut(|scopes| {
+        if !scopes.iter().any(|(open, _)| *open == opening) {
+            scopes.push((opening, closing));
+        }
+    });
+    format!(
+        "    let argument_{local}: &mut {rust} = argument_{local}_reached.take().ok_or(Error::MissingArgument)?;\n"
+    )
 }
 
 /// Whether `ty` is a callable type parameter of `signature`, as `F` of
