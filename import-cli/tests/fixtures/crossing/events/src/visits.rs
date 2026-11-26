@@ -39,6 +39,21 @@ impl Visit for Collect {
     }
 }
 
+/// Where a holder's `publish` notes what it shows, as iced's `Shell<'a,
+/// Message>`: it borrows the notes native code owns, so native code lends
+/// it for the call.
+#[derive(Debug)]
+pub struct Sink<'a> {
+    notes: &'a mut Vec<String>,
+}
+
+impl Sink<'_> {
+    /// Notes `label`.
+    pub fn note(&mut self, label: &str) {
+        self.notes.push(label.to_owned());
+    }
+}
+
 /// A label the crate's own concrete code visits, as iced_core's `Text`,
 /// whose `Widget` impl the crate compiles: its `operate` takes the visit
 /// a program's impl was lent and passes on.
@@ -57,6 +72,10 @@ impl<M> crate::tinted::Diffed<M> for Mark {
     fn seen(&self, _spot: crate::walks::Spot, node: &crate::walks::Node) -> String {
         format!("{}!{}", self.0, node.marked())
     }
+
+    fn publish(&mut self, sink: &mut Sink<'_>) {
+        sink.note(&format!("{}!", self.0));
+    }
 }
 
 /// The labels `item`'s `operate` notes, as iced's `UserInterface::operate`
@@ -66,4 +85,13 @@ pub fn visited<M>(mut item: impl crate::tinted::Diffed<M>) -> Vec<String> {
     let mut collect = Collect::default();
     item.operate(&mut collect);
     collect.labels
+}
+
+/// What `item`'s `publish` notes in a sink of notes it owns, as iced's
+/// `UserInterface::update` lends the root widget a `&mut Shell<'_,
+/// Message>`. The crate compiles it.
+pub fn published<M>(mut item: impl crate::tinted::Diffed<M>) -> Vec<String> {
+    let mut notes = Vec::new();
+    item.publish(&mut Sink { notes: &mut notes });
+    notes
 }

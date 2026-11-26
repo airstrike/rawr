@@ -4,7 +4,9 @@
 // `&mut dyn Operation`: the program calls its `&mut self` methods and
 // passes it on to the item's impl, which runs from source too, or to a
 // crate item's native impl, as iced's `Container` passes its `operation` on
-// to a native `Text`'s `operate`.
+// to a native `Text`'s `operate`. So it lends a `&mut Sink<'_>`, a type
+// that carries a lifetime, as iced lends a widget's `update` a `&mut
+// Shell<'_, Message>`.
 
 use events::framed::Label;
 use events::tinted::{self, Diffed};
@@ -23,6 +25,11 @@ fn visited(item: impl Diffed<Note>) -> Vec<String> {
     visits::visited(item)
 }
 
+/// What `item` notes in the sink native code lends it.
+fn published(item: impl Diffed<Note>) -> Vec<String> {
+    visits::published(item)
+}
+
 fn main() {
     println!("{:?}", visited(tinted::tallied(Label("calm".into()))));
     println!(
@@ -32,5 +39,9 @@ fn main() {
     println!(
         "{:?}",
         visited(tinted::tallied(visits::Mark("leaf".into())))
+    );
+    println!(
+        "{:?}",
+        published(tinted::tallied(visits::Mark("leaf".into())))
     );
 }

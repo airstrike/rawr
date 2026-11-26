@@ -4586,7 +4586,10 @@ fn a_crate_generic_body_reads_a_lent_native_vector_as_its_own() {
 /// reads it. The object the closure was lent goes on to a crate item's
 /// native `operate` as the native object it is, beside the item's own
 /// `&mut self`, as a native `Text`'s `operate` takes the operation iced's
-/// `Container` passes on. The output is `cargo run`'s.
+/// `Container` passes on. So does a `&mut Sink<'_>` native code lends, a
+/// type that carries a lifetime, as a native `Text`'s `update` takes the
+/// `&mut Shell<'_, Message>` iced's `Container` passes on. The output is
+/// `cargo run`'s.
 #[test]
 fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     let root = lane(Some("tinted_visited.rs"));
@@ -4615,7 +4618,7 @@ fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     assert_eq!(
         rawr,
         "[\"tallied\", \"-calm\"]\n[\"tallied\", \"-tallied\", \"--deep\"]\n\
-         [\"tallied\", \"-leaf!\"]\n"
+         [\"tallied\", \"-leaf!\"]\n[\"tallied\", \"leaf!\"]\n"
     );
 }
 

@@ -14083,8 +14083,27 @@ fn runtime_inputs(
 }
 
 /// The body of `plan`'s adapter, which takes its arguments, calls, and
-/// gives the output.
+/// gives the output. An argument reached around the rest of the body
+/// (`render_reached_around`) closes its scope after it.
 fn render_adapter_body(
+    plan: &Plan,
+    cohort: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let around = ReachedAround::enter();
+    render_adapter_steps(plan, cohort, profile, facade, output)?;
+    for closing in around.closings().iter().rev() {
+        output
+            .write_all(closing.as_bytes())
+            .map_err(request::unwritable)?;
+    }
+    Ok(())
+}
+
+/// The statements of `plan`'s adapter body (`render_adapter_body`).
+fn render_adapter_steps(
     plan: &Plan,
     cohort: &[Plan],
     profile: &crate::profile::Proof,
@@ -21259,12 +21278,17 @@ fn render_take_input(
     if let convert::Type::Borrowed { .. } = ty
         && !leases_whole(&substituted(ty, signature, substitutions)?)
     {
-        let future = is_future(&substituted(signature.output(), signature, substitutions)?);
+        let given = substituted(signature.output(), signature, substitutions)?;
+        let future = is_future(&given);
+        // The rest of the body may run inside a lend's accessor only when
+        // what the call gives borrows nothing (`render_reached_around`).
+        let around = !future && !carries_lifetime_or_borrow(&given);
         return render_lease(
             local,
             index,
             &substituted(ty, signature, substitutions)?,
             future,
+            around,
             output,
         );
     }
@@ -21834,18 +21858,24 @@ fn future_borrows(
 /// goes back when the lease drops, before the arena is next used (D558.5).
 /// Only a `future` that may run on another thread holds it as a `Held`,
 /// which asks `Send`; a call holds it on the owner thread, so a value that
-/// isn't `Send`, as rand's `ThreadRng`, is lent as rustc lends it.
+/// isn't `Send`, as rand's `ThreadRng`, is lent as rustc lends it. A `&mut
+/// T` of a type that carries a lifetime is reached around the rest of the
+/// body when `around` (`render_reached_around`).
 fn render_lease(
     local: usize,
     index: usize,
     ty: &convert::Type,
     future: bool,
+    around: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let convert::Type::Borrowed { mutable, ty } = ty else {
         return Err(request::drift("a lease of other than a borrow"));
     };
     let rust = concrete_type(ty).ok_or_else(|| request::drift("borrowed input type"))?;
+    if around && *mutable && carries_lifetime(ty) && matches!(**ty, convert::Type::Nominal { .. }) {
+        return render_reached_around(local, index, &rust, output);
+    }
     let borrow = if *mutable { "" } else { "&*" };
     let (held, lease) = if future {
         ("Held", "lease")
@@ -21901,6 +21931,52 @@ fn render_lease(
         "    let mut argument_{local}_held: {held}<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
     )
     .map_err(request::unwritable)
+}
+
+/// The statements that make `argument_{local}`, a `&mut T` input of a
+/// type `rust` that carries a lifetime, as iced's `&mut Shell<'_,
+/// Message>`, and open the closure the rest of the body runs in. A value
+/// native code lent (D558.3) is reached through its accessor, which is
+/// higher-ranked over the type's lifetime where `with_lent_arguments`
+/// erases only `'static` types, so the call runs inside it, as
+/// `lent_object_input` nests an object. A `'static` value in the arena is
+/// leased for the call. The closing (`REACHED_AROUND`) calls the closure
+/// with whichever it is.
+fn render_reached_around(
+    local: usize,
+    index: usize,
+    rust: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "    let argument_{local}_lent = lent_value(arguments, {index});
+    #[allow(unused_mut)]
+    let mut argument_{local}_held: Option<PlaceHeld<{rust}>> = match argument_{local}_lent {{
+        Some(_) => None,
+        None => Some({{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease_place(handle)? }}),
+    }};
+    let mut argument_{local}_rest = Some(|argument_{local}: &mut {rust}| -> Result<Dynamic, Error> {{"
+    )
+    .map_err(request::unwritable)?;
+    let closing = format!(
+        "    }});
+    match (argument_{local}_lent, argument_{local}_held.as_mut()) {{
+        (Some(lent), _) => {{
+            let failed = |error| Error::Lent(lent.name(), error);
+            let access: fn(u64, &mut dyn FnMut(&mut {rust})) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
+            let mut result = None;
+            access(lent.nonce().bits(), &mut |value| result = argument_{local}_rest.take().map(|#[allow(unused_mut)] mut rest| rest(value)))
+                .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            result.unwrap_or(Err(failed(__rawr_internal::scope::Error::Busy)))
+        }}
+        (None, Some(held)) => (argument_{local}_rest.take().ok_or(Error::MissingArgument)?)(held.get_mut()),
+        (None, None) => Err(Error::MissingArgument),
+    }}
+"
+    );
+    REACHED_AROUND.with_borrow_mut(|closings| closings.push(closing));
+    Ok(())
 }
 
 /// Whether `ty` is a callable type parameter of `signature`, as `F` of
@@ -25032,6 +25108,9 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The scopes an adapter body's arguments reached around the rest of
+    /// the body opened, each one's closing (`render_reached_around`).
+    static REACHED_AROUND: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The argument whose trait object native code lent a script closure
     /// an adapter's body has as `object_{index}`, reached around the body
     /// (`lent_object_input`, #28).
@@ -26329,6 +26408,27 @@ impl LentArguments {
 impl Drop for LentArguments {
     fn drop(&mut self) {
         LENT_ARGUMENTS.set(self.0);
+    }
+}
+
+/// Collects the closings of the scopes one adapter body opens
+/// (`REACHED_AROUND`), and gives back the enclosing body's when it drops.
+struct ReachedAround(Vec<String>);
+
+impl ReachedAround {
+    fn enter() -> Self {
+        Self(REACHED_AROUND.take())
+    }
+
+    /// The closings this body's arguments opened, in opening order.
+    fn closings(&self) -> Vec<String> {
+        REACHED_AROUND.with_borrow(Clone::clone)
+    }
+}
+
+impl Drop for ReachedAround {
+    fn drop(&mut self) {
+        REACHED_AROUND.set(std::mem::take(&mut self.0));
     }
 }
 

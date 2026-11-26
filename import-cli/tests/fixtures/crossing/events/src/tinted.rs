@@ -290,6 +290,10 @@ pub trait Diffed<M> {
         String::new()
     }
 
+    /// Notes what it shows in `sink`, as iced's `Widget::update` takes a
+    /// `&mut Shell<'_, Message>`.
+    fn publish(&mut self, _sink: &mut crate::visits::Sink<'_>) {}
+
     /// The nodes the holder lifts out of `node`, borrowed for as long as
     /// the holder and the node, as iced's `Widget::overlay`: none, once
     /// the holder's label is marked on the node.
@@ -403,6 +407,13 @@ where
     fn seen(&self, spot: crate::walks::Spot, node: &crate::walks::Node) -> String {
         let (spot, node) = spot.iter(&node.children).next().unwrap();
         format!("[{}{}]", self.item.seen(spot, node), spot.width())
+    }
+
+    /// Notes itself, then passes the sink native code lent on to the
+    /// item, as iced's `Container::update` passes its content the shell.
+    fn publish(&mut self, sink: &mut crate::visits::Sink<'_>) {
+        sink.note("tallied");
+        self.item.publish(sink);
     }
 
     /// What the item lifts out of the node, after marking the node, as
