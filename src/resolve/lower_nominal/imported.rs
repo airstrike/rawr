@@ -213,6 +213,7 @@ fn one_spelling(uses: &mut [ImportedUse]) {
         bool,
         &'u [rawr_import::surface::instance::Slot],
         Option<[u8; 32]>,
+        Option<&'u str>,
     );
     fn instance(using: &ImportedUse) -> Option<Instance<'_>> {
         crate::host::defined::crate_item(&using.selector)?;
@@ -231,7 +232,22 @@ fn one_spelling(uses: &mut [ImportedUse]) {
             using.callable,
             &using.slots,
             using.application,
+            owner_name(using),
         ))
+    }
+    // A trait's provided method an impl leaves to the trait is one item
+    // for every type whose impl does, as `Diffed::lifted` of `Label` and
+    // of `Mark` is: its `Self` is the type its path names, whose name
+    // tells the types apart, whichever path spells it.
+    fn owner_name(using: &ImportedUse) -> Option<&str> {
+        if !matches!(
+            using.selector,
+            rawr_import::surface::identity::Selector::Method { .. }
+        ) {
+            return None;
+        }
+        let (owner, _) = using.path.rsplit_once("::")?;
+        Some(owner.rsplit_once("::").map_or(owner, |(_, name)| name))
     }
     let mut least = BTreeMap::<Instance<'_>, ImmutableString>::new();
     for using in uses.iter() {

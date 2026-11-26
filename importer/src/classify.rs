@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 318;
+const CLASSIFIER_VERSION: u32 = 320;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -11243,6 +11243,7 @@ impl<'graph> Context<'graph> {
                     .enumerate()
                     .filter(|(_, input)| {
                         shares_at(input, lifetime)
+                            || exclusive_at(input, lifetime)
                             || text_at(input, lifetime)
                             || objects_at(input, lifetime, |id| self.is_option(id))
                     })
@@ -12160,6 +12161,24 @@ impl<'graph> Context<'graph> {
             }) {
                 return None;
             }
+            // Each input borrowed at the receiver's lifetime where the
+            // output names it, as iced's `overlay<'b>(&'b mut self, tree:
+            // &'b mut Tree, ..)` takes its tree.
+            let kept = match signature.receiver() {
+                model::Receiver::Reference { lifetime, .. }
+                    if names_lifetime(signature.output(), lifetime) =>
+                {
+                    signature
+                        .inputs()
+                        .enumerate()
+                        .filter(|(_, input)| {
+                            matches!(input, model::Type::Reference { lifetime: named, .. } if named == lifetime)
+                        })
+                        .filter_map(|(position, _)| u32::try_from(position).ok())
+                        .collect()
+                }
+                _ => Box::default(),
+            };
             let mut inputs = signature.inputs();
             let receiver = match signature.receiver() {
                 model::Receiver::Reference { mutability, .. } => match mutability {
@@ -12211,13 +12230,16 @@ impl<'graph> Context<'graph> {
                 .ok()?;
             // A method with the trait's body, which an impl may leave out.
             let provided = provided.contains(id);
-            methods.push(representability::object::Method::new(
-                item.display_path().last()?.into(),
-                receiver,
-                inputs,
-                output,
-                provided,
-            ));
+            methods.push(
+                representability::object::Method::new(
+                    item.display_path().last()?.into(),
+                    receiver,
+                    inputs,
+                    output,
+                    provided,
+                )
+                .with_kept(kept),
+            );
         }
         Some((methods.into_boxed_slice(), above))
     }
@@ -16246,6 +16268,7 @@ fn borrows_receiver(
             !names_late_lifetime(input)
                 || naming(input, receiver) == Naming::Argument
                 || shares_at(input, receiver)
+                || exclusive_at(input, receiver)
                 || text_at(input, receiver)
                 || objects_at(input, receiver, &is_option)
                 || (!names_lifetime(input, receiver) && lends_late_borrows(input))
@@ -16292,6 +16315,20 @@ fn text_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
         mutability: model::Mutability::Shared,
         ty,
     } if named == lifetime && matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
+}
+
+/// Whether `ty` is a `&'r mut T` at `lifetime` of a crate's type `T` that
+/// borrows nothing else, as iced's `overlay<'b>(&'b mut self, tree: &'b
+/// mut Tree, ..)` takes the widget's tree: the output keeps it borrowed
+/// exclusively for as long as it keeps the receiver (#2698).
+fn exclusive_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
+    matches!(ty, model::Type::Reference {
+        lifetime: named,
+        mutability: model::Mutability::Mutable,
+        ty,
+    } if named == lifetime
+        && matches!(**ty, model::Type::Definition { .. })
+        && !names_late_lifetime(ty))
 }
 
 /// Whether `ty` is a `&'r T` at `lifetime` of a crate's type `T` that

@@ -187,6 +187,11 @@ pub struct ScriptImplFunction {
     /// formatter after the call, and the output is `fmt::Result`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     formatter: Option<u32>,
+    /// The inputs, by position after `self`, the output borrows as long as
+    /// it borrows the `&mut self` receiver, as iced's `overlay<'b>(&'b mut
+    /// self, tree: &'b mut Tree, ..)` takes its tree (#2698).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    kept: Box<[u32]>,
 }
 
 /// A type parameter of a [`ScriptImplFunction`]: its name and its bounds,
@@ -381,7 +386,22 @@ impl ScriptImplFunction {
             output,
             generics: Box::default(),
             formatter: None,
+            kept: Box::default(),
         }
+    }
+
+    /// This function, whose output borrows the inputs at `kept` as long as
+    /// it borrows its receiver.
+    #[must_use]
+    pub fn with_kept(mut self, kept: Box<[u32]>) -> Self {
+        self.kept = kept;
+        self
+    }
+
+    /// The inputs its output borrows as long as it borrows its receiver.
+    #[must_use]
+    pub fn kept(&self) -> &[u32] {
+        &self.kept
     }
 
     /// This function, whose input at `position` is the trait method's

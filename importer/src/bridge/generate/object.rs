@@ -202,10 +202,15 @@ fn render_stand_in(
     .collect::<Vec<_>>();
     // A provided method the program's impl doesn't write runs the trait's
     // body, over a second handle to the value whose impl writes only the
-    // required methods. One whose output borrows its receiver can't come
-    // back from that handle, and calls the impl's alone.
-    let defaulted =
-        |method: &Method| method.provided() && !super::carries_lifetime(method.output());
+    // required methods. One whose output borrows its `&mut self` receiver
+    // borrows that handle, which the value keeps for as long (#2698). One
+    // whose output borrows a `&self` receiver can't come back from that
+    // handle, and calls the impl's alone.
+    let defaulted = |method: &Method| {
+        method.provided()
+            && (!super::carries_lifetime(method.output())
+                || method.receiver() == crate::surface::instance::ImplReceiver::Mutable)
+    };
     let defaults = format!("{name}Defaults");
     let mut impls = String::new();
     let mut required_impls = String::new();
@@ -279,7 +284,8 @@ fn render_stand_in_methods(
             method.receiver(),
             method.inputs().into(),
             method.output().clone(),
-        );
+        )
+        .with_kept(method.kept().into());
         let rendered = match request::trial(|| {
             super::render_impl_function(&function, super::Callee::Object(&key), &[], None, None)
         }) {
@@ -297,7 +303,11 @@ fn render_stand_in_methods(
         let Some((header, rest)) = rendered.split_once("{\n") else {
             return Err(request::drift("a stand-in's method"));
         };
+        // An output that borrows the receiver borrows the defaults' value,
+        // which the value keeps for as long (`Object::defaulted`).
+        let borrows = super::carries_lifetime(method.output());
         let receiver = match method.receiver() {
+            ImplReceiver::Mutable if borrows => "defaults",
             ImplReceiver::Mutable => "&mut defaults",
             ImplReceiver::Shared | ImplReceiver::None | ImplReceiver::Owned => "&defaults",
         };
@@ -305,9 +315,14 @@ fn render_stand_in_methods(
             .chain((0..method.inputs().len()).map(|position| format!("input_{position}")))
             .collect::<Vec<_>>()
             .join(", ");
+        let made = if borrows {
+            format!("let shared = {defaults}(self.0.share());\n            let defaults = self.0.defaulted(shared);")
+        } else {
+            format!("let mut defaults = {defaults}(self.0.share());")
+        };
         write!(
             body,
-            "{header}{{\n        if !self.0.writes({key:?}) {{\n            let mut defaults = {defaults}(self.0.share());\n            return <{defaults} as {path}>::{method}({inputs});\n        }}\n{rest}",
+            "{header}{{\n        if !self.0.writes({key:?}) {{\n            {made}\n            return <{defaults} as {path}>::{method}({inputs});\n        }}\n{rest}",
             path = implemented.path,
             method = method.name(),
         )

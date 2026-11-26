@@ -3082,6 +3082,17 @@ impl<T: 'static> PlaceHeld<T> {
     pub fn get_mut(&mut self) -> &mut T {
         self.value.as_mut().expect("a lent value is held till it drops")
     }
+
+    /// The value, lent `&mut` to a crate call in a lending region for as
+    /// long as the region's owner keeps its leases (`Region::lease`), and
+    /// given back to its slot after (#2698).
+    pub fn lend_to<'r>(mut self, region: &__rawr_internal::scope::Region<'r>) -> Result<&'r mut T, Error> {
+        let value = self.value.take().ok_or(Error::StaleHandle)?;
+        let handle = self.handle.clone();
+        region
+            .lease(value, move |value| drop(PlaceHeld { value: Some(value), handle }))
+            .map_err(|error| Error::Lent(std::any::type_name::<T>(), error))
+    }
 }
 
 impl<T: 'static> Drop for PlaceHeld<T> {
@@ -14764,6 +14775,20 @@ fn render_adapter_steps(
             slots,
             ..
         } if signature.scope().is_some() => {
+            // In a stand-in's lending region, a call whose output keeps
+            // its `&mut` receiver and the `&mut` inputs native code lent
+            // the stand-in borrows them there, and its output stays there
+            // (#2698).
+            render_lending_call(
+                plan,
+                &path,
+                *receiver,
+                signature,
+                substitutions,
+                constants,
+                *container_parameters,
+                output,
+            )?;
             // A `&'a T` the frame's output keeps with its receiver stays
             // the program's value until the frame reaches it (`kept_inputs`).
             let kept = kept_inputs(signature, substitutions)?;
@@ -14797,9 +14822,18 @@ fn render_adapter_steps(
                     }
                 }
             }
+            let kept_mutable = kept_mutable_inputs(signature, substitutions)?;
             let taken = signature.inputs().iter().enumerate().filter(|_| !closure);
             for (index, ty) in taken {
-                if kept.iter().any(|input| input.position == index) {
+                if kept_mutable.iter().any(|input| input.position == index) {
+                    // Reached where it is by the frame (`render_method_opening`).
+                    writeln!(
+                        output,
+                        "    let argument_{index} = Lender::of(arguments.values.get({}).ok_or(Error::MissingArgument)?)?;",
+                        index + 1
+                    )
+                    .map_err(request::unwritable)?;
+                } else if kept.iter().any(|input| input.position == index) {
                     writeln!(
                         output,
                         "    let argument_{index} = (**arguments.values.get_mut({}).ok_or(Error::MissingArgument)?).take();",
@@ -16244,6 +16278,155 @@ fn frame_copies(
     })
 }
 
+/// The positions of the `&'a mut T` inputs of crate values a scope
+/// frame's output keeps with its `&'a mut` receiver (`Signature::lends`),
+/// as iced's `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)` keeps
+/// its tree, each with the crate type it borrows, written.
+fn kept_mutable_inputs(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Vec<KeptInput>, request::Error> {
+    if signature.scope() != Some(crate::classify::representability::signature::Scope::Borrows) {
+        return Ok(Vec::new());
+    }
+    let mut kept = Vec::new();
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        if !u32::try_from(position).is_ok_and(|at| signature.lends().contains(&at)) {
+            continue;
+        }
+        if let convert::Type::Borrowed { mutable: true, ty } =
+            substituted(declared, signature, substitutions)?
+            && matches!(*ty, convert::Type::Nominal { .. })
+            && !carries_lifetime(&ty)
+            && !is_value(&ty)
+        {
+            let rust = concrete_type(&ty).ok_or_else(|| request::drift("a kept input's type"))?;
+            kept.push(KeptInput { position, rust });
+        }
+    }
+    Ok(kept)
+}
+
+/// The start of the adapter of a call whose output keeps its `&'a mut`
+/// receiver and `&'a mut` inputs borrowed (`kept_mutable_inputs`), as
+/// `self.content.overlay(tree, ..)` in a program's impl of iced's
+/// `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)` (#2698): where the
+/// call is made in a stand-in's lending region, and native code lent the
+/// stand-in each such input kept in that region, the call borrows them,
+/// and a receiver it lent or the arena holds, at the region's lifetime,
+/// and its output stays there, so the stand-in gives it native code at
+/// the lifetime native code lent them. Elsewhere the adapter goes on to
+/// open a frame of its own. Nothing for another call.
+#[allow(clippy::too_many_arguments)]
+fn render_lending_call(
+    plan: &Plan,
+    path: &str,
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = request::unwritable;
+    let kept = kept_mutable_inputs(signature, substitutions)?;
+    if kept.is_empty() || !matches!(receiver, Receiver::Mutable) {
+        return Ok(());
+    }
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        receiver,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        render_to_dynamic(&returned, "made", 0, &mut converted)?;
+        converted
+    };
+    let lends = kept
+        .iter()
+        .map(|KeptInput { position, .. }| {
+            format!(
+                "lent_value(arguments, {}).is_some_and(|lent| lent.is_kept_in(anchor))",
+                position + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let mut taken = Vec::new();
+    for (position, ty) in signature.inputs().iter().enumerate() {
+        if kept.iter().any(|input| input.position == position) {
+            writeln!(
+                taken,
+                "        let argument_{position}_lent = lent_value(arguments, {}).ok_or(Error::MissingArgument)?;",
+                position + 1
+            )
+            .map_err(encoding)?;
+        } else {
+            render_take_input(
+                position,
+                position + 1,
+                ty,
+                signature,
+                substitutions,
+                None,
+                &mut taken,
+            )?;
+        }
+    }
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    let mut reached = String::new();
+    for KeptInput { position, rust } in &kept {
+        reached.push_str(&format!(
+            "
+            let argument_{position}: &mut {rust} = region.lent_mut::<{rust}>(argument_{position}_lent).map_err(|error| Error::Lent(argument_{position}_lent.name(), error))?;"
+        ));
+    }
+    writeln!(
+        output,
+        "    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| {lends}) {{
+        let receiver_lent = lent_value(arguments, 0);
+        let receiver_handle = match (scoped_value(arguments, 0), receiver_lent) {{
+            (None, None) => Some(native_handle(arguments, 0, false)?),
+            _ => None,
+        }};
+{taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{reached}
+            #[allow(unused_mut)]
+            let mut receiver: &mut {container} = match (receiver_lent, receiver_handle) {{
+                (Some(lent), _) => region.lent_mut::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?,
+                (None, Some(handle)) => arguments.arena.lease_place::<{container}>(handle)?.lend_to(region)?,
+                (None, None) => return Err(Error::Lent({container:?}, __rawr_internal::scope::Error::Mismatch)),
+            }};
+            let made = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
+    }}"
+    )
+    .map_err(encoding)
+}
+
 /// A method call whose output borrows what it takes besides its receiver
 /// (D558 tier 1), as quick-xml's `read_event_into(&mut buf)`: it gives a
 /// scope frame the statement it is in opens. The frame reaches the
@@ -16355,14 +16538,29 @@ fn render_method_opening(
                 .to_owned()
         };
         let reached = format!("{pinned}{reached}");
+        // Each `&'a mut T` the output keeps with the receiver is reached
+        // where it is for the rest of the scope, as the frame holds the
+        // receiver (`kept_mutable_inputs`).
+        let made = kept_mutable_inputs(signature, substitutions)?
+            .iter()
+            .rev()
+            .fold(
+                format!("let made = {call};\n            {frame}"),
+                |made, KeptInput { position, rust }| {
+                    format!(
+                    "reach_lender_mut::<{rust}>(&argument_{position}, &mut |argument_{position}| {{
+            {made}
+        }})"
+                )
+                },
+            );
         let scoped = match container_family(path, &container) {
             Some(family) => format!(
                 "Some(scoped) => __rawr_internal::scope::{claim}::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
             #[allow(unused_mut)]
             let mut receiver = region.{}.map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?;
             {reached}
-            let made = {call};
-            {frame}
+            {made}
         }})
         .map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?,",
                 family.call(family_reach, "scoped")
@@ -16424,7 +16622,7 @@ fn render_method_opening(
             .iter()
             .any(|input| object::lent_slice_element(input).is_some());
         let lent = lent_opening(
-            receiver, signature, &container, &call, &converted, &frame, &kept, &texts, &reached,
+            receiver, signature, &container, &call, &converted, &made, &kept, &texts, &reached,
             holds,
         )?;
         let anchored = arena_anchored(receiver, holds, &kept, &container, &call, &converted);
@@ -16447,8 +16645,7 @@ fn render_method_opening(
             None => {{
                 {held}
                 {reached}
-                let made = {call};
-                {frame}
+                {made}
             }}
         }}
     {closed}}}){with};
@@ -16491,8 +16688,9 @@ fn render_method_opening(
 /// let Some(lent)`. A lend native code keeps as long as an anchored call's
 /// result is borrowed in that call's region, where the output stays, so the
 /// result may keep it. Any other is reached through its accessor while the
-/// rest of the scope runs, as a frame holds a receiver of the arena. Each
-/// of `keeps` (`kept_inputs`) is reached beside a kept receiver in its
+/// rest of the scope runs, as a frame holds a receiver of the arena, and
+/// `made` makes the output and runs the frame. Each of `keeps`
+/// (`kept_inputs`) is reached beside a kept receiver in its
 /// region, and by `reached` beside another. Each `&'a str` input at
 /// `texts` is pinned in a kept receiver's region, which outlives the
 /// frame's own copy of it. A frame that `holds` objects made for the call
@@ -16504,7 +16702,7 @@ fn lent_opening(
     container: &str,
     call: &str,
     converted: &str,
-    frame: &str,
+    made: &str,
     keeps: &[KeptInput],
     texts: &[usize],
     reached: &str,
@@ -16572,8 +16770,7 @@ fn lent_opening(
                 if let Some({taken}) = taken.take() {{
                     result = Some((|| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
                         {reached}
-                        let made = {call};
-                        {frame}
+                        {made}
                     }})());
                 }}
             }})
@@ -23420,6 +23617,20 @@ fn render_from_dynamic(
                 "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| take_handle_like(arguments.arena, handle, _w))"
             )
         }
+        // A value that borrows, taken out of the region it was made in at
+        // the region's lifetime, as a stand-in's lending call takes what
+        // the program's impl gave (#2698).
+        convert::Type::Nominal { .. }
+            if IN_REGION.get()
+                && carries_lifetime(ty)
+                && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
+        {
+            write!(
+                output,
+                "{value}.try_cast_result::<__rawr_internal::scope::Scoped>().map_err(|_| Error::TypeMismatch).and_then(|scoped| region.{}.map_err(|error| Error::Lent(scoped.name(), error)))",
+                family.call(family::Reach::Take, "scoped")
+            )
+        }
         // At the type it is, as rustc infers none for a value in an
         // `Option` (#1070); a parameter's is the context's.
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => match concrete_type(ty) {
@@ -27845,6 +28056,21 @@ fn render_impl_function(
     let formatter = function
         .formatter()
         .and_then(|position| usize::try_from(position).ok());
+    // A method whose output borrows its `&mut self` receiver and inputs
+    // native code lends at the receiver's lifetime runs in a lending
+    // region, which each such input is lent kept in
+    // (`render_lending_function`).
+    let lending = matches!(function.receiver(), ImplReceiver::Mutable)
+        && frame.is_none()
+        && !function.kept().is_empty()
+        && carries_lifetime(function.output());
+    let kept_in = |position: usize| {
+        lending
+            && function
+                .kept()
+                .iter()
+                .any(|kept| usize::try_from(*kept).ok() == Some(position))
+    };
     for (position, input) in function.inputs().iter().enumerate() {
         let name = format!("input_{position}");
         let at = values.len();
@@ -27945,7 +28171,8 @@ fn render_impl_function(
             {
                 let target =
                     concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
-                let lend = LentInput::new(position, *borrowed_mutably, target);
+                let mut lend = LentInput::new(position, *borrowed_mutably, target);
+                lend.kept_in = kept_in(position);
                 values.push(lend.value());
                 lends.push(lend);
             }
@@ -28135,6 +28362,30 @@ fn render_impl_function(
             parameters.join(", ")
         ));
     }
+    // An output that borrows the `&mut self` receiver, and the `&mut`
+    // inputs native code lends at its lifetime, as iced's `overlay<'b>(&'b
+    // mut self, tree: &'b mut Tree, ..) -> Vec<overlay::Element<'b, ..>>`
+    // does: the impl runs in a lending region at that lifetime, where each
+    // crate call it makes that borrows so leaves its output, and the
+    // stand-in takes what the impl gives out of it (#2698).
+    if lending {
+        if !slices.is_empty() || !places.is_empty() || !held.is_empty() {
+            return Err(drift(
+                "a stand-in's method whose output borrows its receiver takes a slice or a mirror",
+            ));
+        }
+        return render_lending_function(
+            function,
+            &entered,
+            &parameters,
+            &values,
+            &restores,
+            &mutable,
+            lends,
+            count,
+            &rust,
+        );
+    }
     // An output that borrows may keep a `&[T]` native code lent the
     // function, as a crate call in its body that keeps the slice gives it
     // (`place::around_slices`).
@@ -28223,6 +28474,88 @@ fn render_impl_function(
     ))
 }
 
+/// A stand-in's method whose output borrows its `&mut self` receiver,
+/// and each input at `function.kept()` it takes at the receiver's
+/// lifetime, as iced's `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)
+/// -> Vec<overlay::Element<'b, ..>>` (#2698): the program's impl runs in a
+/// lending region at that lifetime (`Object::lending`), each kept input
+/// lent kept in it, so a crate call the impl makes that borrows them and a
+/// native value it holds leaves its output there, and the output is taken
+/// out of that region at the lifetime.
+#[allow(clippy::too_many_arguments)]
+fn render_lending_function(
+    function: &crate::surface::instance::ScriptImplFunction,
+    entered: &str,
+    parameters: &[String],
+    values: &str,
+    restores: &str,
+    mutable: &str,
+    lends: Vec<LentInput>,
+    count: usize,
+    rust: &str,
+) -> Result<String, request::Error> {
+    let kept = function
+        .kept()
+        .iter()
+        .filter_map(|position| usize::try_from(*position).ok())
+        .collect::<Vec<_>>();
+    // The receiver, each kept input and the output at one lifetime.
+    let parameters = parameters
+        .iter()
+        .enumerate()
+        .map(|(at, parameter)| {
+            if at == 0 {
+                return "&'rawr mut self".to_owned();
+            }
+            let position = at - 1;
+            if !kept.contains(&position) {
+                return parameter.clone();
+            }
+            let Some((name, ty)) = parameter.split_once(": ") else {
+                return parameter.clone();
+            };
+            match ty.strip_prefix('&') {
+                Some(target) => format!("{name}: &'rawr {target}"),
+                None => parameter.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let rust = rust.replace("'_", "'rawr");
+    let mut converted = String::new();
+    {
+        let _region = InRegion::enter();
+        render_from_dynamic(function.output(), "value", 0, &mut converted)?;
+    }
+    let values = values.replace("self.0.", "object.");
+    let restores = restores.replace("self.0.", "object.");
+    let call = format!(
+        "let mut values: [Dynamic; {count}] = {values};
+        let value = member.call(&mut values, &[{mutable}]);{restores}
+        value"
+    );
+    let (items, call) = lent_around(&lends, call);
+    Ok(format!(
+        "    fn {name}<'rawr>({parameters}) -> {rust} {{
+{items}        let _arena = CallArena::enter();
+        {entered}
+        self.0.lending(
+            |object, anchor| {{
+                let _ = anchor;
+                let witnesses = member.witnesses();
+                {call}
+            }},
+            |region, value| {{
+                with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }})
+                    .unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))
+            }},
+        )
+    }}
+",
+        name = function.name(),
+        parameters = parameters.join(", "),
+    ))
+}
+
 /// The Rust type of the crate value a script impl function's `&T` output
 /// borrows from its receiver (#2001), where it takes one by reference: a
 /// value of the arena, whose type carries no lifetime.
@@ -28256,6 +28589,10 @@ struct LentInput {
     /// Native code keeps the borrow as long as the slot's output, which
     /// borrows it (`Lent::kept`).
     kept: bool,
+    /// Native code keeps the `&mut` borrow as long as the output of the
+    /// stand-in's lending call, whose region's nonce is `anchor`
+    /// (`Lent::kept_in`).
+    kept_in: bool,
     /// The value is `input_{position}` itself, a trait object's pointer,
     /// lent by a borrow of its parameter (`LentInput::object`).
     placed: bool,
@@ -28273,6 +28610,7 @@ impl LentInput {
             rust,
             reads: true,
             kept: false,
+            kept_in: false,
             placed: false,
         }
     }
@@ -28295,6 +28633,7 @@ impl LentInput {
             family,
             reads: false,
             kept: false,
+            kept_in: false,
             placed: false,
         }
     }
@@ -28318,6 +28657,7 @@ impl LentInput {
             rust,
             reads,
             kept,
+            kept_in,
             ..
         } = self;
         let writer = if *mutable {
@@ -28330,7 +28670,11 @@ impl LentInput {
         } else {
             String::new()
         };
-        let kept = if *kept { ".kept()" } else { "" };
+        let kept = match (*kept, *kept_in) {
+            (_, true) => ".kept_in(anchor)",
+            (true, false) => ".kept()",
+            (false, false) => "",
+        };
         format!(
             "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {rust:?}, {writer}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)){reads}{kept})"
         )

@@ -121,6 +121,9 @@ impl Proxy {
     /// `view(&state)` takes it.
     pub fn lend(&self) -> Dynamic {
         self.settle();
+        // What a lending call's output borrowed of it, which native code
+        // holds no longer (`Object::lending`).
+        self.pins.end_leases();
         self.value.clone()
     }
 
@@ -692,6 +695,50 @@ impl Object {
     /// The value, lent shared for one call ([`Proxy::lend`]).
     pub fn lend(&self) -> Dynamic {
         self.proxy.lend()
+    }
+
+    /// `defaults`, the value whose impl runs a provided method's body
+    /// where the program's impl writes none, kept in the value's pins for
+    /// as long as `self` is borrowed: a provided method whose output
+    /// borrows its `&'b mut` receiver, as iced's `overlay` of a widget
+    /// that writes none, gives what borrows it for `'b` (#2698).
+    pub fn defaulted<D: 'static>(&mut self, defaults: D) -> &mut D {
+        // What an earlier call kept, which nothing borrows now that `self`
+        // is borrowed `&mut` again.
+        self.proxy.pins.end_leases();
+        let place = self.proxy.pins.keep_leased(defaults);
+        // SAFETY: `keep_leased` made the place from a box it keeps until
+        // the pins let their leases go, which only a borrow of `self`
+        // does, and the result borrows `self` exclusively for `'b`. No
+        // other reference is made from the place.
+        unsafe { &mut *place }
+    }
+
+    /// A call of the impl's method whose output borrows the value `&'b
+    /// mut`, and each `&'b mut` input native code lends it, past the call,
+    /// as iced's `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)` gives
+    /// elements that borrow both (#2698). `call` runs in a lending region
+    /// at `'b` whose nonce it takes, so each crate call the impl makes
+    /// that borrows so makes its output there ([`Region::lending`]), and
+    /// `give` takes what the impl gave out of that region at `'b`. What
+    /// those calls borrow of the value is kept in its pins, with the
+    /// region, while native code may hold the output: rustc ends the
+    /// output's borrow of the value before native code reaches it again,
+    /// and that is where the pins let them go.
+    ///
+    /// [`Region::lending`]: crate::scope::Region::lending
+    pub fn lending<'b, R>(
+        &'b mut self,
+        call: impl FnOnce(&mut Self, crate::scope::Nonce) -> Dynamic,
+        give: impl FnOnce(&mut crate::scope::Region<'b>, Dynamic) -> R,
+    ) -> R {
+        let mut region = crate::scope::Region::<'b>::lending();
+        let nonce = region.nonce();
+        let value = crate::scope::open_anchored(&mut region, || call(self, nonce));
+        let output = give(&mut region, value);
+        let leases = region.take_leases();
+        self.proxy.pins.lease(leases, region);
+        output
     }
 
     /// The value, lent `&mut` for one call ([`Proxy::lend_mut`]).

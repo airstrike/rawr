@@ -89,11 +89,17 @@ pub struct Method {
     /// Whether the trait gives the method a body, which a program's impl
     /// that writes none runs.
     provided: bool,
+    /// The inputs, by position, borrowed at the receiver's lifetime where
+    /// the output names it, as iced's `overlay<'b>(&'b mut self, tree:
+    /// &'b mut Tree, ..)` takes its tree: the output borrows them as long
+    /// as it borrows the receiver.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    kept: Box<[u32]>,
 }
 
 impl Method {
     #[must_use]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         name: Box<str>,
         receiver: crate::surface::instance::ImplReceiver,
         inputs: Box<[Type]>,
@@ -106,7 +112,22 @@ impl Method {
             inputs,
             output,
             provided,
+            kept: Box::new([]),
         }
+    }
+
+    /// The method, whose output borrows the inputs at `kept` as long as it
+    /// borrows the receiver.
+    #[must_use]
+    pub(crate) fn with_kept(self, kept: Box<[u32]>) -> Self {
+        Self { kept, ..self }
+    }
+
+    /// The inputs, by position, its output borrows as long as it borrows
+    /// the receiver.
+    #[must_use]
+    pub fn kept(&self) -> &[u32] {
+        &self.kept
     }
 
     /// The method's name.
