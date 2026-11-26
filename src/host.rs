@@ -1706,6 +1706,24 @@ impl Registry {
             .map(ImmutableString::from)
     }
 
+    /// Every path the facades write a header of the crate trait
+    /// `identity` at, held ones too: one trait a crate re-exports has
+    /// members under each (`Trait::__rawr_self::m`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn trait_paths(&self, identity: &[u8; 32]) -> Vec<path::Path> {
+        let held = self.held.iter().flat_map(|(held, _)| held.trait_headers());
+        let mut paths = self
+            .trait_headers
+            .iter()
+            .chain(held)
+            .filter(|header| header.identity == *identity)
+            .map(|header| header.path.clone())
+            .collect::<Vec<_>>();
+        paths.sort_by_key(ToString::to_string);
+        paths.dedup();
+        paths
+    }
+
     /// The crates' impls of the trait whose identity is `identity` (D604).
     #[cfg(feature = "rust-import")]
     pub(crate) fn impl_headers(

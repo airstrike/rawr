@@ -780,6 +780,9 @@ impl<'a> Parser<'a> {
             application: item.application().copied(),
             span,
         });
+        if !self.collecting_instances {
+            self.bind_exact_instances(item, requirements, span);
+        }
         Ok(())
     }
 

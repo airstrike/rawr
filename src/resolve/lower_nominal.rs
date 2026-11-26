@@ -33,6 +33,8 @@ mod drops;
 mod emit;
 mod entry;
 mod error_object;
+#[cfg(feature = "rust-import")]
+mod exact;
 mod expand;
 mod expr;
 mod fmt_write;
