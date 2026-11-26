@@ -17148,6 +17148,13 @@ fn render_scoped_receiver(
             format!("?;\n        return Ok(Dynamic::from_array(vec![given{copied}]))"),
         )
     };
+    // A native call made on a value a region holds lends the arena to the
+    // program's code it calls back, as a call on an arena value does.
+    let call = if call.starts_with("lend(") {
+        call
+    } else {
+        format!("lend(arguments.arena, || {call})")
+    };
     writeln!(
         output,
         "    if let Some(scoped) = {scoped}(arguments, 0) {{
@@ -17268,6 +17275,13 @@ fn render_scoped_input(
         render_to_dynamic(&returned, "output", 0, &mut converted)?;
         converted
     };
+    // A native call made on a value a region holds lends the arena to the
+    // program's code it calls back, as a call on an arena value does.
+    let call = if call.starts_with("lend(") {
+        call
+    } else {
+        format!("lend(arguments.arena, || {call})")
+    };
     writeln!(
         output,
         "    if let Some(scoped) = scoped_value(arguments, {position}) {{
@@ -17365,6 +17379,13 @@ fn render_receiver_kept(
         converted
     };
     let index = position + 1;
+    // A native call made on a value a region holds lends the arena to the
+    // program's code it calls back, as a call on an arena value does.
+    let call = if call.starts_with("lend(") {
+        call
+    } else {
+        format!("lend(arguments.arena, || {call})")
+    };
     writeln!(
         output,
         "    let handle = native_handle(arguments, 0, false)?;
