@@ -934,6 +934,11 @@ struct Parser<'a> {
     /// each is bound once in a pass of reads (`demand::read`).
     #[cfg(feature = "rust-import")]
     demand_bound: demand::Bound,
+    /// The types each crate trait instance's own members over `Self`
+    /// give that implement it there, by the trait and its arguments'
+    /// names (`exact.rs::filling`): computed once per instance.
+    #[cfg(feature = "rust-import")]
+    fillings: exact::Fillings,
     /// The crate trait each call of the generic read on a parameter
     /// selects through the parameter's bound, by the method's position:
     /// `self.content.size()` of `W: Widget<..>` is `Widget`'s.
@@ -1328,6 +1333,8 @@ impl<'a> Parser<'a> {
             demand_seeds: Vec::new(),
             #[cfg(feature = "rust-import")]
             demand_bound: demand::Bound::new(),
+            #[cfg(feature = "rust-import")]
+            fillings: BTreeMap::new(),
             selections: Vec::new(),
             generic_crate_bounds: BTreeMap::new(),
             reaches_host: false,

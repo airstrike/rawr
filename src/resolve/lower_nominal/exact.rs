@@ -8,7 +8,12 @@
 //! whatever the program writes next, so each member of it is bound: the
 //! impl's own methods, and every member of the trait over `Self` at the
 //! impl's self type, which a generic body's call through its bound
-//! selects. Each member is bound once, by the item it defines and its
+//! selects. An impl parameter neither the trait's arguments nor the self
+//! type fixes, which the impl bounds by the trait itself, as `W` of
+//! `impl<W, ..> Widget<..> for Row<W>`, is each settled type the trait's
+//! own members over `Self` give there that implements it, as `_boxed`
+//! gives `Element`: `row!` boxes each child so, and the runner then holds
+//! `Row<Element>`. Each member is bound once, by the item it defines and its
 //! types, whichever of the trait's paths spells it (D1118): a trait iced
 //! re-exports under a dozen chains is one set of adapters, and a use
 //! spelled through any of them is that adapter's. A later save whose
@@ -153,6 +158,7 @@ impl Parser<'_> {
             .signature()
             .declared_type_parameters()
             .collect::<Vec<_>>();
+        let filling = self.filling(identity, given);
         for &(header, owner) in &headers {
             let alike = headers
                 .iter()
@@ -161,13 +167,12 @@ impl Parser<'_> {
             if alike > 1 {
                 continue;
             }
-            let Some(found) = self.exact_instance(header, owner, given, None) else {
-                continue;
-            };
-            let mut at = types.clone();
-            at.push((own.as_ref().into(), found.self_type));
-            at.sort_by_key(|(name, _)| order.iter().position(|declared| declared == name));
-            self.bind_member(item, Some(at), None, span);
+            for found in self.exact_instances(header, owner, given, None, &filling) {
+                let mut at = types.clone();
+                at.push((own.as_ref().into(), found.self_type));
+                at.sort_by_key(|(name, _)| order.iter().position(|declared| declared == name));
+                self.bind_member(item, Some(at), None, span);
+            }
         }
         true
     }
@@ -290,10 +295,16 @@ impl Parser<'_> {
                 headers.push((header, owner));
             }
         }
-        for &(header, owner) in &headers {
-            let Some(found) = self.exact_instance(header, owner, given, fixed) else {
-                continue;
-            };
+        let filling = self.filling(identity, given);
+        let found = headers
+            .iter()
+            .flat_map(|&(header, owner)| {
+                self.exact_instances(header, owner, given, fixed, &filling)
+                    .into_iter()
+                    .map(move |found| (header, found))
+            })
+            .collect::<Vec<_>>();
+        for (header, found) in found {
             let Ty::Host { proof, .. } = &found.self_type else {
                 continue;
             };
@@ -332,6 +343,129 @@ impl Parser<'_> {
                 }
             }
         }
+    }
+
+    /// The settled types the outputs of the crate trait `identity`'s own
+    /// members over `Self` are at the trait arguments `given`, whatever
+    /// `Self` is, that implement the trait there: iced's `Element<'_,
+    /// Message, Theme, Renderer>`, which `Widget::_boxed` gives. Each
+    /// fills an impl parameter only a bound by the trait constrains
+    /// (`exact_instances`), as `W` of `impl<W, ..> Widget<..> for Row<W>`,
+    /// so the runner holds `Row<Element>` that `row!` makes. Computed once
+    /// per trait instance.
+    fn filling(&mut self, identity: [u8; 32], given: &[Ty]) -> std::rc::Rc<[Ty]> {
+        let names = given
+            .iter()
+            .map(|ty| ImmutableString::from(ty.name(&self.models).to_string()))
+            .collect::<Box<[_]>>();
+        let key = (identity, names);
+        if let Some(found) = self.fillings.get(&key) {
+            return found.clone();
+        }
+        let host = self.models.host.clone();
+        let paths = host.trait_paths(&identity);
+        let trait_parameters = paths
+            .first()
+            .map(|first| header_arguments(&header_names(&host, first), given))
+            .unwrap_or_default();
+        let headers = host.owned_impl_headers(identity).collect::<Vec<_>>();
+        let mut found = Vec::<Ty>::new();
+        for written in &paths {
+            for member in host.members(&format!("{written}::__rawr_self")) {
+                let owner = host.item_owner(&member.path()).cloned();
+                let mut parameters = trait_parameters.clone();
+                let checkpoint = self.inference.checkpoint();
+                let output = self
+                    .instantiate_host_type(
+                        member.signature().output(),
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        owner.as_ref(),
+                        None,
+                    )
+                    .ok()
+                    .map(|output| self.inference.resolve(&output));
+                self.inference.rollback(checkpoint);
+                let Some(output) = output.filter(|output| {
+                    matches!(output, Ty::Host { .. }) && settled(output) && !found.contains(output)
+                }) else {
+                    continue;
+                };
+                let implements = headers.iter().any(|&(header, owner)| {
+                    self.exact_instance(header, owner, given, Some(&output), &BTreeMap::new())
+                        .is_some()
+                });
+                if implements {
+                    found.push(output);
+                }
+            }
+        }
+        let found = std::rc::Rc::<[Ty]>::from(found);
+        self.fillings.insert(key, found.clone());
+        found
+    }
+
+    /// `header` at the trait arguments `given`, for the self type `fixed`
+    /// when there is one, as `exact_instance` gives it. A parameter neither
+    /// fixes, that the impl bounds by its own trait, as `W` of `impl<W,
+    /// Message, Theme, Renderer> Widget<Message, Theme, Renderer> for
+    /// Row<W> where W: Widget<Message, Theme, Renderer>`, is each of
+    /// `filling` in turn.
+    fn exact_instances(
+        &mut self,
+        header: &ImplHeader,
+        owner: Option<&Dependency>,
+        given: &[Ty],
+        fixed: Option<&Ty>,
+        filling: &[Ty],
+    ) -> Vec<Exact> {
+        if let Some(found) = self.exact_instance(header, owner, given, fixed, &BTreeMap::new()) {
+            return vec![found];
+        }
+        if filling.is_empty() || header.arguments.len() != given.len() {
+            return Vec::new();
+        }
+        let checkpoint = self.inference.checkpoint();
+        let open =
+            self.fit(header, owner, given, fixed, &BTreeMap::new())
+                .map(|(parameters, _)| {
+                    parameters
+                        .into_iter()
+                        .filter(|(_, ty)| !settled(&self.inference.resolve(ty)))
+                        .map(|(name, _)| name)
+                        .collect::<Vec<_>>()
+                });
+        self.inference.rollback(checkpoint);
+        let Some(open) = open.filter(|open| !open.is_empty()) else {
+            return Vec::new();
+        };
+        let bounded_by_its_trait = |name: &ImmutableString| {
+            header.bounds.iter().any(|bound| {
+                bound.trait_identity == header.trait_identity
+                    && matches!(bound.ty.shape(), Shape::Parameter(own) if *own.to_string() == **name)
+            })
+        };
+        if !open.iter().all(bounded_by_its_trait) {
+            return Vec::new();
+        }
+        let mut fills = vec![BTreeMap::new()];
+        for name in &open {
+            fills = fills
+                .into_iter()
+                .flat_map(|fill: BTreeMap<ImmutableString, Ty>| {
+                    filling.iter().map(move |ty| {
+                        let mut fill = fill.clone();
+                        fill.insert(name.clone(), ty.clone());
+                        fill
+                    })
+                })
+                .collect();
+        }
+        fills
+            .iter()
+            .filter_map(|fill| self.exact_instance(header, owner, given, fixed, fill))
+            .collect()
     }
 
     /// Binds each member over `Self` of the trait `identity`, written at
@@ -400,12 +534,13 @@ impl Parser<'_> {
         owner: Option<&Dependency>,
         given: &[Ty],
         fixed: Option<&Ty>,
+        fill: &BTreeMap<ImmutableString, Ty>,
     ) -> Option<Exact> {
         if header.arguments.len() != given.len() {
             return None;
         }
         let checkpoint = self.inference.checkpoint();
-        let found = self.exact_at(header, owner, given, fixed);
+        let found = self.exact_at(header, owner, given, fixed, fill);
         self.inference.rollback(checkpoint);
         found
     }
@@ -416,34 +551,9 @@ impl Parser<'_> {
         owner: Option<&Dependency>,
         given: &[Ty],
         fixed: Option<&Ty>,
+        fill: &BTreeMap<ImmutableString, Ty>,
     ) -> Option<Exact> {
-        let mut parameters = BTreeMap::new();
-        for name in &header.parameters {
-            parameters.insert(name.clone(), self.inference.fresh());
-        }
-        for (written, argument) in header.arguments.iter().zip(given) {
-            let written = self
-                .instantiate_host_type(written, &mut parameters, "impl", Span::NONE, owner, None)
-                .ok()?;
-            if !self.unify_type(&written, argument) {
-                return None;
-            }
-        }
-        let self_type = self
-            .instantiate_host_type(
-                &header.self_type,
-                &mut parameters,
-                "impl",
-                Span::NONE,
-                owner,
-                None,
-            )
-            .ok()?;
-        if let Some(fixed) = fixed
-            && !self.unify_type(&self_type, fixed)
-        {
-            return None;
-        }
+        let (parameters, self_type) = self.fit(header, owner, given, fixed, fill)?;
         let self_type = self.inference.resolve(&self_type);
         if !settled(&self_type) {
             return None;
@@ -475,6 +585,51 @@ impl Parser<'_> {
             parameters,
             bounds,
         })
+    }
+
+    /// `header`'s parameters and self type, unified with the trait
+    /// arguments `given` and the self type `fixed`, each parameter `fill`
+    /// names at its type: what is left open stays open.
+    fn fit(
+        &mut self,
+        header: &ImplHeader,
+        owner: Option<&Dependency>,
+        given: &[Ty],
+        fixed: Option<&Ty>,
+        fill: &BTreeMap<ImmutableString, Ty>,
+    ) -> Option<(BTreeMap<ImmutableString, Ty>, Ty)> {
+        let mut parameters = BTreeMap::new();
+        for name in &header.parameters {
+            let ty = fill
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| self.inference.fresh());
+            parameters.insert(name.clone(), ty);
+        }
+        for (written, argument) in header.arguments.iter().zip(given) {
+            let written = self
+                .instantiate_host_type(written, &mut parameters, "impl", Span::NONE, owner, None)
+                .ok()?;
+            if !self.unify_type(&written, argument) {
+                return None;
+            }
+        }
+        let self_type = self
+            .instantiate_host_type(
+                &header.self_type,
+                &mut parameters,
+                "impl",
+                Span::NONE,
+                owner,
+                None,
+            )
+            .ok()?;
+        if let Some(fixed) = fixed
+            && !self.unify_type(&self_type, fixed)
+        {
+            return None;
+        }
+        Some((parameters, self_type))
     }
 
     /// Whether some impl of the crate trait `identity` at `arguments` fits
@@ -588,6 +743,11 @@ impl Parser<'_> {
         });
     }
 }
+
+/// The types each crate trait instance's own members over `Self` give
+/// that implement it there, by the trait and its arguments' names
+/// (`Parser::filling`).
+pub(super) type Fillings = BTreeMap<([u8; 32], Box<[ImmutableString]>), std::rc::Rc<[Ty]>>;
 
 /// An impl header at an instance (`exact_instance`).
 struct Exact {
