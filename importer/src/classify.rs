@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 320;
+const CLASSIFIER_VERSION: u32 = 325;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -16241,11 +16241,13 @@ fn borrows_receiver(
 ) -> bool {
     let model::Receiver::Reference {
         lifetime: receiver @ model::Lifetime::Late { binder, .. },
+        mutability,
         ..
     } = signature.receiver()
     else {
         return false;
     };
+    let exclusive = *mutability == model::Mutability::Mutable;
     let output = signature.output();
     // A nominal output, as `QName<'_>`: a borrow guard is read through its
     // target, an async method's future holds its receiver (D513.6), and an
@@ -16255,9 +16257,12 @@ fn borrows_receiver(
     // borrows by value (#1225): the frame's lifetime, as
     // the output's is. So may a shared reference at that lifetime, as its
     // `theme: &'a Theme` is, or a `&'a str`, as `titled(&'a self, title:
-    // &'a str)` takes (#1503). Any other lifetime of the method's own is
-    // one the output doesn't name and an input borrows at for the call
-    // alone, as an elided `id: &Id`.
+    // &'a str)` takes (#1503). A `&mut self` method's output may keep a
+    // `&'b mut T` at its receiver's lifetime too, as iced's `overlay<'b>(&'b
+    // mut self, tree: &'b mut Tree, ..)` keeps the tree (#2698); a `&self`
+    // one's may not. Any other lifetime of the method's own is one the
+    // output doesn't name and an input borrows at for the call alone, as an
+    // elided `id: &Id`.
     matches!(output, model::Type::Definition { .. })
         && signature.guard().is_none()
         && !signature.async_function()
@@ -16268,7 +16273,7 @@ fn borrows_receiver(
             !names_late_lifetime(input)
                 || naming(input, receiver) == Naming::Argument
                 || shares_at(input, receiver)
-                || exclusive_at(input, receiver)
+                || (exclusive && exclusive_at(input, receiver))
                 || text_at(input, receiver)
                 || objects_at(input, receiver, &is_option)
                 || (!names_lifetime(input, receiver) && lends_late_borrows(input))
@@ -19125,8 +19130,10 @@ mod tests {
     /// inboard's `Organization::user(&self, id: &Id) -> Option<&User>`,
     /// `for<'a, 'b> fn(&'a Self, &'b Id) -> Option<&'a User>`: its elided
     /// lifetimes are the call's own, not a higher-ranked binder. An output
-    /// that names the id's lifetime, or an input that holds a borrow at it,
-    /// is still refused.
+    /// that names the id's lifetime, or a `&mut` input that holds a borrow
+    /// at it, is still refused. A shared reference lends what it holds
+    /// too, as log's `&(&str, ..)` does (ea606993e), so only a `&mut` can
+    /// keep the inner borrow past the call.
     #[test]
     fn elided_lifetimes_of_a_method_lend_its_inputs_beside_its_receiver() {
         use crate::api::model;
@@ -19187,8 +19194,18 @@ mod tests {
         );
         assert!(!super::receiver_binder_lends_inputs(&named));
 
-        let held = signature(
+        let shared = signature(
             reference(late(&input), reference(late(&input), plain.clone())),
+            option(reference(late(&receiver), plain.clone())),
+        );
+        assert!(super::receiver_binder_lends_inputs(&shared));
+
+        let held = signature(
+            model::Type::Reference {
+                lifetime: late(&input),
+                mutability: model::Mutability::Mutable,
+                ty: Box::new(reference(late(&input), plain.clone())),
+            },
             option(reference(late(&receiver), plain.clone())),
         );
         assert!(!super::receiver_binder_lends_inputs(&held));
@@ -19249,6 +19266,24 @@ mod tests {
         assert!(super::borrows_receiver(&shared, |_| false));
         let mutable = signature(Box::from([reference(model::Mutability::Mutable)]));
         assert!(!super::borrows_receiver(&mutable, |_| false));
+        // A `&'a mut self` method's output may keep a `&'a mut` input, as
+        // iced's `overlay` keeps its tree (the lending region, #2698).
+        let exclusive = model::Signature::new(
+            model::Safety::Safe,
+            false,
+            false,
+            "\"Rust\"".into(),
+            false,
+            Box::from([binder.clone()]),
+            model::Receiver::Reference {
+                lifetime: lifetime.clone(),
+                mutability: model::Mutability::Mutable,
+                ty: model::Type::SelfType(id.clone()),
+            },
+            Box::from([reference(model::Mutability::Mutable)]),
+            borrowing.clone(),
+        );
+        assert!(super::borrows_receiver(&exclusive, |_| false));
     }
 
     #[test]
@@ -19296,8 +19331,8 @@ mod tests {
     }
 
     #[test]
-    fn a_future_parameter_the_output_names_is_rejected_and_its_output_is_kept() {
-        use super::representability::{reject, signature};
+    fn a_future_parameter_the_output_names_is_its_core_future_and_its_output_is_kept() {
+        use super::representability::{convert, signature};
         let contract = crate::test_fixture::future_parameter_functions()
             .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the future parameter graph classifies");
@@ -19321,17 +19356,24 @@ mod tests {
             .map(signature::Parameter::kind)
             .collect::<Vec<_>>();
         assert_eq!(kinds, [signature::Kind::Future, signature::Kind::Type]);
-        // `scope<F: Future>(f: F) -> Wrap<F>` names the script future's own
-        // type, which no facade signature can declare, as tokio's
-        // `LocalKey::scope` does.
+        // `scope<F: Future>(f: F) -> Wrap<F>`, as tokio's `LocalKey::scope`
+        // gives, names `F` where its output is the core future of `F`'s
+        // synthetic output, as its input is, so the facade declares no `F`
+        // (D1005.2, which reads tokio's `Timeout<F::IntoFuture>` so; D545
+        // refused it before).
+        let Representability::FunctionItem(scope) = outcome("scope") else {
+            panic!("`scope` is a function item: {:?}", outcome("scope"));
+        };
+        let [future] = scope.signature().inputs() else {
+            panic!("`scope` takes one input: {:?}", scope.signature());
+        };
         assert!(
             matches!(
-                outcome("scope"),
-                Representability::Rejected(reason)
-                    if reason.kind() == reject::Kind::ScriptFutureType
+                scope.signature().output(),
+                convert::Type::Nominal { arguments, .. } if arguments[..] == [future.clone()]
             ),
             "{:?}",
-            outcome("scope")
+            scope.signature()
         );
     }
 
