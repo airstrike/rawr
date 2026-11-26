@@ -14083,8 +14083,10 @@ fn runtime_inputs(
 }
 
 /// The body of `plan`'s adapter, which takes its arguments, calls, and
-/// gives the output. An argument reached around the rest of the body
-/// (`render_reached_around`) closes its scope after it.
+/// gives the output. An argument reached around the body
+/// (`render_reached_around`) opens its scope before the body and closes it
+/// after, so the body's other arguments are made inside it as they are
+/// anywhere else.
 fn render_adapter_body(
     plan: &Plan,
     cohort: &[Plan],
@@ -14093,8 +14095,15 @@ fn render_adapter_body(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let around = ReachedAround::enter();
+    let start = output.len();
     render_adapter_steps(plan, cohort, profile, facade, output)?;
-    for closing in around.closings().iter().rev() {
+    let scopes = around.scopes();
+    let openings = scopes
+        .iter()
+        .map(|(opening, _)| opening.as_str())
+        .collect::<String>();
+    output.splice(start..start, openings.into_bytes());
+    for (_, closing) in scopes.iter().rev() {
         output
             .write_all(closing.as_bytes())
             .map_err(request::unwritable)?;
@@ -21874,7 +21883,8 @@ fn render_lease(
     };
     let rust = concrete_type(ty).ok_or_else(|| request::drift("borrowed input type"))?;
     if around && *mutable && carries_lifetime(ty) && matches!(**ty, convert::Type::Nominal { .. }) {
-        return render_reached_around(local, index, &rust, output);
+        render_reached_around(local, index, &rust);
+        return Ok(());
     }
     let borrow = if *mutable { "" } else { "&*" };
     let (held, lease) = if future {
@@ -21940,25 +21950,20 @@ fn render_lease(
 /// higher-ranked over the type's lifetime where `with_lent_arguments`
 /// erases only `'static` types, so the call runs inside it, as
 /// `lent_object_input` nests an object. A `'static` value in the arena is
-/// leased for the call. The closing (`REACHED_AROUND`) calls the closure
-/// with whichever it is.
-fn render_reached_around(
-    local: usize,
-    index: usize,
-    rust: &str,
-    output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
-    writeln!(
-        output,
+/// leased for the call. The opening goes before the body, as it reads only
+/// `arguments`, and the closing (`REACHED_AROUND`) calls the closure with
+/// whichever it is.
+fn render_reached_around(local: usize, index: usize, rust: &str) {
+    let opening = format!(
         "    let argument_{local}_lent = lent_value(arguments, {index});
     #[allow(unused_mut)]
     let mut argument_{local}_held: Option<PlaceHeld<{rust}>> = match argument_{local}_lent {{
         Some(_) => None,
         None => Some({{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease_place(handle)? }}),
     }};
-    let mut argument_{local}_rest = Some(|argument_{local}: &mut {rust}| -> Result<Dynamic, Error> {{"
-    )
-    .map_err(request::unwritable)?;
+    let mut argument_{local}_rest = Some(|argument_{local}: &mut {rust}| -> Result<Dynamic, Error> {{
+"
+    );
     let closing = format!(
         "    }});
     match (argument_{local}_lent, argument_{local}_held.as_mut()) {{
@@ -21975,8 +21980,7 @@ fn render_reached_around(
     }}
 "
     );
-    REACHED_AROUND.with_borrow_mut(|closings| closings.push(closing));
-    Ok(())
+    REACHED_AROUND.with_borrow_mut(|scopes| scopes.push((opening, closing)));
 }
 
 /// Whether `ty` is a callable type parameter of `signature`, as `F` of
@@ -25108,9 +25112,9 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// The scopes an adapter body's arguments reached around the rest of
-    /// the body opened, each one's closing (`render_reached_around`).
-    static REACHED_AROUND: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The scopes an adapter body's arguments reached around the body
+    /// open, each one's opening and closing (`render_reached_around`).
+    static REACHED_AROUND: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The argument whose trait object native code lent a script closure
     /// an adapter's body has as `object_{index}`, reached around the body
     /// (`lent_object_input`, #28).
@@ -26411,17 +26415,18 @@ impl Drop for LentArguments {
     }
 }
 
-/// Collects the closings of the scopes one adapter body opens
-/// (`REACHED_AROUND`), and gives back the enclosing body's when it drops.
-struct ReachedAround(Vec<String>);
+/// Collects the scopes one adapter body opens (`REACHED_AROUND`), and
+/// gives back the enclosing body's when it drops.
+struct ReachedAround(Vec<(String, String)>);
 
 impl ReachedAround {
     fn enter() -> Self {
         Self(REACHED_AROUND.take())
     }
 
-    /// The closings this body's arguments opened, in opening order.
-    fn closings(&self) -> Vec<String> {
+    /// The scopes this body's arguments open, each its opening and
+    /// closing, in opening order.
+    fn scopes(&self) -> Vec<(String, String)> {
         REACHED_AROUND.with_borrow(Clone::clone)
     }
 }
