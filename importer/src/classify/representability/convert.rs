@@ -386,6 +386,32 @@ impl Type {
         }
     }
 
+    /// Whether the type is settled where the runner calls the item: it
+    /// names no parameter and no type rustc infers there. A program type
+    /// is the runner's one stand-in for it, so a use at it is the same in
+    /// every build of the program's types (#2698).
+    #[must_use]
+    pub fn settled(&self) -> bool {
+        match self {
+            Self::Parameter(_)
+            | Self::Inferred
+            | Self::ProfileMessage { .. }
+            | Self::ConstArray { .. } => false,
+            Self::Unit | Self::Never | Self::Builtin(_) | Self::Object(_) | Self::Constant(_) => {
+                true
+            }
+            Self::Nominal { arguments, .. }
+            | Self::Tuple(arguments)
+            | Self::Script { arguments, .. } => arguments.iter().all(Self::settled),
+            Self::Option(element)
+            | Self::Sequence { element, .. }
+            | Self::Range(element)
+            | Self::Borrowed { ty: element, .. } => element.settled(),
+            Self::Result(ok, err) => ok.settled() && err.settled(),
+            Self::FunctionItem { input, output } => input.settled() && output.settled(),
+        }
+    }
+
     /// Whether a value of this type becomes rawr's, or rawr's becomes one,
     /// with no call's arena: it holds no crate value, only rawr's builtins
     /// and std's types rawr holds as its own, as a thread's `io::Result<()>`

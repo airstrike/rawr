@@ -911,7 +911,7 @@ fn host_into(generic: &item::Generic) -> Option<&type_ref::Type> {
 /// `substituted`, an instance's types: `path` of `fn load(path: impl
 /// Into<PathBuf>)`.
 #[cfg(feature = "rust-import")]
-fn into_conversions(
+pub(super) fn into_conversions(
     parameters: &[item::Parameter],
     generics: &[item::Generic],
     substituted: &[(ImmutableString, type_ref::Type)],
@@ -1589,7 +1589,7 @@ pub(super) fn method_instance(
 /// The crate-trait bounds `generics` declare, at the types `substituted`
 /// gives them: an instance's param-env (`Instances::bounds`).
 #[cfg(feature = "rust-import")]
-fn instance_bounds(
+pub(super) fn instance_bounds(
     generics: &[item::Generic],
     substituted: &[(ImmutableString, type_ref::Type)],
 ) -> Box<[(type_ref::Type, type_ref::Type)]> {
@@ -1790,6 +1790,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
         // Each call, by the body that makes it: the template and its types.
         let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();
         let mut impl_uses = Vec::new();
+        let mut seeds = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Function(definition) = &shell.kind else {
                 continue;
@@ -1844,6 +1845,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                     calls: take_instance_calls(&mut parser),
                     impl_uses: take_impl_uses(&mut parser),
                     reaches: false,
+                    seeds: std::mem::take(&mut parser.demand_seeds),
                 };
                 drop(parser);
                 allocation_failure.map_or(Ok(found), Err)
@@ -1865,6 +1867,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                     .map(|(template, types, call)| (key.clone(), template, types, call)),
             );
             impl_uses.extend(read.impl_uses);
+            seeds.extend(read.seeds);
         }
         // A builtin type's methods too, as an impl for every type of a bound
         // `IntoIterator`, whose instance calls `Content::with_children`.
@@ -1910,6 +1913,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                     found.templates = called_templates(&parser);
                     found.calls = take_instance_calls(&mut parser);
                     found.impl_uses = take_impl_uses(&mut parser);
+                    found.seeds = std::mem::take(&mut parser.demand_seeds);
                 }
                 allocation_failure.map_or(Ok(found), Err)
             };
@@ -1930,7 +1934,15 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 }),
             );
             impl_uses.extend(read.impl_uses);
+            seeds.extend(read.seeds);
         }
+        // The opened bodies the runner's fixed arguments settle, read for
+        // their native uses alone (decision 3), each once per check.
+        let mut done = std::mem::take(&mut program.instances.demanded);
+        let mut demanded =
+            super::demand::read(engine, program, &models, allocation, &seeds, &mut done);
+        program.instances.demanded = done;
+        program.instances.ahead.append(&mut demanded);
         let mut added = Vec::<(crate::item::Key, Vec<ImmutableString>, Vec<Ty>)>::new();
         // Each instance native code calls a template at, named by the key
         // its trampoline calls it by, ahead of marked callers', which then

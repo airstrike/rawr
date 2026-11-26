@@ -171,6 +171,40 @@ impl<'a> Parser<'a> {
     /// lower generically, so what it reached is what it gives.
     #[cfg(feature = "rust-import")]
     pub(super) fn all_native_uses(&mut self) -> Vec<ImportedUse> {
+        self.reached_uses(|using| {
+            using
+                .types
+                .iter()
+                .all(rawr_import::classify::representability::convert::Type::all_native)
+                && using.functions.is_empty()
+                && using.mappers.is_empty()
+                && using.slots.is_empty()
+                && !using.callable
+        })
+    }
+
+    /// The native uses a demand read reached at settled types (decision
+    /// 3): the runner's stand-ins for the program's types among them, as
+    /// `crate::Message`, and a call that takes a closure, whose adapter
+    /// takes it whatever it is. One that fills a slot or takes one of the
+    /// program's functions is the program's to make.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn demanded_uses(&mut self) -> Vec<ImportedUse> {
+        self.reached_uses(|using| {
+            using
+                .types
+                .iter()
+                .all(rawr_import::classify::representability::convert::Type::settled)
+                && using.functions.is_empty()
+                && using.mappers.is_empty()
+                && using.slots.is_empty()
+        })
+    }
+
+    /// The uses a read reached that `keep` keeps: its calls collected so
+    /// far and its structural uses whose types are settled.
+    #[cfg(feature = "rust-import")]
+    fn reached_uses(&mut self, keep: impl Fn(&ImportedUse) -> bool) -> Vec<ImportedUse> {
         let ops = std::mem::take(&mut self.ops);
         for op in &ops {
             if let Op::Intrinsic { operation } = op
@@ -201,17 +235,7 @@ impl<'a> Parser<'a> {
         std::mem::take(&mut *context.uses)
             .into_iter()
             .enumerate()
-            .filter(|(index, using)| {
-                !unsettled.contains(index)
-                    && using
-                        .types
-                        .iter()
-                        .all(rawr_import::classify::representability::convert::Type::all_native)
-                    && using.functions.is_empty()
-                    && using.mappers.is_empty()
-                    && using.slots.is_empty()
-                    && !using.callable
-            })
+            .filter(|(index, using)| !unsettled.contains(index) && keep(using))
             .map(|(_, using)| using)
             .collect()
     }
@@ -283,7 +307,12 @@ impl<'a> Parser<'a> {
             for op in ops {
                 if let Op::Intrinsic { operation } = op {
                     if operation.item.imported_identity().is_some() {
-                        self.collect_imported_call(operation)?;
+                        // A demand read keeps each call it can settle: one
+                        // on a parameter it leaves open adds nothing.
+                        match self.collect_imported_call(operation) {
+                            Err(_) if self.demand.is_some() => {}
+                            collected => collected?,
+                        }
                     } else if self.symbolic_only {
                         self.collect_symbolic_call(operation);
                     }
@@ -595,10 +624,18 @@ impl<'a> Parser<'a> {
             .imported_constants(item, requirements)
             .ok_or_else(|| unknown_const_argument(item, span))?;
         let ordered = instance_parameters(item, requirements);
-        if !self.collecting_instances {
+        // A demand read takes them as the program's check does, so its
+        // uses are the ones a later instance's check makes (decision 3).
+        if !self.collecting_instances || self.demand.is_some() {
             let receiver = operands.first().map(|(ty, ..)| ty);
             self.fix_member_by_param_env(item, &ordered, receiver);
             self.fix_impl_member_by_param_env(item, &ordered, receiver);
+        }
+        // A demand read's call through a bound on a parameter it leaves
+        // open binds the native impls' members before its own use, which
+        // the open parameter keeps from crossing.
+        if self.demand.is_some() {
+            self.bind_exact_instances(item, requirements, span);
         }
         let mut types = self.imported_entries(ordered.len())?;
         for (name, ty, _) in ordered {
@@ -780,7 +817,7 @@ impl<'a> Parser<'a> {
             application: item.application().copied(),
             span,
         });
-        if !self.collecting_instances {
+        if self.demand.is_none() {
             self.bind_exact_instances(item, requirements, span);
         }
         Ok(())

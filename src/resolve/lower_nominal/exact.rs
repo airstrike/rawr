@@ -22,6 +22,7 @@ use super::ty::{contains_inference, reaches_param, Ty};
 use super::Parser;
 use crate::host::defined::crate_item;
 use crate::host::facade::{Dependency, ImplHeader};
+use crate::host::type_ref::Shape;
 use crate::ImmutableString;
 use crate::Span;
 use std::collections::BTreeMap;
@@ -54,19 +55,186 @@ impl Parser<'_> {
             return;
         };
         let identity = header.identity;
-        let Some(given) = header
+        let written = header
             .parameters
             .iter()
             .map(|name| {
                 let (_, ty, _) = requirements.iter().find(|(own, ..)| own == name)?;
-                let ty = self.inference.resolve(ty);
-                settled(&ty).then_some(ty)
+                Some(self.inference.resolve(ty))
             })
-            .collect::<Option<Vec<_>>>()
-        else {
+            .collect::<Option<Vec<_>>>();
+        // A reading for the program's instances leaves the arguments the
+        // body's bound on the receiver gives to the check: they are the
+        // bound's, as rustc selects a where-clause first.
+        let given = written.and_then(|written| {
+            if written.iter().all(settled) {
+                return Some(written);
+            }
+            let own = rawr_import::classify::representability::signature::argument_impl_name(0);
+            let (_, receiver, _) = requirements.iter().find(|(name, ..)| **name == *own)?;
+            let receiver = self.inference.resolve(receiver);
+            self.param_env_arguments(&receiver, identity)
+                .filter(|bound| bound.len() == written.len() && bound.iter().all(settled))
+        });
+        let Some(given) = given else {
             return;
         };
-        self.bind_trait_instance(identity, &given, None, span, true);
+        // A reading for the program's instances seeds the demand reads of
+        // the opened impls of the trait the use fixes (decision 3); the
+        // check, and a demand read itself, bind the native ones.
+        if self.collecting_instances {
+            self.seed_demand(identity, &given);
+        }
+        if !self.collecting_instances || self.demand.is_some() {
+            self.bind_trait_instance(identity, &given, None, span, true);
+        }
+        if self.demand.is_some() {
+            self.bind_through_bound(item, requirements, identity, &given, span);
+        }
+    }
+
+    /// A demand read's call of the trait's member `item` over `Self` on an
+    /// open parameter bounded by the trait at `given`, as `self.content
+    /// .operate(..)` of `W: Widget<..>` in `Container`'s impl, bound at the
+    /// self type of each native impl of the trait at `given` (decision 2)
+    /// with the call's other types, as rustc compiles it for each `W` the
+    /// runner holds. The call gives what the trait's members alone don't,
+    /// as the object `dyn Operation<()>` the `&mut dyn Operation` input is.
+    fn bind_through_bound(
+        &mut self,
+        item: &crate::host::item::Definition,
+        requirements: &[(ImmutableString, Ty, crate::capability::Set)],
+        identity: [u8; 32],
+        given: &[Ty],
+        span: Span,
+    ) {
+        use rawr_import::classify::representability::signature::argument_impl_name;
+        let own = argument_impl_name(0);
+        let mut receiver = None;
+        let mut types = Vec::with_capacity(requirements.len());
+        for (name, ty, _) in requirements {
+            let ty = self.inference.resolve(ty);
+            if **name == *own {
+                receiver = Some(ty);
+            } else if settled(&ty) {
+                types.push((name.clone(), ty));
+            } else {
+                return;
+            }
+        }
+        if !matches!(receiver, Some(Ty::Param(..))) {
+            return;
+        }
+        let host = self.models.host.clone();
+        let mut headers = Vec::<(&ImplHeader, Option<&Dependency>)>::new();
+        for (header, owner) in host.owned_impl_headers(identity) {
+            if !headers.iter().any(|(kept, _)| *kept == header) {
+                headers.push((header, owner));
+            }
+        }
+        let order = item
+            .signature()
+            .declared_type_parameters()
+            .collect::<Vec<_>>();
+        for &(header, owner) in &headers {
+            let alike = headers
+                .iter()
+                .filter(|(other, _)| other.self_type == header.self_type)
+                .count();
+            if alike > 1 {
+                continue;
+            }
+            let Some(found) = self.exact_instance(header, owner, given, None) else {
+                continue;
+            };
+            let mut at = types.clone();
+            at.push((own.as_ref().into(), found.self_type));
+            at.sort_by_key(|(name, _)| order.iter().position(|declared| declared == name));
+            self.bind_member(item, Some(at), None, span);
+        }
+    }
+
+    /// Each script impl of the crate trait `identity` from an opened
+    /// module that the trait arguments `given` fit, with the impl's own
+    /// parameters they fix and whose bounds hold there: a demand read's
+    /// seed (decision 3). A parameter they leave open, as the content `W`
+    /// of iced's `impl Widget<Message, Theme, Renderer> for Container<'_,
+    /// W, Theme>`, stays the impl's, read through its bound.
+    fn seed_demand(&mut self, identity: [u8; 32], given: &[Ty]) {
+        let host = self.models.host.clone();
+        let scripts = self
+            .models
+            .script_impls
+            .iter()
+            .filter(|script| {
+                crate::host::path::Path::parse(script.path.as_str())
+                    .ok()
+                    .and_then(|path| host.trait_header(&path))
+                    .is_some_and(|header| header.identity == identity)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for script in &scripts {
+            let checkpoint = self.inference.checkpoint();
+            let fixed = self.fixed_parameters(script, identity, given);
+            self.inference.rollback(checkpoint);
+            let Some(fixed) = fixed.filter(|fixed| !fixed.is_empty()) else {
+                continue;
+            };
+            let seed = super::demand::Seed {
+                index: script.index,
+                fixed,
+            };
+            if !self.demand_seeds.contains(&seed) {
+                self.demand_seeds.push(seed);
+            }
+        }
+    }
+
+    /// The parameters of `script` that `given` fixes to settled types, when
+    /// it fits and the crate bound on each holds there.
+    fn fixed_parameters(
+        &mut self,
+        script: &super::models::ScriptTraitImpl,
+        identity: [u8; 32],
+        given: &[Ty],
+    ) -> Option<Vec<(ImmutableString, Ty)>> {
+        let owner = self.inference.fresh();
+        let (types, _) = self.apply_script_impl(script, &owner, identity, given)?;
+        let substitution = types.iter().cloned().collect::<BTreeMap<_, _>>();
+        let host = self.models.host.clone();
+        for (name, bound) in script.crate_bounds.iter() {
+            let bounded = self.inference.resolve(&substitution[name]);
+            if !settled(&bounded) {
+                continue;
+            }
+            let Some(header) = bound
+                .opaque_trait()
+                .and_then(|path| crate::host::path::Path::parse(path).ok())
+                .and_then(|path| host.trait_header(&path))
+            else {
+                continue;
+            };
+            let arguments = bound
+                .opaque_arguments()
+                .into_iter()
+                .map(|argument| {
+                    super::generics::instantiate(&Ty::from_resolved(argument), &substitution)
+                })
+                .collect::<Vec<_>>();
+            if !self.bound_holds(&bounded, header.identity, &arguments, None, 0) {
+                return None;
+            }
+        }
+        Some(
+            types
+                .into_iter()
+                .filter_map(|(name, ty)| {
+                    let ty = self.inference.resolve(&ty);
+                    settled(&ty).then_some((name, ty))
+                })
+                .collect(),
+        )
     }
 
     /// Binds each member of every native impl of the crate trait
@@ -91,6 +259,13 @@ impl Parser<'_> {
             return;
         };
         let names = header_names(&host, first);
+        // The trait's stand-in is the runner's one type for a program's
+        // value of it at these arguments, as a program's widget given to
+        // `column!`'s `_boxed` is: each member over `Self` that takes the
+        // value itself is bound at it.
+        if bounds {
+            self.bind_stand_in_members(identity, given, &paths, &names, span);
+        }
         let mut headers = Vec::<(&ImplHeader, Option<&Dependency>)>::new();
         for (header, owner) in host.owned_impl_headers(identity) {
             if !headers.iter().any(|(kept, _)| *kept == header) {
@@ -118,7 +293,7 @@ impl Parser<'_> {
                 if member.trait_of() == Some(&identity) {
                     let types =
                         member_parameters(member, &header.parameters, &found.parameters, None);
-                    self.bind_member(member, types, span);
+                    self.bind_member(member, types, None, span);
                 }
             }
             // The trait's members over `Self`: a generic body's call through
@@ -130,13 +305,69 @@ impl Parser<'_> {
                 for member in host.members(&format!("{written}::__rawr_self")) {
                     let types =
                         member_parameters(member, &[], &trait_parameters, Some(&found.self_type));
-                    self.bind_member(member, types, span);
+                    self.bind_member(member, types, None, span);
                 }
             }
             if bounds {
                 for (bounded, inner, arguments) in &found.bounds {
                     self.bind_trait_instance(*inner, arguments, Some(bounded), span, false);
                 }
+            }
+        }
+    }
+
+    /// Binds each member over `Self` of the trait `identity`, written at
+    /// `paths` with the parameters `names`, that takes `Self` by value and
+    /// names it nowhere else, at `given` with the trait's stand-in as
+    /// `Self`, when the trait has an object (`object_stand_in.rs`).
+    fn bind_stand_in_members(
+        &mut self,
+        identity: [u8; 32],
+        given: &[Ty],
+        paths: &[crate::host::path::Path],
+        names: &[ImmutableString],
+        span: Span,
+    ) {
+        use rawr_import::classify::representability::signature::argument_impl_name;
+        let host = self.models.host.clone();
+        let Some(trait_name) = host.trait_name(&identity) else {
+            return;
+        };
+        let has_object = crate::host::path::Path::parse(&trait_name)
+            .ok()
+            .and_then(|path| host.trait_header(&path))
+            .is_some_and(|header| header.object.is_some());
+        if !has_object || !self.models.native_trait(&trait_name) {
+            return;
+        }
+        let stand_in = Ty::Dyn(
+            trait_name,
+            given
+                .iter()
+                .enumerate()
+                .map(|(index, argument)| (index.to_string().into(), argument.clone()))
+                .collect(),
+            super::ty::Auto::Unknown,
+        );
+        let own = argument_impl_name(0);
+        let trait_parameters = header_arguments(names, given);
+        for written in paths {
+            for member in host.members(&format!("{written}::__rawr_self")) {
+                let signature = member.signature();
+                let by_value = signature.parameters().iter().any(|parameter| {
+                    matches!(parameter.shape(), Shape::Parameter(name) if *name.to_string() == *own)
+                });
+                let named = signature
+                    .parameters()
+                    .iter()
+                    .chain([signature.output()])
+                    .filter(|ty| ty.mentions_parameter(&own))
+                    .count();
+                if !by_value || named != 1 {
+                    continue;
+                }
+                let types = member_parameters(member, &[], &trait_parameters, Some(&stand_in));
+                self.bind_member(member, types, Some(&own), span);
             }
         }
     }
@@ -273,6 +504,7 @@ impl Parser<'_> {
         &mut self,
         member: &crate::host::item::Definition,
         types: Option<Vec<(ImmutableString, Ty)>>,
+        stand_in: Option<&str>,
         span: Span,
     ) {
         let Some(types) = types else {
@@ -304,7 +536,12 @@ impl Parser<'_> {
                 imported_surface_type
             };
             match convert(&self.inference, &self.models, ty, span, context) {
-                Ok(ty) => surface.push(ty),
+                Ok(ty) => surface.push(match stand_in {
+                    Some(stand_in) => {
+                        super::object_stand_in::standing_in(ty, name, &[stand_in.into()])
+                    }
+                    None => ty,
+                }),
                 Err(_) => return,
             }
         }

@@ -243,7 +243,18 @@ pub(crate) struct Instances {
     /// names `Length::Fit` at every instance (decision 4).
     #[cfg(feature = "rust-import")]
     pub(crate) ahead: Vec<crate::resolve::lower_nominal::ImportedUse>,
+    /// The opened templates read for demand at the runner's fixed
+    /// arguments (decision 3), each by its key and the name of the type
+    /// each fixed parameter takes: each is read once.
+    #[cfg(feature = "rust-import")]
+    pub(crate) demanded: Demanded,
 }
+
+/// The opened templates read for demand (`Instances::demanded`): each by
+/// its key and, for each fixed parameter, its name and its type's.
+#[cfg(feature = "rust-import")]
+pub(crate) type Demanded =
+    std::collections::BTreeSet<(crate::item::Key, Box<[(ImmutableString, ImmutableString)]>)>;
 
 /// An instance of a script impl of a crate's trait (`Instances::impls`).
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]

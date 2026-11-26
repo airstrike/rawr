@@ -360,6 +360,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// This instance's param-env (`Instances::bounds`), or a demand
+    /// read's (decision 3), which no program instance holds.
+    #[cfg(feature = "rust-import")]
+    fn param_env(&self) -> Option<Box<[(type_ref::Type, type_ref::Type)]>> {
+        if let Some(bounds) = &self.demand {
+            return Some(bounds.clone());
+        }
+        let key = self.callable.as_ref()?;
+        self.models.instances.bounds.get(key).cloned()
+    }
+
     /// The arguments of the one bound of this instance's param-env
     /// (`Instances::bounds`) on `ty` by the crate trait `identity`, as
     /// rustc selects a where-clause candidate before the impls: in
@@ -367,8 +378,7 @@ impl<'a> Parser<'a> {
     /// `Tallied<Label>: Diffed<Note>` gives `Note`.
     #[cfg(feature = "rust-import")]
     pub(super) fn param_env_arguments(&mut self, ty: &Ty, identity: [u8; 32]) -> Option<Vec<Ty>> {
-        let key = self.callable.as_ref()?;
-        let bounds = self.models.instances.bounds.get(key)?.clone();
+        let bounds = self.param_env()?;
         let ty = self.inference.resolve(ty);
         let mut found = bounds.iter().filter_map(|(bounded, bound)| {
             let path = crate::host::path::Path::parse(bound.opaque_trait()?).ok()?;
@@ -428,10 +438,7 @@ impl<'a> Parser<'a> {
     /// `ty` by.
     #[cfg(feature = "rust-import")]
     fn param_env_traits(&mut self, ty: &Ty) -> Vec<[u8; 32]> {
-        let Some(key) = self.callable.as_ref() else {
-            return Vec::new();
-        };
-        let Some(bounds) = self.models.instances.bounds.get(key).cloned() else {
+        let Some(bounds) = self.param_env() else {
             return Vec::new();
         };
         let ty = self.inference.resolve(ty);

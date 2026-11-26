@@ -27,6 +27,8 @@ mod coverage;
 pub(crate) mod cow;
 
 #[cfg(feature = "rust-import")]
+mod demand;
+#[cfg(feature = "rust-import")]
 mod disk;
 mod dispatch;
 mod drops;
@@ -916,6 +918,17 @@ struct Parser<'a> {
     /// Whether such a read dropped a statement it couldn't lower
     /// (`tolerant`): its body is read no further than its statements.
     dropped: bool,
+    /// A demand read's param-env (decision 3, #2698): a body of an opened
+    /// module read at the runner's fixed arguments for its native uses
+    /// alone, whose instance no program item holds. `Some` makes the read
+    /// bind exact native instances as the program's check does.
+    #[cfg(feature = "rust-import")]
+    demand: Option<Box<[(type_ref::Type, type_ref::Type)]>>,
+    /// Each script impl of a crate trait a settled use of the trait's
+    /// member over `Self` fits, with its parameters the use fixes
+    /// (`exact.rs::seed_demand`): a demand read's seed.
+    #[cfg(feature = "rust-import")]
+    demand_seeds: Vec<demand::Seed>,
     /// The crate trait each call of the generic read on a parameter
     /// selects through the parameter's bound, by the method's position:
     /// `self.content.size()` of `W: Widget<..>` is `Widget`'s.
@@ -1304,6 +1317,10 @@ impl<'a> Parser<'a> {
             template_read: false,
             selecting: false,
             dropped: false,
+            #[cfg(feature = "rust-import")]
+            demand: None,
+            #[cfg(feature = "rust-import")]
+            demand_seeds: Vec::new(),
             selections: Vec::new(),
             generic_crate_bounds: BTreeMap::new(),
             reaches_host: false,
