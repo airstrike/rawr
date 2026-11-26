@@ -78,6 +78,24 @@ impl<M> crate::tinted::Diffed<M> for Mark {
     }
 }
 
+/// A label whose own `lifted` lifts the node it is given out, borrowed
+/// for as long as the label and the node, as a native iced widget with an
+/// overlay gives an `overlay::Element<'b, ..>` that borrows it and its
+/// tree. The crate compiles its impl.
+#[derive(Debug, Clone)]
+pub struct Lift(pub String);
+
+impl<M> crate::tinted::Diffed<M> for Lift {
+    fn label(&mut self) -> String {
+        self.0.clone()
+    }
+
+    fn lifted<'b>(&'b mut self, node: &'b mut crate::walks::Node) -> Vec<crate::walks::Lifted<'b>> {
+        node.mark(&format!("{}^", self.0));
+        vec![crate::walks::Lifted { node }]
+    }
+}
+
 /// The labels `item`'s `operate` notes, as iced's `UserInterface::operate`
 /// lends the root widget it owns a `&mut dyn Operation`. The crate
 /// compiles it.

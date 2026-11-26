@@ -133,3 +133,13 @@ pub fn walked<M>(mut item: impl Diffed<M>) -> Vec<String> {
     walked.push(item.seen(Spot::root(), &root));
     walked
 }
+
+/// How many nodes `item` lifts out of a node the crate owns, and the
+/// node's marks after, as iced's `UserInterface` asks the root widget it
+/// owns for its overlay with the widget's `&mut Tree`. The crate compiles
+/// it.
+pub fn lifted_count<M>(mut item: impl Diffed<M>) -> (usize, Vec<String>) {
+    let mut node = Node::default();
+    let count = item.lifted(&mut node).len();
+    (count, node.listing())
+}
