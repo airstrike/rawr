@@ -17214,6 +17214,53 @@ fn render_scoped_receiver(
     } else {
         format!("lend(arguments.arena, || {call})")
     };
+    // A shared borrow of the receiver claims its region shared, and a
+    // `&mut` one takes its slot alone, so a call back into the program
+    // reaches the region's other values meanwhile, as iced's `Column`
+    // asks each child widget of the view (`scope::with_slot`).
+    let claim = if pinned.is_empty() && !converted.contains("region") {
+        if reached.starts_with("get::<") {
+            Some("with_ref")
+        } else if reached.starts_with("get_mut::<") {
+            Some("with")
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some("with_ref") = claim {
+        return writeln!(
+            output,
+            "    if let Some(scoped) = {scoped}(arguments, 0) {{
+        {given} __rawr_internal::scope::with_ref::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+            let receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
+            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?{returned};
+    }}"
+        )
+        .map_err(encoding);
+    }
+    if claim.is_some()
+        && let Some(family) = reached
+            .strip_prefix("get_mut::<")
+            .and_then(|rest| rest.split_once('>'))
+            .map(|(family, _)| family)
+    {
+        return writeln!(
+            output,
+            "    if let Some(scoped) = {scoped}(arguments, 0) {{
+        {given} __rawr_internal::scope::with_slot::<{family}, _>(scoped, |receiver| -> Result<Dynamic, Error> {{
+            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?{returned};
+    }}"
+        )
+        .map_err(encoding);
+    }
     writeln!(
         output,
         "    if let Some(scoped) = {scoped}(arguments, 0) {{
@@ -17359,6 +17406,23 @@ fn render_scoped_input(
             "    if let Some(scoped) = scoped_value(arguments, {position}) {{
         return __rawr_internal::scope::with_slot::<{family}, _>(scoped, |argument_{position}| -> Result<Dynamic, Error> {{
 {body}            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}"
+        )
+        .map_err(request::unwritable);
+    }
+    // A shared borrow of the value claims its region shared, so a call back
+    // into the program reads the region's other values meanwhile, as
+    // iced's `Column::mouse_interaction` asks each child widget of the view.
+    if !body.contains("region") && !converted.contains("region") && reached.starts_with("get::<") {
+        return writeln!(
+            output,
+            "    if let Some(scoped) = scoped_value(arguments, {position}) {{
+        return __rawr_internal::scope::with_ref::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+{body}            let argument_{position} = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
+            let output = {call};
             {converted}
         }})
         .map_err(|error| Error::Lent(scoped.name(), error))?;
