@@ -1184,9 +1184,17 @@ impl Registry {
                 .members(owner.as_ref().expect("a held facade's owner parsed"))
                 .into_iter();
         }
-        self.items
+        // The items are sorted by path, so those below `owner` are the run
+        // that starts where `owner` would be.
+        let Some(owner) = owner else {
+            return Vec::new().into_iter();
+        };
+        let depth = owner.segments().len();
+        let start = self.items.partition_point(|item| *item.path_ref() < owner);
+        self.items[start..]
             .iter()
-            .filter(move |item| owner.is_some() && item.path_ref().parent() == owner)
+            .take_while(|item| item.path_ref().segments().starts_with(owner.segments()))
+            .filter(|item| item.path_ref().segments().len() == depth + 1)
             .collect::<Vec<_>>()
             .into_iter()
     }

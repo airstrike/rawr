@@ -1507,6 +1507,7 @@ impl<'a> Builder<'a> {
     /// to the crate's native build.
     fn load_crate_sources(&mut self, package: Id) -> Result<(), Error> {
         let mut opened = Vec::new();
+        let finding = std::time::Instant::now();
         for path in super::crate_source::modules() {
             let Some(found) = self.crate_module_file(package, &path) else {
                 continue;
@@ -1538,6 +1539,14 @@ impl<'a> Builder<'a> {
                 None => text.clone(),
             };
             opened.push((path, found, text, selected));
+        }
+        if !opened.is_empty()
+            && std::env::var_os("RAWR_VERBOSE").is_some_and(|verbose| verbose == "1")
+        {
+            eprintln!(
+                "rawr: the opened modules were found in {:.1} s",
+                finding.elapsed().as_secs_f64()
+            );
         }
         if opened.is_empty() {
             return Ok(());

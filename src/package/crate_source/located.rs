@@ -91,11 +91,136 @@ struct Graph {
     nodes: Vec<Node>,
     /// The program's own package id.
     root: String,
-    /// Each file read so far, as its package's features select its items.
-    texts: RefCell<BTreeMap<PathBuf, Rc<str>>>,
+    /// Each file read so far, as its package's features select its items,
+    /// with its stamp when it was read.
+    texts: RefCell<BTreeMap<PathBuf, Read>>,
     /// Each name looked up in a module so far: what it names, `None` while
     /// the lookup is under way, so a cycle of globs ends.
     children: RefCell<BTreeMap<Lookup, Option<Module>>>,
+    /// What each module's text declares, read once ([`Graph::parsed`]).
+    parsed: RefCell<BTreeMap<Place, Rc<Parsed>>>,
+    /// The module that defines each name looked up so far
+    /// ([`Graph::definition`]), `None` while the lookup is under way.
+    definitions: RefCell<BTreeMap<Lookup, Option<Module>>>,
+    /// The home of each name looked up so far ([`Graph::home`]), `None`
+    /// while the lookup is under way.
+    homes: RefCell<BTreeMap<Lookup, Option<Place>>>,
+    /// What each crate module a program names brings into scope
+    /// ([`imported`]), by the program's path to it.
+    imported: RefCell<BTreeMap<Vec<ImmutableString>, Vec<super::bound::Derived>>>,
+    /// The files whose state this graph was read from: Cargo's view of the
+    /// graph and the texts both follow them ([`Graph::current`]).
+    stamps: Vec<(PathBuf, Option<Stamp>)>,
+}
+
+/// When a file was last changed and how long it is: a file whose stamp
+/// is the same holds what it held.
+type Stamp = (std::time::SystemTime, u64);
+
+/// A file's text as its package's features select its items, with its
+/// stamp when it was read.
+type Read = (Option<Stamp>, Rc<str>);
+
+/// A module by its package's index and its path from the package's root.
+type Place = (usize, Vec<ImmutableString>);
+
+/// The stamp of `file`, `None` when it can't be read.
+fn stamp(file: &Path) -> Option<Stamp> {
+    let metadata = std::fs::metadata(file).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+thread_local! {
+    /// The graph of each program read so far on this thread, by its
+    /// manifest: one `cargo metadata` and one read of each module for as
+    /// long as the files they come from hold what they held.
+    static GRAPHS: RefCell<BTreeMap<PathBuf, Rc<Graph>>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+/// What a module's text declares: its items' names, its `mod` items and
+/// its imports, read from its tokens once.
+struct Parsed {
+    /// Its `struct`, `enum`, `union`, `trait` and `type` items, each by
+    /// its keyword and name.
+    declared: Vec<(String, String)>,
+    /// Its `mod` items.
+    modules: Vec<Declared>,
+    /// Every import its `use` declarations make.
+    imports: Vec<Import>,
+    /// The imports of its `pub` `use` declarations.
+    public_imports: Vec<Import>,
+}
+
+/// A `mod` item of a module.
+struct Declared {
+    name: String,
+    /// Whether it is `pub` (of any reach).
+    public: bool,
+    /// An inline module's text, by its bytes in its parent's text.
+    inline: Option<std::ops::Range<usize>>,
+}
+
+impl Parsed {
+    fn of(text: &str) -> Self {
+        let tokens = polyglot::placed(text);
+        let items = polyglot::module_items(text, &tokens);
+        let public = |item: &polyglot::ModuleItem<'_>| {
+            item.header.start >= 2
+                && matches!(
+                    tokens[item.header.start - 2].0,
+                    Token::Ident("pub", _) | Token::Punct(b')')
+                )
+        };
+        let declared = items
+            .iter()
+            .filter(|item| matches!(item.keyword, "struct" | "enum" | "union" | "trait" | "type"))
+            .filter_map(|item| Some((item.keyword.to_owned(), item.name?.to_owned())))
+            .collect();
+        let modules = items
+            .iter()
+            .filter(|item| item.keyword == "mod")
+            .filter_map(|item| {
+                Some(Declared {
+                    name: item.name?.to_owned(),
+                    public: public(item),
+                    inline: (tokens[item.end].0 == Token::Punct(b'}'))
+                        .then(|| tokens[item.header.end].1 + 1..tokens[item.end].1),
+                })
+            })
+            .collect();
+        let public_imports = items
+            .iter()
+            .filter(|item| item.keyword == "use" && public(item))
+            .flat_map(|item| imports(&tokens, std::slice::from_ref(item)))
+            .collect();
+        Self {
+            declared,
+            modules,
+            imports: imports(&tokens, &items),
+            public_imports,
+        }
+    }
+
+    /// The import that binds `name`, when one does.
+    fn named(&self, name: &str) -> Option<&Import> {
+        self.imports
+            .iter()
+            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == name))
+    }
+
+    /// The paths its globs import.
+    fn globs(&self) -> impl Iterator<Item = &Import> {
+        self.imports
+            .iter()
+            .filter(|import| matches!(import.bound, Bound::Glob))
+    }
+
+    /// Whether it declares `name` by one of `keywords`.
+    fn declares(&self, keywords: &[&str], name: &str) -> bool {
+        self.declared
+            .iter()
+            .any(|(keyword, declared)| keywords.contains(&keyword.as_str()) && declared == name)
+    }
 }
 
 /// One package of Cargo's resolved graph.
@@ -155,7 +280,7 @@ struct Import {
 /// name, in the program whose manifest is `manifest`. `None` when Cargo
 /// can't describe the graph offline or the path names no module.
 pub(crate) fn locate(manifest: &Path, path: &[ImmutableString]) -> Option<Located> {
-    let graph = Graph::read(manifest)?;
+    let graph = Graph::current(manifest)?;
     let named = graph
         .index(&graph.root)
         .zip(path.first())
@@ -202,50 +327,63 @@ pub(crate) fn locate(manifest: &Path, path: &[ImmutableString]) -> Option<Locate
 /// binds the module's own concrete items (`bound`). Empty when Cargo can't
 /// describe the graph offline.
 pub(crate) fn imported(manifest: &Path, path: &[ImmutableString]) -> Vec<super::bound::Derived> {
-    let Some(graph) = Graph::read(manifest) else {
+    let Some(graph) = Graph::current(manifest) else {
         return Vec::new();
     };
-    let Some(module) = graph.module(path) else {
-        return Vec::new();
-    };
-    let tokens = polyglot::placed(&module.text);
-    let items = polyglot::module_items(&module.text, &tokens);
-    let mut found = Vec::new();
-    for import in imports(&tokens, &items) {
-        let Bound::Name(name) = &import.bound else {
-            continue;
-        };
-        let Some((last, parent)) = import.path.split_last() else {
-            continue;
-        };
-        if parent.is_empty() {
-            continue;
-        }
-        let Some(defined) = graph
-            .resolve(&module, parent, HOPS)
-            .and_then(|parent| graph.definition(&parent, last, HOPS))
-        else {
-            continue;
-        };
-        let spell = |word: &str| {
-            if word == last.as_str() {
-                return Some(name.clone());
-            }
-            graph.spelling(&module, &defined, word)
-        };
-        if let Some(derived) = super::bound::derived(&defined.text, last, &spell) {
-            if std::env::var_os("RAWR_VERBOSE").is_some_and(|verbose| verbose == "1") {
-                for (header, rule) in derived.excluded() {
-                    eprintln!(
-                        "rawr: `impl {header}` has no binding in `{}`: {rule}",
-                        path.join("::")
-                    );
-                }
-            }
-            found.push(derived);
-        }
+    if let Some(found) = graph.imported.borrow().get(path) {
+        return found.clone();
     }
+    let found = graph.imports_of(path);
+    graph
+        .imported
+        .borrow_mut()
+        .insert(path.to_vec(), found.clone());
     found
+}
+
+impl Graph {
+    /// [`imported`] of the module at `path`, before it is remembered.
+    fn imports_of(&self, path: &[ImmutableString]) -> Vec<super::bound::Derived> {
+        let Some(module) = self.module(path) else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        for import in &self.parsed(&module).imports {
+            let Bound::Name(name) = &import.bound else {
+                continue;
+            };
+            let Some((last, parent)) = import.path.split_last() else {
+                continue;
+            };
+            if parent.is_empty() {
+                continue;
+            }
+            let Some(defined) = self
+                .resolve(&module, parent, HOPS)
+                .and_then(|parent| self.definition(&parent, last, HOPS))
+            else {
+                continue;
+            };
+            let spell = |word: &str| {
+                if word == last.as_str() {
+                    return Some(name.clone());
+                }
+                self.spelling(&module, &defined, word)
+            };
+            if let Some(derived) = super::bound::derived(&defined.text, last, &spell) {
+                if std::env::var_os("RAWR_VERBOSE").is_some_and(|verbose| verbose == "1") {
+                    for (header, rule) in derived.excluded() {
+                        eprintln!(
+                            "rawr: `impl {header}` has no binding in `{}`: {rule}",
+                            path.join("::")
+                        );
+                    }
+                }
+                found.push(derived);
+            }
+        }
+        found
+    }
 }
 
 /// The name of the program's hidden dependency on the crate `name`.
@@ -365,13 +503,82 @@ impl Graph {
             .iter()
             .filter_map(node)
             .collect();
+        // Cargo's view follows the manifest, the lock and each manifest of
+        // a package with no registry or git source; the others never change.
+        let lock = json["workspace_root"]
+            .as_str()
+            .map(|root| Path::new(root).join("Cargo.lock"));
+        let stamps = std::iter::once(manifest.to_path_buf())
+            .chain(lock)
+            .chain(
+                packages
+                    .iter()
+                    .filter(|package| package.source.is_none())
+                    .map(|package| package.directory.join("Cargo.toml")),
+            )
+            .map(|file| {
+                let stamp = stamp(&file);
+                (file, stamp)
+            })
+            .collect();
         Some(Self {
             packages,
             nodes,
             root: json["resolve"]["root"].as_str()?.to_owned(),
             texts: RefCell::new(BTreeMap::new()),
             children: RefCell::new(BTreeMap::new()),
+            parsed: RefCell::new(BTreeMap::new()),
+            definitions: RefCell::new(BTreeMap::new()),
+            homes: RefCell::new(BTreeMap::new()),
+            imported: RefCell::new(BTreeMap::new()),
+            stamps,
         })
+    }
+
+    /// The program's graph whose manifest is `manifest`: the one read
+    /// before while the files it was read from hold what they held, its
+    /// module texts and what was found in them kept unless one of those
+    /// files changed; else read anew.
+    fn current(manifest: &Path) -> Option<Rc<Self>> {
+        let kept = GRAPHS.with_borrow(|graphs| graphs.get(manifest).cloned());
+        if let Some(graph) = kept
+            && graph.stamps.iter().all(|(file, was)| stamp(file) == *was)
+        {
+            graph.keep_current_texts();
+            return Some(graph);
+        }
+        let graph = Rc::new(Self::read(manifest)?);
+        GRAPHS.with_borrow_mut(|graphs| graphs.insert(manifest.to_path_buf(), Rc::clone(&graph)));
+        Some(graph)
+    }
+
+    /// Forgets the texts of files that changed since they were read, and
+    /// with them what was found in any text, which may follow them.
+    fn keep_current_texts(&self) {
+        let changed = self
+            .texts
+            .borrow()
+            .iter()
+            .any(|(file, (was, _))| stamp(file) != *was);
+        if changed {
+            self.texts.borrow_mut().clear();
+            self.children.borrow_mut().clear();
+            self.parsed.borrow_mut().clear();
+            self.definitions.borrow_mut().clear();
+            self.homes.borrow_mut().clear();
+            self.imported.borrow_mut().clear();
+        }
+    }
+
+    /// What `module`'s text declares, read once.
+    fn parsed(&self, module: &Module) -> Rc<Parsed> {
+        let key = (module.package, module.path.clone());
+        if let Some(parsed) = self.parsed.borrow().get(&key) {
+            return Rc::clone(parsed);
+        }
+        let parsed = Rc::new(Parsed::of(&module.text));
+        self.parsed.borrow_mut().insert(key, Rc::clone(&parsed));
+        parsed
     }
 
     fn index(&self, id: &str) -> Option<usize> {
@@ -415,15 +622,16 @@ impl Graph {
 
     /// The text of `file` of `package`, as its features select its items.
     fn text(&self, package: usize, file: &Path) -> Option<Rc<str>> {
-        if let Some(text) = self.texts.borrow().get(file) {
+        if let Some((_, text)) = self.texts.borrow().get(file) {
             return Some(Rc::clone(text));
         }
         let features = Enabled::of_names(self.features(package).iter().map(String::as_str));
+        let read = stamp(file);
         let text: Rc<str> =
             polyglot::cfg_resolved(&std::fs::read_to_string(file).ok()?, &features).into();
         self.texts
             .borrow_mut()
-            .insert(file.to_path_buf(), Rc::clone(&text));
+            .insert(file.to_path_buf(), (read, Rc::clone(&text)));
         Some(text)
     }
 
@@ -459,22 +667,18 @@ impl Graph {
     /// [`Graph::child`], before it is remembered.
     fn look_up(&self, module: &Module, name: &str, hops: usize) -> Option<Module> {
         let hops = hops.checked_sub(1)?;
-        let tokens = polyglot::placed(&module.text);
-        let items = polyglot::module_items(&module.text, &tokens);
-        let declared = items
-            .iter()
-            .find(|item| item.keyword == "mod" && item.name == Some(name));
+        let parsed = self.parsed(module);
+        let declared = parsed.modules.iter().find(|item| item.name == name);
         if let Some(item) = declared {
             let mut path = module.path.clone();
             path.push(name.into());
             let directory = module.directory.join(name);
-            if tokens[item.end].0 == Token::Punct(b'}') {
-                let open = tokens[item.header.end].1 + 1;
+            if let Some(inline) = &item.inline {
                 return Some(Module {
                     package: module.package,
                     path,
                     file: module.file.clone(),
-                    text: module.text[open..tokens[item.end].1].into(),
+                    text: module.text[inline.clone()].into(),
                     directory,
                 });
             }
@@ -492,16 +696,11 @@ impl Graph {
                 directory,
             });
         }
-        let imports = imports(&tokens, &items);
-        let named = imports
-            .iter()
-            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == name));
-        if let Some(import) = named {
+        if let Some(import) = parsed.named(name) {
             return self.resolve(module, &import.path, hops);
         }
-        imports
-            .iter()
-            .filter(|import| matches!(import.bound, Bound::Glob))
+        parsed
+            .globs()
             .filter_map(|import| self.resolve(module, &import.path, hops))
             .find_map(|globbed| self.child(&globbed, name, hops))
     }
@@ -551,27 +750,34 @@ impl Graph {
     /// or the one a `use` of `module` binding `name`, or one of its globs,
     /// reaches.
     fn definition(&self, module: &Module, name: &str, hops: usize) -> Option<Module> {
+        let lookup = Lookup {
+            package: module.package,
+            path: module.path.clone(),
+            name: name.to_owned(),
+        };
+        if let Some(known) = self.definitions.borrow().get(&lookup) {
+            return known.clone();
+        }
+        self.definitions.borrow_mut().insert(lookup.clone(), None);
+        let found = self.define(module, name, hops);
+        self.definitions.borrow_mut().insert(lookup, found.clone());
+        found
+    }
+
+    /// [`Graph::definition`], before it is remembered.
+    fn define(&self, module: &Module, name: &str, hops: usize) -> Option<Module> {
         let hops = hops.checked_sub(1)?;
-        let tokens = polyglot::placed(&module.text);
-        let items = polyglot::module_items(&module.text, &tokens);
-        if items
-            .iter()
-            .any(|item| matches!(item.keyword, "struct" | "enum") && item.name == Some(name))
-        {
+        let parsed = self.parsed(module);
+        if parsed.declares(&["struct", "enum"], name) {
             return Some(module.clone());
         }
-        let imports = imports(&tokens, &items);
-        let named = imports
-            .iter()
-            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == name));
-        if let Some(import) = named {
+        if let Some(import) = parsed.named(name) {
             let (last, parent) = import.path.split_last()?;
             let parent = self.resolve(module, parent, hops)?;
             return self.definition(&parent, last, hops);
         }
-        imports
-            .iter()
-            .filter(|import| matches!(import.bound, Bound::Glob))
+        parsed
+            .globs()
             .filter_map(|import| self.resolve(module, &import.path, hops))
             .find_map(|globbed| self.definition(&globbed, name, hops))
     }
@@ -593,12 +799,8 @@ impl Graph {
         if home.is_some() && self.home(opening, word, HOPS) == home {
             return Some(word.to_owned());
         }
-        let tokens = polyglot::placed(&defining.text);
-        let items = polyglot::module_items(&defining.text, &tokens);
-        let import = imports(&tokens, &items)
-            .into_iter()
-            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == word));
-        let Some(import) = import else {
+        let parsed = self.parsed(defining);
+        let Some(import) = parsed.named(word) else {
             // A path from std's crates, which every module names alike
             // unless it binds the name to an item of its own.
             if home.is_none() && matches!(word, "std" | "core" | "alloc") {
@@ -652,9 +854,7 @@ impl Graph {
             return Some("crate".to_owned());
         }
         let root = self.root_module(opening.package)?;
-        let tokens = polyglot::placed(&root.text);
-        let items = polyglot::module_items(&root.text, &tokens);
-        imports(&tokens, &items).into_iter().find_map(|import| {
+        self.parsed(&root).imports.iter().find_map(|import| {
             let Bound::Name(alias) = &import.bound else {
                 return None;
             };
@@ -666,33 +866,35 @@ impl Graph {
 
     /// The package and module path of the module that defines the type
     /// or trait `name` names in `module` (as [`Graph::definition`]).
-    fn home(
-        &self,
-        module: &Module,
-        name: &str,
-        hops: usize,
-    ) -> Option<(usize, Vec<ImmutableString>)> {
+    fn home(&self, module: &Module, name: &str, hops: usize) -> Option<Place> {
+        let lookup = Lookup {
+            package: module.package,
+            path: module.path.clone(),
+            name: name.to_owned(),
+        };
+        if let Some(known) = self.homes.borrow().get(&lookup) {
+            return known.clone();
+        }
+        self.homes.borrow_mut().insert(lookup.clone(), None);
+        let found = self.find_home(module, name, hops);
+        self.homes.borrow_mut().insert(lookup, found.clone());
+        found
+    }
+
+    /// [`Graph::home`], before it is remembered.
+    fn find_home(&self, module: &Module, name: &str, hops: usize) -> Option<Place> {
         let hops = hops.checked_sub(1)?;
-        let tokens = polyglot::placed(&module.text);
-        let items = polyglot::module_items(&module.text, &tokens);
-        if items.iter().any(|item| {
-            matches!(item.keyword, "struct" | "enum" | "union" | "trait" | "type")
-                && item.name == Some(name)
-        }) {
+        let parsed = self.parsed(module);
+        if parsed.declares(&["struct", "enum", "union", "trait", "type"], name) {
             return Some((module.package, module.path.clone()));
         }
-        let imports = imports(&tokens, &items);
-        let named = imports
-            .iter()
-            .find(|import| matches!(&import.bound, Bound::Name(bound) if bound == name));
-        if let Some(import) = named {
+        if let Some(import) = parsed.named(name) {
             let (last, parent) = import.path.split_last()?;
             let parent = self.resolve(module, parent, hops)?;
             return self.home(&parent, last, hops);
         }
-        imports
-            .iter()
-            .filter(|import| matches!(import.bound, Bound::Glob))
+        parsed
+            .globs()
             .filter_map(|import| self.resolve(module, &import.path, hops))
             .find_map(|globbed| self.home(&globbed, name, hops))
     }
@@ -704,36 +906,22 @@ impl Graph {
         let (Some(name), Some(parent)) = (module.path.last(), self.parent(module)) else {
             return false;
         };
-        let tokens = polyglot::placed(&parent.text);
-        let items = polyglot::module_items(&parent.text, &tokens);
-        let public = |item: &polyglot::ModuleItem<'_>| {
-            item.header.start >= 2
-                && matches!(
-                    tokens[item.header.start - 2].0,
-                    Token::Ident("pub", _) | Token::Punct(b')')
-                )
-        };
-        let private = items
+        let parsed = self.parsed(&parent);
+        let private = parsed
+            .modules
             .iter()
-            .any(|item| item.keyword == "mod" && item.name == Some(name.as_str()) && !public(item));
+            .any(|item| item.name == name.as_str() && !item.public);
         if !private {
             return false;
         }
-        items
-            .iter()
-            .filter(|item| item.keyword == "use" && public(item))
-            .any(|item| {
-                imports(&tokens, std::slice::from_ref(item))
-                    .iter()
-                    .any(|import| {
-                        matches!(import.bound, Bound::Glob)
-                            && self
-                                .resolve(&parent, &import.path, HOPS)
-                                .is_some_and(|globbed| {
-                                    globbed.package == module.package && globbed.path == module.path
-                                })
+        parsed.public_imports.iter().any(|import| {
+            matches!(import.bound, Bound::Glob)
+                && self
+                    .resolve(&parent, &import.path, HOPS)
+                    .is_some_and(|globbed| {
+                        globbed.package == module.package && globbed.path == module.path
                     })
-            })
+        })
     }
 
     /// The module that declares `module`.
