@@ -823,6 +823,31 @@ struct Lease<T: 'static> {
     give_back: Option<Box<dyn FnOnce(Box<T>)>>,
 }
 
+/// A region's slot lent to a crate call in a lending region
+/// ([`Region::lease_scoped`]): put back in its region when the lease
+/// drops, or leaked if that region is gone.
+struct SlotLease<F: Regional> {
+    place: *mut Slot<'static, F>,
+    nonce: Nonce,
+    index: u32,
+}
+
+impl<F: Regional> Drop for SlotLease<F> {
+    fn drop(&mut self) {
+        let place = self.place;
+        let index = self.index as usize;
+        let _ = with::<RegionF, _>(self.nonce, |region| {
+            // SAFETY: `Box::into_raw` made the place of a slot of this
+            // region at its lifetime (`Region::lease_scoped`), and it is
+            // turned back once, here.
+            let slot: Box<Slot<'_, F>> = unsafe { Box::from_raw(place.cast()) };
+            if let Some(empty) = region.slots.get_mut(index) {
+                *empty = Some(slot);
+            }
+        });
+    }
+}
+
 impl<T: 'static> Drop for Lease<T> {
     fn drop(&mut self) {
         // SAFETY: `Box::into_raw` made the place (`Region::lease`), and it
@@ -921,6 +946,20 @@ impl<'r> Region<'r> {
         }
     }
 
+    /// `lent`, a lend this region made at `'r` ([`Region::lend`]), kept in
+    /// it where it is lending, so a crate call made in it may borrow the
+    /// value at `'r` ([`Region::lent_mut`]), as the `&mut Tree` an item of
+    /// `layout.iter_mut(&mut tree.children)` gives is passed on to a
+    /// content's `overlay` (#2698).
+    #[must_use]
+    pub fn keeping(&self, lent: Lent) -> Lent {
+        if self.lending {
+            lent.kept_in(self.nonce)
+        } else {
+            lent
+        }
+    }
+
     /// Whether this is a call's lending region ([`Region::lending`]).
     #[must_use]
     pub const fn lends(&self) -> bool {
@@ -989,6 +1028,51 @@ impl<'r> Region<'r> {
         // call's result keeps (`Lent::kept_in`), which this lending region
         // gives it at `'r`, and the lender uses its own borrow no more.
         Ok(unsafe { &mut *place.cast::<T>() })
+    }
+
+    /// The value `scoped` names, of the family `F`, held in a region that
+    /// encloses this lending one, lent `&mut` at `'r` to `call`, a crate
+    /// call made here whose output keeps it borrowed, as `self.content`
+    /// of a widget whose `overlay` gives its content's, where the content
+    /// is a view's widget (#2698). Its slot stays empty while the region's
+    /// owner keeps the lease ([`Region::lease`]), so its own region can't
+    /// reach it meanwhile ([`Error::Moved`]), and it goes back to its slot
+    /// when the lease drops, or leaks if that region is gone. `call` takes
+    /// it at every lifetime its type has, so its output names none of
+    /// them. [`Error::Mismatch`] in a region that isn't lending, for a
+    /// value of this region, or for another family.
+    pub fn lease_scoped<F: Regional, R>(
+        &self,
+        scoped: Scoped,
+        call: impl for<'k> FnOnce(&'r mut F::Of<'k>) -> R,
+    ) -> Result<R, Error> {
+        if !self.lending || scoped.nonce == self.nonce {
+            return Err(Error::Mismatch);
+        }
+        let taken = with::<RegionF, _>(scoped.nonce, |region| {
+            region.slot_of::<F>(scoped)?;
+            let slot = region.slots[scoped.index as usize]
+                .take()
+                .ok_or(Error::Moved)?;
+            // As in `Region::take`, the box holds a slot of `F` at that
+            // region's lifetime, which only the type names. The place is
+            // reached at `'r`, which that region outlives, as rustc makes
+            // native code end the output's borrow before the region's own
+            // borrow ends.
+            Ok(Box::into_raw(slot).cast::<Slot<'static, F>>())
+        })??;
+        self.leases
+            .borrow_mut()
+            .push(std::rc::Rc::new(SlotLease::<F> {
+                place: taken,
+                nonce: scoped.nonce,
+                index: scoped.index,
+            }));
+        // SAFETY: the slot is out of its region, so nothing else reaches
+        // the place until the lease puts it back, after native code holds
+        // what `call` gives no longer. `call` takes the value at every
+        // lifetime of its type, so it can't store a shorter borrow in it.
+        Ok(call(unsafe { &mut (*taken.cast::<Slot<'r, F>>()).0 }))
     }
 
     /// The leases calls in the region made ([`Region::lease`]), for the

@@ -188,6 +188,42 @@ pub(super) fn render_lends_opening(
     }
     let owned = owned.join(", ");
     let insert = family.call(family::Reach::Insert, "made");
+    // In a stand-in's lending region, slices of values native code lent
+    // the stand-in kept there are reached there at the region's lifetime,
+    // and the output stays there, as `layout.iter_mut(&mut tree.children)`
+    // in a program's `overlay` gives items its output may keep (#2698).
+    if !lent.is_empty() && lent.iter().all(|(_, mutable, _)| *mutable) {
+        let kept = lent
+            .iter()
+            .map(|(position, ..)| {
+                format!(
+                    "matches!(&lender_{position}, Lender::Lent(lent) if lent.is_kept_in(anchor))"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" && ");
+        let mut reached = String::new();
+        for (position, _, element) in &lent {
+            reached.push_str(&format!(
+                "
+            let Lender::Lent(lent_{position}) = &lender_{position} else {{
+                return Err(Error::Unhandled);
+            }};
+            let argument_{position} = &mut region.lent_mut::<Vec<{element}>>(*lent_{position}).map_err(|error| Error::Lent(lent_{position}.name(), error))?[..];"
+            ));
+        }
+        writeln!(
+            output,
+            "    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| {kept}) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{reached}
+            let made = {made};
+            Ok(Dynamic::from(region.{insert}))
+        }})
+        .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
+    }}"
+        )
+        .map_err(encoding)?;
+    }
     let mut body = format!(
         "let ({owned},) = taken.take().ok_or(Error::Unhandled).map_err(runtime_error)?;
             let made = {made};

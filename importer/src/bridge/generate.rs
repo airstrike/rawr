@@ -11996,9 +11996,35 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
     } else {
         lent
     };
+    // In a stand-in's lending region, the field of a value native code lent
+    // the stand-in kept there is lent there too, for as long as the region
+    // lasts, as `&mut tree.children` of the `tree: &'b mut Tree` iced's
+    // `overlay` takes is borrowed for `'b` where its items go to the
+    // output (#2698). The value stays claimed meanwhile.
+    let anchored = format!(
+        "
+    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| matches!(&lender, Lender::Lent(lent) if lent.is_kept_in(anchor))) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+            let Lender::Lent(parent) = &lender else {{
+                return Err(Error::Unhandled);
+            }};
+            let input = region.lent_mut::<{path}>(*parent).map_err(|error| Error::Lent(parent.name(), error))?;
+            let field_0 = &mut input.{field};
+            let nonce = region.lend::<Field0>(field_0).map_err(|error| Error::Lent({rust:?}, error))?;
+            Ok({kept})
+        }})
+        .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
+    }}",
+        field = field.name(),
+        kept = lent_field(0, &rust, true).replacen(
+            "Dynamic::from(__rawr_internal::scope::Lent::new(",
+            "Dynamic::from(region.keeping(__rawr_internal::scope::Lent::new(",
+            1
+        ) + ")",
+    );
     writeln!(
         output,
-        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;{witness}
+        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;{witness}{anchored}
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
         reach_lender_mut::<{path}>(&lender, &mut |input| {{
             let field_0 = &mut input.{};
@@ -14779,7 +14805,7 @@ fn render_adapter_steps(
             // its `&mut` receiver and the `&mut` inputs native code lent
             // the stand-in borrows them there, and its output stays there
             // (#2698).
-            render_lending_call(
+            let lends_only = render_lending_call(
                 plan,
                 &path,
                 *receiver,
@@ -14789,6 +14815,9 @@ fn render_adapter_steps(
                 *container_parameters,
                 output,
             )?;
+            if lends_only {
+                return Ok(());
+            }
             // A `&'a T` the frame's output keeps with its receiver stays
             // the program's value until the frame reaches it (`kept_inputs`).
             let kept = kept_inputs(signature, substitutions)?;
@@ -16327,11 +16356,26 @@ fn render_lending_call(
     constants: &[convert::Constant],
     container_parameters: usize,
     output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
+) -> Result<bool, request::Error> {
     let encoding = request::unwritable;
     let kept = kept_mutable_inputs(signature, substitutions)?;
     if kept.is_empty() || !matches!(receiver, Receiver::Mutable) {
-        return Ok(());
+        return Ok(false);
+    }
+    // An input borrowed for the call alone, as iced's `renderer:
+    // &Renderer`, is reached for the call, which a frame that runs the
+    // rest of the scope can't hold: such a call runs only in a lending
+    // region.
+    let mut lends_only = false;
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        if !kept.iter().any(|input| input.position == position)
+            && matches!(
+                substituted(declared, signature, substitutions)?,
+                convert::Type::Borrowed { .. }
+            )
+        {
+            lends_only = true;
+        }
     }
     let mut container = Vec::new();
     render_container_path(
@@ -16396,6 +16440,15 @@ fn render_lending_call(
         }
     }
     let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    // A receiver a region holds, as a view's widget is, is lent from its
+    // slot for as long as the output borrows it (`Region::lease_scoped`).
+    let scoped = match container_family(path, &container) {
+        Some(family) => format!(
+            "Some(scoped) => region.lease_scoped::<{}, _>(scoped, |receiver| {call}).map_err(|error| Error::Lent(scoped.name(), error))?,",
+            family.named().ok_or_else(|| request::drift("a lent receiver's family"))?
+        ),
+        None => String::new(),
+    };
     let mut reached = String::new();
     for KeptInput { position, rust } in &kept {
         reached.push_str(&format!(
@@ -16407,24 +16460,46 @@ fn render_lending_call(
         output,
         "    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| {lends}) {{
         let receiver_lent = lent_value(arguments, 0);
-        let receiver_handle = match (scoped_value(arguments, 0), receiver_lent) {{
+        let receiver_scoped = scoped_value(arguments, 0);
+        let receiver_handle = match (receiver_scoped, receiver_lent) {{
             (None, None) => Some(native_handle(arguments, 0, false)?),
             _ => None,
         }};
 {taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{reached}
-            #[allow(unused_mut)]
-            let mut receiver: &mut {container} = match (receiver_lent, receiver_handle) {{
-                (Some(lent), _) => region.lent_mut::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?,
-                (None, Some(handle)) => arguments.arena.lease_place::<{container}>(handle)?.lend_to(region)?,
-                (None, None) => return Err(Error::Lent({container:?}, __rawr_internal::scope::Error::Mismatch)),
+            let made = match (receiver_lent, receiver_handle) {{
+                (Some(lent), _) => {{
+                    #[allow(unused_mut)]
+                    let mut receiver: &mut {container} = region.lent_mut::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?;
+                    {call}
+                }}
+                (None, Some(handle)) => {{
+                    #[allow(unused_mut)]
+                    let mut receiver: &mut {container} = arguments.arena.lease_place::<{container}>(handle)?.lend_to(region)?;
+                    {call}
+                }}
+                (None, None) => match receiver_scoped {{
+                    {scoped}
+                    _ => return Err(Error::Lent({container:?}, __rawr_internal::scope::Error::Mismatch)),
+                }},
             }};
-            let made = {call};
             {converted}
         }})
         .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
     }}"
     )
-    .map_err(encoding)
+    .map_err(encoding)?;
+    if lends_only {
+        let name = format!("{}::{}", rust_path(plan), plan.name());
+        writeln!(
+            output,
+            "    Err(Error::Value({:?}.to_owned()))",
+            format!(
+                "rawr calls `{name}` only where native code asks a program's value for what it keeps borrowed, as iced's `overlay` is, and lent it each `&mut` the output keeps"
+            )
+        )
+        .map_err(encoding)?;
+    }
+    Ok(lends_only)
 }
 
 /// A method call whose output borrows what it takes besides its receiver
@@ -24136,7 +24211,11 @@ fn render_to_dynamic(
             write!(
                 output,
                 "{{ {family} let nonce = region.{lend}::<Field{depth}>({value}).map_err(|error| Error::Lent({rust:?}, error))?; Ok::<Dynamic, Error>({}) }}",
-                lent_field(depth, &rust, *mutable)
+                lent_field(depth, &rust, *mutable).replacen(
+                    "Dynamic::from(__rawr_internal::scope::Lent::new(",
+                    "Dynamic::from(region.keeping(__rawr_internal::scope::Lent::new(",
+                    1
+                ) + ")"
             )
         }
         // The same out of any region: no frame holds what it borrows.
