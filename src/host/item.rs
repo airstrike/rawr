@@ -955,6 +955,13 @@ impl Definition {
 }
 
 impl Fingerprint {
+    /// The digest of the crate's selector of the item, which names its
+    /// definition whichever path reaches it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn imported(&self) -> Option<&[u8; 32]> {
+        self.imported.as_ref()
+    }
+
     /// The proof-backed application the item stands for, when it is one.
     #[cfg(feature = "rust-import")]
     pub(crate) fn application(&self) -> Option<&[u8; 32]> {

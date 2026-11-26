@@ -111,6 +111,14 @@ pub(crate) fn crate_item(selector: &host::item::ImportedSelector) -> Option<[u8;
     }
 }
 
+/// Whether `path` names a member of an opaque type a crate function gives,
+/// whose `Self` its path alone names.
+#[cfg(feature = "rust-import")]
+pub(crate) fn opaque_member(path: &str) -> bool {
+    path.rsplit_once("::")
+        .is_some_and(|(owner, _)| rawr_import::surface::opaque::declared(owner))
+}
+
 #[cfg(all(test, feature = "rust-import"))]
 mod tests {
     use crate::host::{self, facade, type_def};

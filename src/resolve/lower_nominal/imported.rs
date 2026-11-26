@@ -184,6 +184,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     // What the templates' generic reads reach at the crates' own types,
     // bound up front (`Instances::ahead`).
     uses.extend(program.instances.ahead.iter().cloned());
+    one_spelling(&mut uses);
     uses.sort_unstable();
     uses.dedup();
     let programs = Programs::of(program);
@@ -193,6 +194,67 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         impls,
         programs,
     })
+}
+
+/// Each use of an item its selector names, spelled by the least of the
+/// paths its uses at the same types spell it by (a member of an opaque
+/// type keeps its own, `opaque_member`): one defined item at one
+/// instance is one adapter, whichever dependency, hidden segment or
+/// re-export a body reaches it through (D1118), as iced's `Widget` is one
+/// trait under `iced_core` and every crate that re-exports it.
+#[cfg(feature = "rust-import")]
+fn one_spelling(uses: &mut [ImportedUse]) {
+    type Instance<'u> = (
+        &'u rawr_import::surface::identity::Selector,
+        &'u [rawr_import::classify::representability::convert::Type],
+        &'u [rawr_import::classify::representability::convert::Constant],
+        &'u [crate::resolve::lower_nominal::surface::ImportedFunctionUse],
+        &'u [crate::resolve::lower_nominal::surface::ImportedMapperUse],
+        bool,
+        &'u [rawr_import::surface::instance::Slot],
+        Option<[u8; 32]>,
+    );
+    fn instance(using: &ImportedUse) -> Option<Instance<'_>> {
+        crate::host::defined::crate_item(&using.selector)?;
+        // A member of an opaque type, as the `next` of each iterator iced's
+        // `Layout::iter` and `Layout::iter_mut` give, is its trait's item
+        // at a `Self` only its path names.
+        if crate::host::defined::opaque_member(&using.path) {
+            return None;
+        }
+        Some((
+            &using.selector,
+            &using.types,
+            &using.constants,
+            &using.functions,
+            &using.mappers,
+            using.callable,
+            &using.slots,
+            using.application,
+        ))
+    }
+    let mut least = BTreeMap::<Instance<'_>, ImmutableString>::new();
+    for using in uses.iter() {
+        if let Some(key) = instance(using) {
+            least
+                .entry(key)
+                .and_modify(|path| {
+                    if using.path < *path {
+                        path.clone_from(&using.path);
+                    }
+                })
+                .or_insert_with(|| using.path.clone());
+        }
+    }
+    let spelled = uses
+        .iter()
+        .map(|using| instance(using).and_then(|key| least.get(&key)).cloned())
+        .collect::<Vec<_>>();
+    for (using, path) in uses.iter_mut().zip(spelled) {
+        if let Some(path) = path {
+            using.path = path;
+        }
+    }
 }
 
 /// What the check of one source it lowered again found so far
