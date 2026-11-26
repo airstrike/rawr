@@ -36,3 +36,16 @@ where
 pub fn pressed<'a, Message, W, Theme>(content: W) -> crate::widgets::Button<'a, Message, W, Theme> {
     crate::widgets::button(content)
 }
+
+/// `item` painted by `palette` with a class of a closure, whose bound
+/// names its parameter's trait through a qualified projection by the
+/// trait's path, and the `framed` module's generic alias by its module,
+/// as iced's `helpers::iced` names `container::StyleFn`.
+pub fn badge<'a, S, P>(item: S, palette: P) -> framed::Painted<'a, S, P>
+where
+    P: framed::Palette + 'a,
+    <P as framed::Palette>::Class<'a>: From<framed::EdgeFn<'a, P>>,
+{
+    let class: framed::EdgeFn<'a, P> = Box::new(|_| '+');
+    framed::Painted::new(item, palette, class.into())
+}

@@ -747,11 +747,26 @@ fn resolve_path(
         .position(|segment| segment.name.text == item::type_ref::QUALIFIED_SEGMENT)
     {
         let segments = &parsed.segments;
+        // A crate trait is known by its path, which two of a parameter's
+        // bounds' traits may end alike (`text::Catalog` and
+        // `container::Catalog`); a program's trait by its name.
         let trait_name = match &segments[index].arguments[..] {
-            [item::type_ref::Argument::Type(item::type_ref::Type::Path(path))] => path
-                .segments
-                .last()
-                .map(|segment| segment.name.text.clone()),
+            [item::type_ref::Argument::Type(item::type_ref::Type::Path(path))] => {
+                let written = path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                if path.segments.len() > 1 && super::crate_trait_identity(host, &written).is_some()
+                {
+                    Some(written.into())
+                } else {
+                    path.segments
+                        .last()
+                        .map(|segment| segment.name.text.clone())
+                }
+            }
             _ => None,
         };
         let (Some(trait_name), [last]) = (trait_name, &segments[index + 1..]) else {

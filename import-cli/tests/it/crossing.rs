@@ -4038,6 +4038,40 @@ fn a_crate_helper_globbed_into_its_parent_runs_from_its_source() {
     assert_eq!(runners(&root.join("target/rawr/store")), built);
 }
 
+/// A crate helper of an opened module whose `where` clause bounds a
+/// qualified projection that names its parameter's trait by the trait's
+/// path, and another opened module's generic alias by its module, as
+/// iced's `helpers::iced` writes `<Theme as container::Catalog>::Class<'a>:
+/// From<container::StyleFn<'a, Theme>>`, runs from its source. The output
+/// is `cargo run`'s.
+#[test]
+fn a_crate_helpers_qualified_projection_bound_names_its_trait_by_its_path() {
+    let root = lane(Some("framed_badged.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "<|~badged~|>\n");
+}
+
 /// A crate helper of an opened module that returns a crate generic type
 /// no opened module holds, as iced's `button(..)` returns `Button<'a,
 /// Message, W, Theme>`, takes the types its arguments leave open from the

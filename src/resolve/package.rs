@@ -5645,6 +5645,11 @@ fn each_signature_path(
             if let Some(default) = &mut generic.default {
                 ty(default, path);
             }
+            // The type a `where` bound on another type bounds, as
+            // `<Theme as container::Catalog>::Class<'a>`.
+            if let Some(fixed) = &mut generic.fixed {
+                ty(fixed, path);
+            }
             let mut projections = generic.projections.to_vec();
             for (.., projected) in &mut projections {
                 ty(projected, path);
@@ -5805,6 +5810,28 @@ fn collect_function_type_paths<'a>(
     }
     if let Some(ty) = &function.output {
         collect_type_paths(ty, output);
+    }
+    // The types its bounds name, as `container::StyleFn` of iced's `where
+    // <Theme as container::Catalog>::Class<'a>: From<container::StyleFn<'a,
+    // Theme>>`, and the type such a `where` bound bounds.
+    for generic in &function.generics {
+        for bound in &generic.bounds {
+            for segment in &bound.segments {
+                for argument in &segment.arguments {
+                    if let crate::item::type_ref::Argument::Type(ty) = argument {
+                        collect_type_paths(ty, output);
+                    }
+                }
+            }
+        }
+        for ty in generic
+            .default
+            .iter()
+            .chain(&generic.fixed)
+            .chain(generic.projections.iter().map(|(.., ty)| ty))
+        {
+            collect_type_paths(ty, output);
+        }
     }
 }
 

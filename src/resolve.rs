@@ -5145,8 +5145,16 @@ fn resolve_projections(
                         .unwrap_or_default(),
                     _ => Vec::new(),
                 };
+                // A crate trait written by any of its paths is the bound's.
+                let named = written.as_ref().and_then(|written| {
+                    let identity = crate_trait_identity(host, written)?;
+                    candidates
+                        .iter()
+                        .find(|candidate| crate_trait_identity(host, candidate) == Some(identity))
+                });
                 match (written, &candidates[..]) {
                     (Some(written), _) if candidates.contains(written) => Ok(written.clone()),
+                    (Some(_), _) if let Some(named) = named => Ok(named.clone()),
                     (None, [found]) => Ok(found.clone()),
                     (None, [first, second, ..]) => Err(Error::InvalidMethodSignature {
                         owner: base_path.name.clone(),
@@ -5796,6 +5804,20 @@ fn native_traits(
         .filter(|path| crate_trait_associated(host, path).is_some())
         .map(ImmutableString::from)
         .collect()
+}
+
+/// The identity of the crate trait at `path`, when a facade has its header.
+pub(crate) fn crate_trait_identity(host: &host::Registry, path: &str) -> Option<[u8; 32]> {
+    #[cfg(feature = "rust-import")]
+    {
+        let parsed = host::path::Path::parse(path).ok()?;
+        Some(host.trait_header(&parsed)?.identity)
+    }
+    #[cfg(not(feature = "rust-import"))]
+    {
+        let _ = (host, path);
+        None
+    }
 }
 
 /// The names of the associated types of the crate trait at `path`, when a
