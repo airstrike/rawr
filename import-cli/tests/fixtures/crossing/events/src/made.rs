@@ -4,6 +4,7 @@
 
 use crate::core;
 use crate::framed::{self, Framed, Shown};
+use crate::marked::{self, MarkFn};
 
 /// `item` framed by hashes, through the `framed` module's own generic code.
 pub fn framed<S: Shown>(item: S) -> Framed<S> {
@@ -51,13 +52,15 @@ where
 }
 
 /// `item` painted by `palette` with a class of a closure, whose bound
-/// names a generic alias through a module that re-exports it by a glob,
-/// as iced's `helpers::iced` names `text::StyleFn`.
+/// names a generic alias and a trait through a module that re-exports
+/// them by a glob, as iced's `helpers::iced` names `text::StyleFn` and
+/// `text::Catalog`.
 pub fn marked<'a, S, P>(item: S, palette: P) -> framed::Painted<'a, S, P>
 where
-    P: framed::Palette + 'a,
-    <P as framed::Palette>::Class<'a>: From<crate::marked::MarkFn<'a, P>>,
+    P: marked::Catalog + framed::Palette + 'a,
+    <P as framed::Palette>::Class<'a>: From<marked::MarkFn<'a, P>>,
+    <P as marked::Catalog>::Class<'a>: From<marked::MarkFn<'a, P>>,
 {
-    let class: crate::marked::MarkFn<'a, P> = Box::new(|_| '*');
+    let class: MarkFn<'a, P> = Box::new(|_| '*');
     framed::Painted::new(item, palette, class.into())
 }

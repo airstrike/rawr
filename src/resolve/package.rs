@@ -2889,6 +2889,41 @@ impl<'a> Resolver<'a> {
         Some(spelled)
     }
 
+    /// `path` in a program module of a crate module's generic items whose
+    /// first segment a `use` there binds to a module of the crate, as
+    /// iced's `helpers` binds `text` by `use crate::text::{self, Text};`
+    /// and writes `text::Catalog`: the crate's path to it, the `use`'s path
+    /// spelled as [`Self::crate_source_spelled`] spells it and the rest
+    /// after it, as rustc resolves the module in the type namespace beside
+    /// the function `text`. `None` when the `use` binds no module.
+    fn crate_source_alias_spelled(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let (first, rest) = path.split_first()?;
+        if rest.is_empty() {
+            return None;
+        }
+        let address = context.address(first);
+        let import = self
+            .tables
+            .alias(&address)
+            .or_else(|| self.tables.export(&address))?;
+        // Only a module: a type the `use` binds, as `crate::core::Theme`,
+        // is no prefix where a parameter of its name is in scope.
+        let module = self.crate_source_spelled(&import.context, &import.path)?;
+        if !matches!(
+            self.host.entry(&module.join("::")),
+            Some(host::Entry::Module | host::Entry::ModuleItem(_))
+        ) {
+            return None;
+        }
+        let mut spelled = module;
+        spelled.extend_from_slice(rest);
+        Some(spelled)
+    }
+
     /// The crate's path to the item `name` names in a program module of a
     /// crate module's generic items, when the module's `use` binds it to
     /// a native item of the crate (`use crate::framed::Shown;`), as
@@ -3519,7 +3554,10 @@ impl<'a> Resolver<'a> {
                 .collect::<Vec<_>>();
             // A crate-source module's `crate::` path names the crate's
             // item through the program's dependency on that crate.
-            let spelled = match self.crate_source_spelled(context, &written) {
+            let spelled = match self
+                .crate_source_spelled(context, &written)
+                .or_else(|| self.crate_source_alias_spelled(context, &written))
+            {
                 Some(spelled) => Some(spelled),
                 None if !self.is_script_path(context, &written) => return,
                 // A path into a `.rs` module keeps its types' own resolution.

@@ -164,6 +164,10 @@ pub trait Marking {
     fn default<'a>() -> Self::Class<'a>;
 }
 
+impl crate::core::widget::text::Catalog for Ink {
+    type Class<'a> = EdgeFn<'a, Self>;
+}
+
 impl Marking for Ink {
     type Class<'a> = char;
 

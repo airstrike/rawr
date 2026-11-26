@@ -4073,10 +4073,12 @@ fn a_crate_helpers_qualified_projection_bound_names_its_trait_by_its_path() {
 }
 
 /// A crate helper of an opened module whose `where` clause names a generic
-/// alias through a module that re-exports it from another crate by a glob,
-/// as iced's `helpers::iced` writes `From<text::StyleFn<'a, Theme>>` and
-/// iced_widget's `text` is `pub use crate::core::widget::text::*;`, finds
-/// the alias there, as rustc does. The output is `cargo run`'s.
+/// alias and a trait through a module that re-exports them from another
+/// crate by a glob, as iced's `helpers::iced` writes `<Theme as
+/// text::Catalog>::Class<'a>: From<text::StyleFn<'a, Theme>>`, where
+/// iced_widget's `text` is `pub use crate::core::widget::text::*;` and the
+/// helpers bind it by `use crate::text::{self, ..}` beside their function
+/// `text`, finds both there, as rustc does. The output is `cargo run`'s.
 #[test]
 fn a_crate_helpers_bound_names_a_generic_alias_a_glob_re_exports() {
     let root = lane(Some("framed_marked.rs"));

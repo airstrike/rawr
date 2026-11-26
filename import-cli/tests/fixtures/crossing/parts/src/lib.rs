@@ -417,6 +417,13 @@ pub mod widget {
         /// What marks a frame for a palette, as iced_core's
         /// `text::StyleFn`.
         pub type MarkFn<'a, P> = Box<dyn Fn(&P) -> char + 'a>;
+
+        /// What a palette marks a frame with, as iced_core's
+        /// `text::Catalog`.
+        pub trait Catalog {
+            /// A mark's class.
+            type Class<'a>;
+        }
     }
 
     /// A widget whose messages `F` turns, as iced_core's `widget::Map`,
