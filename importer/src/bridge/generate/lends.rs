@@ -215,11 +215,13 @@ pub(super) fn render_lends_opening(
         writeln!(
             output,
             "    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| {kept}) {{
-        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{reached}
+        let value = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{reached}
             let made = {made};
             Ok(Dynamic::from(region.{insert}))
         }})
-        .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
+        .map_err(|error| Error::Lent(\"a lending call's region\", error))??;
+        // A frame that holds nothing: the lending region holds the output.
+        return Ok(Dynamic::from(__rawr_internal::scope::Opening::new({name:?}, move |rest| rest(value))));
     }}"
         )
         .map_err(encoding)?;

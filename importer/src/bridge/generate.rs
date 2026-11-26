@@ -12004,7 +12004,7 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
     let anchored = format!(
         "
     if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| matches!(&lender, Lender::Lent(lent) if lent.is_kept_in(anchor))) {{
-        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+        let value = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
             let Lender::Lent(parent) = &lender else {{
                 return Err(Error::Unhandled);
             }};
@@ -12013,7 +12013,9 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
             let nonce = region.lend::<Field0>(field_0).map_err(|error| Error::Lent({rust:?}, error))?;
             Ok({kept})
         }})
-        .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
+        .map_err(|error| Error::Lent(\"a lending call's region\", error))??;
+        // A frame that holds nothing: the region holds the lend.
+        return Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| rest(value))));
     }}",
         field = field.name(),
         kept = lent_field(0, &rust, true).replacen(
