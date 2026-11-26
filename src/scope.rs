@@ -676,6 +676,42 @@ pub fn with_ref<F: Family, R>(
     Ok(f(value))
 }
 
+/// Run `f` on the value `scoped` names, of the family `F`, mutably, with
+/// only its own slot taken out of its region for the call: the region's
+/// other values stay reachable meanwhile, as rustc lets a call that borrows
+/// one local `&mut` leave the others free. A crate call on a view's
+/// widget that calls back into the program, which reaches a sibling
+/// widget of the view, as iced's `Column::diff` asks each child for its
+/// `tag`, needs that. The value goes back to its slot when `f` returns or
+/// unwinds, and leaks if its region ended meanwhile. `f` takes the value
+/// at every lifetime its type has, as [`with`] gives it.
+pub fn with_slot<F: Regional, R>(
+    scoped: Scoped,
+    f: impl for<'x> FnOnce(&mut F::Of<'x>) -> R,
+) -> Result<R, Error> {
+    let place = with::<RegionF, _>(scoped.nonce, |region| {
+        region.slot_of::<F>(scoped)?;
+        let slot = region.slots[scoped.index as usize]
+            .take()
+            .ok_or(Error::Moved)?;
+        // As in `Region::take`, the box holds a slot of `F` at that
+        // region's lifetime, which only the type names.
+        Ok::<_, Error>(Box::into_raw(slot).cast::<Slot<'static, F>>())
+    })??;
+    let back = SlotLease::<F> {
+        place,
+        nonce: scoped.nonce,
+        index: scoped.index,
+    };
+    // SAFETY: the slot is out of its region, so this is the only reference
+    // made from the place until `back` puts it back. `f` takes the value at
+    // every lifetime, so it can't keep a borrow of it or store a shorter
+    // one in it.
+    let output = f(unsafe { &mut (*place).0 });
+    drop(back);
+    Ok(output)
+}
+
 /// What a scope frame's [`Region`] keeps of a [`Family`]'s values: the Rust
 /// name of its type, and how to print and copy one. A generated runner
 /// implements it for each imported type that carries a lifetime.

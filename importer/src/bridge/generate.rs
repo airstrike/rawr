@@ -17282,6 +17282,31 @@ fn render_scoped_input(
     } else {
         format!("lend(arguments.arena, || {call})")
     };
+    // A call that needs nothing else of the region takes the value's slot
+    // alone, so a call back into the program reaches the region's other
+    // values meanwhile, as iced's `Column::diff` asks each child widget of
+    // the view for its `tag` (`scope::with_slot`).
+    if !body.contains("region")
+        && !converted.contains("region")
+        && reached.starts_with("get_mut::<")
+    {
+        let family = reached
+            .strip_prefix("get_mut::<")
+            .and_then(|rest| rest.split_once('>'))
+            .map(|(family, _)| family)
+            .ok_or_else(|| request::drift("a region-held argument's family"))?;
+        return writeln!(
+            output,
+            "    if let Some(scoped) = scoped_value(arguments, {position}) {{
+        return __rawr_internal::scope::with_slot::<{family}, _>(scoped, |argument_{position}| -> Result<Dynamic, Error> {{
+{body}            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}"
+        )
+        .map_err(request::unwritable);
+    }
     writeln!(
         output,
         "    if let Some(scoped) = scoped_value(arguments, {position}) {{
