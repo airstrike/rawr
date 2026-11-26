@@ -85,6 +85,19 @@ impl<M> crate::tinted::Diffed<M> for Mark {
 #[derive(Debug, Clone)]
 pub struct Lift(pub String);
 
+/// A string holds itself at any `M`, as iced_core's `impl<Message, Theme,
+/// Renderer> Widget<Message, Theme, Renderer> for &str` makes a literal a
+/// widget at any message. The crate compiles it.
+impl<M> crate::tinted::Diffed<M> for &str {
+    fn label(&mut self) -> String {
+        format!("'{self}'")
+    }
+
+    fn width(&self) -> usize {
+        self.len()
+    }
+}
+
 impl<M> crate::tinted::Diffed<M> for Lift {
     fn label(&mut self) -> String {
         self.0.clone()

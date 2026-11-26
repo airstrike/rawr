@@ -170,6 +170,10 @@ impl Parser<'_> {
                 continue;
             }
             for found in self.exact_instances(header, owner, given, None, &filling) {
+                if found.self_type.is_text() {
+                    self.bind_text_members(item, header, &found, &types, span);
+                    continue;
+                }
                 let mut at = types.clone();
                 self.bind_inherent_members(&found.self_type, span);
                 at.push((own.as_ref().into(), found.self_type));
@@ -308,6 +312,25 @@ impl Parser<'_> {
             })
             .collect::<Vec<_>>();
         for (header, found) in found {
+            // A trait's impl for `&str` gives Rawr's string its members as
+            // functions of the string (`surface::text`), each bound at the
+            // impl's parameters.
+            if found.self_type.is_text() {
+                for written in &paths {
+                    for member in host.members(&format!("{written}::__rawr_str")) {
+                        if member.trait_of() == Some(&identity) {
+                            let types = member_parameters(
+                                member,
+                                &header.parameters,
+                                &found.parameters,
+                                None,
+                            );
+                            self.bind_member(member, types, None, span);
+                        }
+                    }
+                }
+                continue;
+            }
             let Ty::Host { proof, .. } = &found.self_type else {
                 continue;
             };
@@ -345,6 +368,33 @@ impl Parser<'_> {
                 for (bounded, inner, arguments) in &found.bounds {
                     self.bind_trait_instance(*inner, arguments, Some(bounded), span, false);
                 }
+            }
+        }
+    }
+
+    /// Binds the member of a trait's impl for `&str` that `item`, the
+    /// trait's member over `Self` a call through a bound makes, is at
+    /// Rawr's string (`surface::text`), at the impl's parameters `found`
+    /// fixes and the call's other `types`.
+    fn bind_text_members(
+        &mut self,
+        item: &crate::host::item::Definition,
+        header: &ImplHeader,
+        found: &Exact,
+        types: &[(ImmutableString, Ty)],
+        span: Span,
+    ) {
+        let path = item.path();
+        let Some((trait_path, name)) = path.rsplit_once("::__rawr_self::") else {
+            return;
+        };
+        let host = self.models.host.clone();
+        let mut known = found.parameters.clone();
+        known.extend(types.iter().cloned());
+        for member in host.members(&format!("{trait_path}::__rawr_str")) {
+            if member.path_ref().name() == name {
+                let types = member_parameters(member, &header.parameters, &known, None);
+                self.bind_member(member, types, None, span);
             }
         }
     }

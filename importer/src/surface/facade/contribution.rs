@@ -349,7 +349,12 @@ fn ops(outcome: crate::classify::Outcome<'_>) -> Result<Vec<Op>, crate::surface:
             let Some(mut item) = item(&path, associated)? else {
                 continue;
             };
-            if !matches!(item.body.kind, ItemKind::OwnedMethod) {
+            // A method that borrows the `&str` itself takes the string
+            // all the same: the runner lends the borrow.
+            if !matches!(
+                item.body.kind,
+                ItemKind::OwnedMethod | ItemKind::SharedMethod | ItemKind::MutableMethod
+            ) {
                 continue;
             }
             let body = item.made_mut();

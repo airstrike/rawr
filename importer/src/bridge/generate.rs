@@ -15159,7 +15159,7 @@ fn render_adapter_steps(
                     // A trait's method of its impl for `&str`, called on
                     // Rawr's string (`surface::text`), lent at the lifetime
                     // the impl names (#717).
-                    Receiver::Owned if str_member(signature) => {
+                    _ if str_member(signature) => {
                         render_str_receiver(
                             plan,
                             signature,
@@ -15168,6 +15168,29 @@ fn render_adapter_steps(
                             *container_parameters,
                             output,
                         )?;
+                        // A method that borrows the `&str` itself, as iced's
+                        // `tag(&self)` of `impl Widget<..> for &str`, takes
+                        // a borrow of the runner's own `&str` of the string.
+                        let borrowed = match receiver {
+                            Receiver::Owned => "",
+                            _ if carries_lifetime(&substituted(
+                                signature.output(),
+                                signature,
+                                substitutions,
+                            )?) =>
+                            {
+                                return Err(request::drift(
+                                    "a `&str` receiver borrowed for a call whose output carries a lifetime",
+                                ));
+                            }
+                            Receiver::Shared => "    let receiver = &receiver;\n",
+                            Receiver::Mutable => {
+                                "    let receiver_given = receiver;\n    let mut receiver_place = receiver_given;\n    let receiver = &mut receiver_place;\n"
+                            }
+                        };
+                        output
+                            .write_all(borrowed.as_bytes())
+                            .map_err(request::unwritable)?;
                         let annotation = concrete_type(&substituted(
                             signature.output(),
                             signature,
@@ -15182,7 +15205,7 @@ fn render_adapter_steps(
                         .map_err(request::unwritable)?;
                         render_method_head(
                             plan.name(),
-                            *receiver,
+                            Receiver::Owned,
                             signature,
                             substitutions,
                             constants,
@@ -15191,6 +15214,14 @@ fn render_adapter_steps(
                         )?;
                         argument_list(signature.inputs().len(), 1, output)?;
                         output.write_all(b"));\n").map_err(request::unwritable)?;
+                        // Rawr's string is a value the runner lends a `&str`
+                        // of: a method that makes its `&mut self` another
+                        // string can't give it back yet.
+                        if matches!(receiver, Receiver::Mutable) {
+                            output
+                                .write_all(b"    if !std::ptr::eq(receiver_place, receiver_given) {\n        return Err(Error::Value(\"a `&mut &str` receiver the method made another string isn't given back to the program yet\".to_owned()));\n    }\n")
+                                .map_err(request::unwritable)?;
+                        }
                     }
                     Receiver::Owned => {
                         render_scoped_receiver(

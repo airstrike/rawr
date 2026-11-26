@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 325;
+const CLASSIFIER_VERSION: u32 = 329;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8572,22 +8572,41 @@ impl<'graph> Context<'graph> {
             else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            // Only a method that takes the string by value: `&self` would
-            // borrow a `&&str`. A method the impl defines reads its `self`,
-            // the impl's own `&str`, as a borrow of `str`.
-            let by_value = match signature.receiver() {
-                model::Receiver::Value { .. } => true,
+            // A method that takes the string by value, or borrows the
+            // `&str` itself, as iced's `tag(&self)` and `layout(&mut self,
+            // ..)` of `impl Widget<..> for &str` do: the runner lends its
+            // own `&str` of Rawr's string for the call, and the output may
+            // keep no borrow of it. A method the impl defines reads its
+            // `self`, the impl's own `&str`, as a borrow of `str`.
+            let borrows_text =
+                |ty: &model::Type| is_str_reference(ty) || matches!(ty, model::Type::SelfType(_));
+            let receiver = match signature.receiver() {
+                model::Receiver::Value { .. } => Some(representability::ownership::Receiver::Owned),
                 model::Receiver::Reference {
                     mutability: model::Mutability::Shared,
                     ty: model::Type::Primitive(name),
                     ..
-                } => &**name == "str",
-                _ => false,
+                } if &**name == "str" => Some(representability::ownership::Receiver::Owned),
+                model::Receiver::Reference { mutability, ty, .. }
+                    if borrows_text(ty)
+                        && !names_late_lifetime(signature.output())
+                        && !names_early_lifetime(signature.output()) =>
+                {
+                    Some(match mutability {
+                        model::Mutability::Shared => representability::ownership::Receiver::Shared,
+                        model::Mutability::Mutable => {
+                            representability::ownership::Receiver::Mutable
+                        }
+                    })
+                }
+                _ => None,
             };
-            if !by_value
-                || generics
-                    .parameters()
-                    .any(|parameter| parameter.owner() != definition.id())
+            let Some(receiver) = receiver else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            if generics
+                .parameters()
+                .any(|parameter| parameter.owner() != definition.id())
             {
                 return Err(reject::Kind::GenericImplementation.into());
             }
@@ -8615,7 +8634,16 @@ impl<'graph> Context<'graph> {
             let inherited = model::Generics::inherited(implementation.generics(), generics)
                 .map_err(|_| Error::Allocation)?;
             // A `self` the impl defines is its own `&str` taken by value,
-            // as a provided method's `self` is.
+            // as a provided method's `self` is. The borrow of a `&str` the
+            // method takes is the runner's own, so its lifetime binds
+            // nothing of the call.
+            let lent = match signature.receiver() {
+                model::Receiver::Reference {
+                    lifetime: model::Lifetime::Late { binder, .. },
+                    ..
+                } if receiver != representability::ownership::Receiver::Owned => Some(binder),
+                _ => None,
+            };
             let owned;
             let signature = if matches!(signature.receiver(), model::Receiver::Reference { .. }) {
                 owned = model::Signature::new(
@@ -8624,7 +8652,11 @@ impl<'graph> Context<'graph> {
                     signature.async_function(),
                     signature.abi().into(),
                     signature.variadic(),
-                    signature.binders().cloned().collect(),
+                    signature
+                        .binders()
+                        .filter(|binder| lent != Some(*binder))
+                        .cloned()
+                        .collect(),
                     model::Receiver::Value {
                         ty: implementation.self_type().clone(),
                     },
@@ -8640,13 +8672,18 @@ impl<'graph> Context<'graph> {
             // `impl Label for &str`, classifies as a plain method of the
             // string, which takes it by value all the same.
             let item = match self.function(signature, &inherited)? {
-                Representability::FunctionItem(item) => item,
+                Representability::FunctionItem(item)
+                    if receiver == representability::ownership::Receiver::Owned =>
+                {
+                    item
+                }
+                Representability::FunctionItem(item) => item.with_receiver(receiver),
                 Representability::Method(plan)
                     if plan.receiver() == representability::ownership::Receiver::Owned =>
                 {
                     callable::Item::new(
                         plan.signature().clone(),
-                        Some(plan.receiver()),
+                        Some(receiver),
                         None,
                         Box::default(),
                         Box::default(),

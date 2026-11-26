@@ -346,6 +346,21 @@ impl<'g, P: api::Phase> Headers<'g, '_, P> {
                 convert::Type::Builtin(convert::Builtin::primitive(name)?)
             }
             model::Type::Parameter { index, .. } => convert::Type::Parameter(*index),
+            // A shared `&str`, as iced's `impl Widget<..> for &str` is for:
+            // Rawr's string, whose trait members the impl gives
+            // (`surface::text`). One for `&'static str` alone is for a
+            // string that lives for the program.
+            model::Type::Reference {
+                lifetime,
+                mutability: model::Mutability::Shared,
+                ty,
+            } if matches!(&**ty, model::Type::Primitive(name) if &**name == "str") => {
+                convert::Type::Builtin(if *lifetime == model::Lifetime::Static {
+                    convert::Builtin::StaticStr
+                } else {
+                    convert::Builtin::Str
+                })
+            }
             model::Type::Definition { id, arguments } => {
                 let definition = identity(id);
                 // A std type Rawr holds as its own, as iced's `impl<T>

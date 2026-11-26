@@ -4693,6 +4693,40 @@ fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
     );
 }
 
+/// A crate's generic impl of its trait for `&str`, which the crate
+/// compiles, at the program's string: the opened `Tallied<S>` impl runs
+/// from source at `S = &str` and calls the string's `label(&mut self)` and
+/// `width(&self)` at the program's `Note`, which its bound gives, as
+/// iced's `Container` over `container("")` calls the string's
+/// `Widget::tag`. The output is `cargo run`'s.
+#[test]
+fn a_crate_generic_impl_for_str_runs_its_borrowing_methods_at_the_programs_string() {
+    let root = lane(Some("tinted_texted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "(\"['leaf']\", 6)\n");
+}
+
 /// Native code lends a program's impl a node it owns, as iced's
 /// `UserInterface` lends a widget's `operate` its `&mut Tree`: the impl
 /// walks the node's children through the crate's `Spot::iter_mut(&mut

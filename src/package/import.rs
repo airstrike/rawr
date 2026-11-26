@@ -3160,9 +3160,10 @@ fn build(
             continue;
         };
         // Its signature is written with no closure, so a callable
-        // parameter would be named undeclared.
-        if plan.receiver()
-            != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
+        // parameter would be named undeclared. A method that borrows the
+        // `&str` itself takes the string all the same: the runner lends the
+        // borrow (`surface::text`).
+        if plan.receiver().is_none()
             || !writes_declared(plan.signature(), None, &[])
             || left_out(path, *associated)
             || !names_declared(*associated, resolved)
@@ -3196,7 +3197,8 @@ fn build(
         builder.item(
             host::item::Definition::function(path, signature)?
                 .imported(associated.identity().selector().try_clone()?)
-                .lending_static(lent),
+                .lending_static(lent)
+                .implementing(associated.trait_of().map(|trait_of| *trait_of.as_bytes())),
         )?;
     }
     // A trait's method over its `Self`, which a program's own type that

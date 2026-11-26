@@ -463,12 +463,34 @@ impl<'a> Parser<'a> {
         {
             return;
         }
-        let mut receiver = self.inference.resolve(receiver);
-        while let Ty::Reference { target, .. } = receiver {
-            receiver = self.inference.resolve(&target);
+        // The receiver after each autoderef step, innermost first: a `&str`
+        // impl's `self` is the string's `&str` itself, as rustc's probe
+        // stops at the `&str` for `impl Widget<..> for &str`.
+        let mut receivers = vec![self.inference.resolve(receiver)];
+        while let Some(Ty::Reference { target, .. }) = receivers.last() {
+            let target = self.inference.resolve(target);
+            receivers.push(target);
         }
+        for receiver in receivers.into_iter().rev() {
+            if self.fix_impl_member_at(identity, ordered, &receiver) {
+                return;
+            }
+        }
+    }
+
+    /// [`Self::fix_impl_member_by_param_env`] at one `receiver`: whether
+    /// the body's param-env bounds it by the trait `identity` and one of
+    /// the trait's impl headers fits it.
+    #[cfg(feature = "rust-import")]
+    fn fix_impl_member_at(
+        &mut self,
+        identity: [u8; 32],
+        ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+        receiver: &Ty,
+    ) -> bool {
+        let receiver = receiver.clone();
         let Some(given) = self.param_env_arguments(&receiver, identity) else {
-            return;
+            return false;
         };
         let headers = self
             .models
@@ -491,7 +513,10 @@ impl<'a> Parser<'a> {
             ) else {
                 continue;
             };
-            if !self.unifies(&self_type, &receiver) {
+            // An impl for `&str` is Rawr's string's, whichever of its
+            // types the call holds it as (`surface::text`).
+            let text = self.inference.resolve(&self_type).is_text() && receiver.is_text();
+            if !text && !self.unifies(&self_type, &receiver) {
                 continue;
             }
             let Ok(arguments) = header
@@ -521,7 +546,7 @@ impl<'a> Parser<'a> {
             }
         }
         let Ok([arguments]) = <[_; 1]>::try_from(fitting) else {
-            return;
+            return false;
         };
         if given.len() == arguments.len()
             && given
@@ -533,6 +558,7 @@ impl<'a> Parser<'a> {
                 let _ = self.unify_type(given, argument);
             }
         }
+        true
     }
 
     #[cfg(feature = "rust-import")]
