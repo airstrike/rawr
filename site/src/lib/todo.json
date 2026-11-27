@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-27",
-  "version": "0.5.23",
+  "version": "0.5.24",
   "examples": {
     "running": 55,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],
-      "entries": [
-        {"text":"With `RAWR_CRATE_SOURCE` opening iced's container, helpers and widget modules, a crate's generic code runs from its source at the program's types while its concrete code stays native. A save that adds `container(text(..))`, `row![button(..)]` or `column![container(..)]` swaps in place with no runner build and keeps the app's state, and a swatch panel with `color!` literals and `.style(panel)` runs unchanged. A program's own call of a method that only runs where native code lends (a native `overlay`) is refused at check with the reason, and a crate's `&mut self` method of its impl for `&str` gives the program its new string.","issues":[2699],"refs":[2698]},
-        {"text":"A crate macro that stringifies an integer literal reads it as written, so iced's `color!(0x00ff00)` is green, not red.","issues":[2700]},
-        {"text":"A start with opened crate modules checks in about 25 s instead of about 5 minutes: a type's members are read as a sorted range, and the opened modules' source graph is read once while its files are unchanged.","issues":[2701],"refs":[2698]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.24",
+        "date": "2026-11-27",
+        "entries": [
+          {"text":"With `RAWR_CRATE_SOURCE` opening iced's container, helpers and widget modules, a crate's generic code runs from its source at the program's types while its concrete code stays native. A save that adds `container(text(..))`, `row![button(..)]` or `column![container(..)]` swaps in place with no runner build and keeps the app's state, and a swatch panel with `color!` literals and `.style(panel)` runs unchanged. A program's own call of a method that only runs where native code lends (a native `overlay`) is refused at check with the reason, and a crate's `&mut self` method of its impl for `&str` gives the program its new string.","issues":[2699],"refs":[2698]},
+          {"text":"A crate macro that stringifies an integer literal reads it as written, so iced's `color!(0x00ff00)` is green, not red.","issues":[2700]},
+          {"text":"A start with opened crate modules checks in about 25 s instead of about 5 minutes: a type's members are read as a sorted range, and the opened modules' source graph is read once while its files are unchanged.","issues":[2701],"refs":[2698]}
+        ]
+      },
       {
         "version": "0.5.23",
         "date": "2026-11-22",
@@ -6615,9 +6617,9 @@
     {"issue":2696,"title":"A turbofish on a std free function rawr runs is the not-yet error","state":"open","category":"Divergences from rustc"},
     {"issue":2697,"title":"A std enum's variant by its full path is the not-yet error","state":"open","category":"Divergences from rustc"},
     {"issue":2698,"title":"Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open","category":"No glue (D593)"},
-    {"issue":2699,"title":"Opened crate modules run iced's generic widgets from source with no runner rebuild","state":"open","category":"No glue (D593)"},
-    {"issue":2700,"title":"A crate macro reads an integer literal as written","state":"open","category":"No glue (D593)"},
-    {"issue":2701,"title":"A start with opened crate modules checks in seconds","state":"open","category":"No glue (D593)"},
+    {"issue":2699,"title":"Opened crate modules run iced's generic widgets from source with no runner rebuild","state":"closed","category":"No glue (D593)","release":"0.5.24"},
+    {"issue":2700,"title":"A crate macro reads an integer literal as written","state":"closed","category":"No glue (D593)","release":"0.5.24"},
+    {"issue":2701,"title":"A start with opened crate modules checks in seconds","state":"closed","category":"No glue (D593)","release":"0.5.24"},
     {"issue":2702,"title":"?play: open crate modules from source in the wasm playground","state":"open","category":"No glue (D593)"},
     {"issue":2703,"title":"Literals and stringify in crate macro expansions read text from the wrong source","state":"open","category":"No glue (D593)"}
   ],
