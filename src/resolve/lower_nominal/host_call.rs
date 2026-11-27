@@ -33,6 +33,8 @@ impl<'a> Parser<'a> {
                 count.checked_mul(std::mem::size_of::<(Ty, Span, bool)>()),
             )?;
         }
+        #[cfg(feature = "rust-import")]
+        let stand_ins = self.stand_in_arguments(&item, &requirements, arguments, call)?;
         let mut operands = Vec::with_capacity(arguments.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
             operands.push((receiver.ty.clone(), receiver.span, true));
@@ -67,6 +69,8 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         self.fix_bounds_by_impls(&item, &requirements, &operands, call)?;
         self.keep_host_bounds(&item, &requirements, call);
+        #[cfg(feature = "rust-import")]
+        self.keep_stand_ins(stand_ins, self.ops.len(), usize::from(receiver.is_some()));
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -76,6 +80,7 @@ impl<'a> Parser<'a> {
                 operands: operands.into_boxed_slice(),
                 output,
                 span: call,
+                stand_ins: Box::default(),
             }),
         }))
     }
@@ -484,6 +489,8 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|argument| argument.ty.clone())
             .collect::<Vec<_>>();
+        #[cfg(feature = "rust-import")]
+        self.refuse_unlent_call(&item, call)?;
         let summary = self.host_summary(&item, None, &self.inference.resolve(&ty), &types);
         let opens = item.opens();
         let frame = item.frame();
@@ -496,7 +503,8 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
-        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        let mut places = copied_places(&self.inference, &signature.inputs, &arguments);
+        places.retain(|place| !self.mutably_lent_fields.contains(place.source.as_str()));
         move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let opens = opens && !self.lend_static_texts(frame, &mut arguments);
         let runtime_arguments = arguments
@@ -1941,6 +1949,8 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|argument| argument.ty.clone())
             .collect::<Vec<_>>();
+        #[cfg(feature = "rust-import")]
+        self.refuse_unlent_call(&item, call)?;
         let summary = self.host_summary(
             &item,
             Some(&receiver.ty),
@@ -1952,7 +1962,8 @@ impl<'a> Parser<'a> {
         let shared = item.receiver() == Some(receiver::Mode::Shared);
         let guard = item.guard();
         let opens = item.opens();
-        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        let mut places = copied_places(&self.inference, &signature.inputs, &arguments);
+        places.retain(|place| !self.mutably_lent_fields.contains(place.source.as_str()));
         move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let helper = self.push_intrinsic(
             item,
@@ -2405,6 +2416,33 @@ impl<'a> Parser<'a> {
             .and_then(|path| self.models.host.type_(&path).cloned())
     }
 
+    /// `path`, the member `member` of the imported type `definition` at
+    /// the path the program writes, or the same member at another of the
+    /// type's paths when only that one has it: a type is one type at every
+    /// path that reaches it (`host::defined`), so `iced::Border::default` is
+    /// the `default` a crate-source module bound at
+    /// `__rawr_source_iced_widget::core::Border`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn imported_member_path(
+        &self,
+        definition: &crate::host::type_def::Definition,
+        path: String,
+        member: &str,
+    ) -> String {
+        if self.models.host_items(&path).is_some() {
+            return path;
+        }
+        let Some(identity) = definition.identity().imported() else {
+            return path;
+        };
+        self.models
+            .host
+            .imported_type_paths_anywhere(identity)
+            .map(|owner| format!("{owner}::{member}"))
+            .find(|other| self.models.host_items(other).is_some())
+            .unwrap_or(path)
+    }
+
     /// The imported type `ty` as another crate's facade names it, when only
     /// that facade has `member`: a trait of that crate gives it by an impl
     /// for this crate's type, as ratzilla's `impl<B> WebRenderer for
@@ -2492,6 +2530,97 @@ impl<'a> Parser<'a> {
                     .host_items(&format!("{}::{member}", definition.path()))
                     .is_some()
             })
+    }
+
+    /// Whether the method `member` of the crate type `ty` is one an opened
+    /// module runs from source as the type's inherent method
+    /// (`crate_source::is_inherent`): the crate's own item of the name is
+    /// that same method.
+    pub(super) fn source_inherent(&self, ty: &Ty, member: &str) -> bool {
+        owner_id(ty).is_some_and(|owner| {
+            self.models
+                .trait_methods
+                .get(&(owner, member.into()))
+                .is_some_and(|definitions| {
+                    definitions.iter().any(|definition| {
+                        definition
+                            .trait_name()
+                            .is_some_and(|name| crate::package::crate_source::is_inherent(name))
+                    })
+                })
+        })
+    }
+
+    /// In a method of an opened module's inherent impl, the impl's `Self`
+    /// and its function the next path segment names, when the impl's
+    /// trait (`crate_source::inherent`) holds it, as `Self::new` in iced's
+    /// `impl Tree` names its generic `new`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn source_inherent_function(&mut self) -> Option<(Ty, method::Definition)> {
+        let trait_name = self.impl_trait.clone()?;
+        if !crate::package::crate_source::is_inherent(&trait_name) {
+            return None;
+        }
+        let Token::Identifier(member) = self.peek_second() else {
+            return None;
+        };
+        let self_ty = self.self_ty.clone()?;
+        let definition = self
+            .source_inherent_member(owner_id(&self_ty)?, member.as_str())
+            .filter(|definition| definition.trait_name() == Some(&trait_name))?;
+        Some((self_ty, definition))
+    }
+
+    /// The generic function or method `member` an opened module's
+    /// inherent impl (`crate_source::inherent`) gives the crate type
+    /// `owner`, as iced's tree module gives `Tree` its generic `new`: the
+    /// crate's own item of the name is that same function, run from source
+    /// at the call's types. The module's concrete functions aren't the
+    /// impl's.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn source_inherent_member(
+        &self,
+        owner: type_def::Id,
+        member: &str,
+    ) -> Option<method::Definition> {
+        self.models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .iter()
+            .find(|definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|name| crate::package::crate_source::is_inherent(name))
+            })
+            .cloned()
+    }
+
+    /// The first step of Rust's method probe (`receiver_rank`) at which
+    /// the crate type `ty` has an inherent method `member` of its own, not
+    /// one of a trait's impl: Text's builder `size(self, ..)` beside its
+    /// `Widget::size(&self)`.
+    pub(super) fn host_inherent_rank(&self, ty: &Ty, member: &str) -> Option<u8> {
+        #[cfg(feature = "rust-import")]
+        {
+            let resolved = self.inference.resolve(ty);
+            let member = crate::tokenizer::unraw(member);
+            let definition = resolved
+                .host_alias()
+                .cloned()
+                .or_else(|| self.imported_member_owner(&resolved, member))?;
+            self.models
+                .host_items(&format!("{}::{member}", definition.path()))?
+                .iter()
+                .filter(|item| item.trait_member().is_none())
+                .filter_map(crate::host::item::Definition::receiver)
+                .map(super::op::receiver_rank)
+                .min()
+        }
+        #[cfg(not(feature = "rust-import"))]
+        {
+            let _ = (ty, member);
+            None
+        }
     }
 
     /// The first alias of an imported type with no alias of its own whose
@@ -3156,11 +3285,16 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     pub(super) fn read_imported_field(
         &mut self,
-        receiver: ParsedExpr,
+        mut receiver: ParsedExpr,
         definition: crate::host::type_def::Definition,
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // `&mut self.children` in a `&mut self` method of a crate's type
+        // run from its source: `self` is the receiver's place.
+        if receiver.lvalue.is_none() {
+            receiver.lvalue = self.mutable_receiver_place(&receiver);
+        }
         let path: ImmutableString = definition.path().into();
         let crate::host::type_def::Shape::Struct { fields, .. } = definition.shape() else {
             return Err(Error::UnknownMember {
@@ -3267,6 +3401,63 @@ impl<'a> Parser<'a> {
                 ));
             }
             return self.scoped_call(lent, true, &[]);
+        }
+        // `&mut tree.children` of a `Vec` of crate values, as iced's
+        // `layout.iter_mut(&mut tree.children)` takes: the field lent
+        // mutably where it is, for the statement or for the rest of the
+        // block of a `let`, as rustc borrows the place, and the struct
+        // stays whole. So is `&tree.children` of elements that aren't
+        // `Clone`, as `layout.iter(&tree.children)` takes, which no copy
+        // of the field could be.
+        let lent_mut = self.lent_mut_field == Some(receiver.span.start());
+        let elements = match self.inference.resolve(&ty) {
+            Ty::Array { element, .. } => Some(self.inference.resolve(&element)),
+            _ => None,
+        };
+        let lent = elements.as_ref().is_some_and(|element| {
+            matches!(element, Ty::Host { .. })
+                && (lent_mut
+                    || self.lent_field == Some(receiver.span.start())
+                        && !self.type_provides(element, capability::Kind::Clone))
+        });
+        if !shared
+            && lent
+            && definition.parameters().is_empty()
+            && receiver.prelude.is_empty()
+            && variable_name(receiver.source.as_str()).is_some()
+            && !self.frames.is_empty()
+        {
+            let (kind, mode) = if lent_mut {
+                (
+                    crate::host::structural::Kind::LendMut,
+                    crate::receiver::Mode::Mutable,
+                )
+            } else {
+                (
+                    crate::host::structural::Kind::Borrow { field: 0 },
+                    crate::receiver::Mode::Shared,
+                )
+            };
+            let lend = ImportedOperation {
+                kind,
+                operands: vec![(receiver.ty.clone(), receiver.span, true)].into_boxed_slice(),
+                output: ty.clone(),
+                receiver: Some(mode),
+            };
+            let helper = self.push_imported_op(&path, selector, Some(lend), operation)?;
+            let lent = ParsedExpr {
+                prelude: receiver.prelude,
+                source: origin::Fragment::call(&helper, [receiver.source]),
+                ty,
+                span: operation,
+                lvalue: None,
+                outcome: crate::host::usage::Outcome::Conservative,
+                evaluation: crate::host::usage::Evaluation::Required,
+            };
+            let lent = self.scoped_call(lent, true, &[])?;
+            self.mutably_lent_fields
+                .insert(lent.source.as_str().to_owned());
+            return Ok(lent);
         }
         // Any other field a `&` or a `&self` method borrows, as wgpu's
         // `capabilities.formats.iter()` borrows a `Vec<TextureFormat>`, is

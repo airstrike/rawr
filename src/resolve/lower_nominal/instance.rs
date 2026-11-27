@@ -287,6 +287,16 @@ pub(super) struct Uses {
     pub(super) bound: Vec<Bound>,
     /// The dispatcher arms the body's trait objects reach (D1115.3).
     pub(super) objects: Vec<super::trait_object::Arm>,
+    /// The crate call that runs only in a lending region which the body
+    /// makes as the same trait's method, as `self.content.overlay(..)` in
+    /// a program's `Widget::overlay`: the body runs only where native code
+    /// calls it, and its region holds what the call keeps (#2698).
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    pub(super) lending: Option<ImmutableString>,
+    /// Each trait impl's method of the program's the body calls outside a
+    /// method of the same trait and name, with the call.
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    pub(super) method_calls: Vec<(crate::item::Key, Span)>,
 }
 
 /// A method call the generic read of a template resolves through a bound
@@ -413,6 +423,16 @@ impl Parser<'_> {
         substitution: &BTreeMap<ImmutableString, Ty>,
         call: Span,
     ) -> String {
+        #[cfg(feature = "rust-import")]
+        if let Some(trait_name) = definition.trait_name()
+            && !self.collecting_instances
+            && call != Span::NONE
+            && !self.in_method_of(trait_name, definition.name())
+        {
+            self.instance_uses
+                .method_calls
+                .push((definition.key().clone(), call));
+        }
         self.template_call(definition.key(), substitution, call, true)
             .map_or_else(|| super::method_name(definition), |name| name.to_string())
     }
@@ -445,6 +465,18 @@ impl Parser<'_> {
         substitution: &BTreeMap<ImmutableString, Ty>,
         call: Span,
     ) -> Option<String> {
+        self.instance_key(template, substitution, call)
+            .map(|key| method_key_name(&key))
+    }
+
+    /// The key of the instance [`Parser::instance_name`] names, which the
+    /// running program holds it by.
+    pub(super) fn instance_key(
+        &mut self,
+        template: &crate::item::Key,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        call: Span,
+    ) -> Option<crate::item::Key> {
         let types = self
             .models
             .templates
@@ -465,9 +497,9 @@ impl Parser<'_> {
             call,
             method: true,
         };
-        let name = demand.name(&self.models);
+        let key = demand.key(&self.models);
         self.instance_uses.demands.push(demand);
-        Some(name)
+        Some(key)
     }
 
     /// Write each template call's instance over its placeholder, now that
@@ -569,6 +601,29 @@ impl Parser<'_> {
             *ty = super::instantiate(ty, &substitution);
         }
         self.trait_parameters.extend(substitution);
+    }
+
+    /// In the instance `key` of a crate-bounded template (D629), call each
+    /// method its template's generic read selected through a parameter's
+    /// crate-trait bound as that trait's, as `Trait::method(x)` is
+    /// (`spliced_traits`): the generic body never sees an inherent method
+    /// of the instance's type.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn seed_selections(&mut self, key: &crate::item::Key) {
+        let Some(template) = self
+            .models
+            .instances
+            .templates
+            .iter()
+            .find(|(_, instances)| instances.iter().any(|(_, instance)| instance == key))
+            .map(|(template, _)| template)
+        else {
+            return;
+        };
+        let Some(selections) = self.models.instances.selections.get(template) else {
+            return;
+        };
+        self.spliced_traits.extend(selections.iter().cloned());
     }
 
     /// Keep the generic read's call of `function`, a method of the bound

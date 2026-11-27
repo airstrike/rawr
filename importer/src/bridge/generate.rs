@@ -17,6 +17,7 @@ pub(crate) mod cached;
 mod family;
 mod frame;
 mod item;
+mod lends;
 mod locked;
 pub(crate) mod member;
 mod object;
@@ -1827,12 +1828,13 @@ impl Error {
     }
 
     /// The error as the program sees it. One that only a rawr bug causes
-    /// panics, naming the bug.
+    /// panics, naming the bug and, for a lent value, its type.
     pub fn reported(self) -> Self {
-        if let Some(bug) = self.bug() {
-            panic!("rawr bug: {bug}");
+        match (self.bug(), &self) {
+            (Some(bug), Self::Lent(ty, _)) => panic!("rawr bug: {bug}: `{ty}`"),
+            (Some(bug), _) => panic!("rawr bug: {bug}"),
+            (None, _) => self,
         }
-        self
     }
 
     pub fn code(&self) -> u8 {
@@ -3050,6 +3052,17 @@ pub struct PlaceHeld<T: 'static> { pub value: Option<Box<T>>, pub handle: Native
 impl<T: 'static> PlaceHeld<T> {
     pub fn get_mut(&mut self) -> &mut T {
         self.value.as_mut().expect("a lent value is held till it drops")
+    }
+
+    /// The value, lent `&mut` to a crate call in a lending region for as
+    /// long as the region's owner keeps its leases (`Region::lease`), and
+    /// given back to its slot after (#2698).
+    pub fn lend_to<'r>(mut self, region: &__rawr_internal::scope::Region<'r>) -> Result<&'r mut T, Error> {
+        let value = self.value.take().ok_or(Error::StaleHandle)?;
+        let handle = self.handle.clone();
+        region
+            .lease(value, move |value| drop(PlaceHeld { value: Some(value), handle }))
+            .map_err(|error| Error::Lent(std::any::type_name::<T>(), error))
     }
 }
 
@@ -4985,6 +4998,27 @@ pub fn attest_input(
         Some(Some(witness)) => attest_nested(arena, value, witness),
         _ => Ok(value),
     }
+}
+
+/// [`attest_input`], or, where the callable carries no witness of the
+/// input, as a program's function a box made of does not, the value marked
+/// as the imported type `identity`, which has no arguments and which its
+/// Rust type is: it takes that type's witness where it is first checked as
+/// it, as a value its type's `Default` made does.
+#[allow(dead_code)]
+pub fn attest_input_as(
+    arena: &mut Arena,
+    value: Dynamic,
+    witness: Option<&Option<__rawr_internal::host::runtime::Witness>>,
+    identity: [u8; 32],
+) -> Result<Dynamic, Error> {
+    if let Some(Some(witness)) = witness {
+        return attest_nested(arena, value, witness);
+    }
+    if let Ok(handle) = value.clone().try_cast_result::<NativeHandle>() {
+        arena.made_by_default(&handle, identity);
+    }
+    Ok(value)
 }
 
 /// `value` with each native value in it attested, as [`attest_within`]
@@ -9233,6 +9267,7 @@ fn render_source(
     // names the proxies take (`family::named`), so they come first.
     let mut impls = Vec::new();
     render_impls(plans, profile, facade.as_ref(), &mut impls)?;
+    object::render_stand_ins(&mut impls);
     place::render_policies(&mut impls);
     let registrations = place::registrations();
     let mut families = Vec::new();
@@ -9968,6 +10003,17 @@ fn hidden_segments(source: &[u8]) -> std::collections::BTreeSet<String> {
 /// as `events::widgets::Row::boxed`. A trait's method has one selector on every type,
 /// so the runtime binds the instance of each type's item by this path.
 pub(crate) fn facade_item_path(plan: &Plan) -> String {
+    // A member of an opaque type is the opaque type's own, as each of the
+    // iterators iced's `Layout::iter` and `Layout::iter_mut` give has its
+    // own `next`, which one selector names.
+    if let Operation::Method { signature, .. } = plan.operation()
+        && let Some(convert::Type::Nominal { definition, .. }) = signature.instance()
+        && is_opaque(definition)
+        && let Some(owner) =
+            TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
+    {
+        return format!("{owner}::{}", plan.name());
+    }
     let mut segments = std::iter::once(plan.export().root_alias())
         .chain(plan.export().path())
         .collect::<Vec<_>>();
@@ -10727,12 +10773,8 @@ fn witness_mode(plan: &Plan) -> u8 {
         | Operation::Function { .. }
         | Operation::Constant { .. } => 1,
         // A trait's method on Rawr's string, which Rawr calls as a function
-        // (`surface::text`).
-        Operation::Method {
-            receiver: Receiver::Owned,
-            signature,
-            ..
-        } if str_member(signature) => 1,
+        // (`surface::text`), whether it takes the `&str` or borrows it.
+        Operation::Method { signature, .. } if str_member(signature) => 1,
         Operation::StructField { field, .. } if !shared_field(field.ty()) => 2,
         Operation::Method {
             receiver: Receiver::Owned,
@@ -10941,6 +10983,13 @@ fn reaches_fields(plan: &Plan) -> bool {
 
 /// Whether a variant's field of type `ty` is lent where a pattern borrows
 /// it: a crate value Rawr doesn't hold as its own, reached by its type.
+/// Whether `ty` is a `Vec` of crate values a field holds, as iced's
+/// `Tree::children` is: lent where it is by its own type, as `&mut
+/// tree.children` lends it to `layout.iter_mut(..)`.
+fn lendable_sequence(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Sequence { element, owned: true, length: None } if lendable(element))
+}
+
 fn lendable(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { .. })
         && !plain_value(ty)
@@ -11377,10 +11426,7 @@ fn render_lent_fields(
     };
     writeln!(
         output,
-        "    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({ty:?}, move |rest| {{
         {reach}::<{ty}>(&lender, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
@@ -11900,7 +11946,9 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
         adapter_name(plan)
     )
     .map_err(request::unwritable)?;
-    if !lendable(field.ty()) || container_family(&path, &path).is_some() || carries_lifetimes(&path)
+    if !(lendable(field.ty()) || lendable_sequence(field.ty()))
+        || container_family(&path, &path).is_some()
+        || carries_lifetimes(&path)
     {
         return writeln!(
             output,
@@ -11911,23 +11959,75 @@ fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), requ
     let rust =
         concrete_type(field.ty()).ok_or_else(|| request::drift("a lent field's concrete type"))?;
     render_field_family(0, &rust, true, output)?;
+    let lent = format!(
+        "{} rest({}))",
+        lend_field(0, true),
+        lent_field(0, &rust, true)
+    );
+    // A std collection of crate values is lent as the native place it is
+    // (D651), so the program calls the collection's own methods on its
+    // native storage, each element lent where a method gives one, as
+    // `diff_children_custom`'s `old_children.truncate(n)` and
+    // `iter_mut()` of iced's `&mut self.children`. The call's witness of
+    // the field's type proves the place; with none, the field is lent as
+    // its type.
+    let placed = lendable_sequence(field.ty()) && place::available(field.ty());
+    let lent = if placed {
+        let policy = place::policy(field.ty())?;
+        format!(
+            "match witness.as_ref().filter(|witness| <{policy} as __rawr_internal::place::Policy>::accepts(witness)) {{
+                Some(witness) => __rawr_internal::place::lend::<{policy}>(field_0, witness, rest),
+                None => {lent},
+            }}"
+        )
+    } else {
+        lent
+    };
+    // In a stand-in's lending region, the field of a value native code lent
+    // the stand-in kept there is lent there too, for as long as the region
+    // lasts, as `&mut tree.children` of the `tree: &'b mut Tree` iced's
+    // `overlay` takes is borrowed for `'b` where its items go to the
+    // output (#2698). The value stays claimed meanwhile.
+    let anchored = format!(
+        "
+    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| matches!(&lender, Lender::Lent(lent) if lent.is_kept_in(anchor))) {{
+        let value = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+            let Lender::Lent(parent) = &lender else {{
+                return Err(Error::Unhandled);
+            }};
+            let input = region.lent_mut::<{path}>(*parent).map_err(|error| Error::Lent(parent.name(), error))?;
+            let field_0 = &mut input.{field};
+            let nonce = region.lend::<Field0>(field_0).map_err(|error| Error::Lent({rust:?}, error))?;
+            Ok({kept})
+        }})
+        .map_err(|error| Error::Lent(\"a lending call's region\", error))??;
+        // A frame that holds nothing: the region holds the lend.
+        return Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| rest(value))));
+    }}",
+        field = field.name(),
+        kept = lent_field(0, &rust, true).replacen(
+            "Dynamic::from(__rawr_internal::scope::Lent::new(",
+            "Dynamic::from(region.keeping(__rawr_internal::scope::Lent::new(",
+            1
+        ) + ")",
+    );
     writeln!(
         output,
-        "    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;{witness}{anchored}
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
         reach_lender_mut::<{path}>(&lender, &mut |input| {{
             let field_0 = &mut input.{};
-            {} rest({}))
+            {lent}
         }})
     }})))
 }}
 ",
         field.name(),
-        lend_field(0, true),
-        lent_field(0, &rust, true),
+        witness = if placed {
+            "\n    let witness = output_witness();"
+        } else {
+            ""
+        },
     )
     .map_err(request::unwritable)
 }
@@ -11947,7 +12047,9 @@ fn render_field_lender(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request:
     }
     let path = structural_type(plan);
     let name = lender_name(plan);
-    if !lendable(field.ty()) || container_family(&path, &path).is_some() || carries_lifetimes(&path)
+    if !(lendable(field.ty()) || lendable_sequence(field.ty()))
+        || container_family(&path, &path).is_some()
+        || carries_lifetimes(&path)
     {
         return writeln!(
             output,
@@ -11983,10 +12085,7 @@ fn render_field_lender(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request:
     .map_err(request::unwritable)?;
     writeln!(
         output,
-        "    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+        "    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
         reach_lender::<{path}>(&lender, &mut |input| {{
             let field_0 = &input.{};
@@ -12457,31 +12556,59 @@ pub(super) fn {name}_opaque() -> OpaqueTable {{
         call = Some(sliced);
     }
     // A trait object native code lent a script closure, reached around the
-    // body, which takes it as `object_{index}` (#28).
-    let object = if lent.is_empty() && call.is_none() {
+    // body, which takes it as `object_{index}` (#28). The call's other lent
+    // arguments are reached inside it, as iced's `Container::operate` lends
+    // a native content's `operate` both its `&mut self` and the operation.
+    let object = if call.is_none() {
         lent_object_input(plan)?
     } else {
         None
     };
-    let _object = LentObject::enter(object.as_ref().map(|(index, _)| *index));
+    let _object = LentObject::enter(object.as_ref().map(|(index, ..)| *index));
     match (lent.is_empty(), call, &object) {
-        (true, None, Some((index, rust))) => writeln!(
-            output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+        (lent_free, None, Some((index, rust, mutable))) => {
+            // A `&mut dyn` lent mutably is reborrowed for the body.
+            let (reached, given) = if *mutable {
+                (format!("&mut {rust}"), "&mut **object")
+            } else {
+                (format!("&{rust}"), "*object")
+            };
+            writeln!(
+                output,
+                "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
     let Some(lent) = lent_value(arguments, {index}) else {{
         return {name}_object(arguments, None);
     }};
     let failed = |error| Error::Lent(lent.name(), error);
-    let access: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = lent.accessor(false).map_err(failed)?;
+    let access: fn(u64, &mut dyn FnMut({reached})) -> Result<(), u8> = lent.accessor({mutable}).map_err(failed)?;
     let mut result = None;
-    access(lent.nonce().bits(), &mut |object| result = Some({name}_object(arguments, Some(*object))))
+    access(lent.nonce().bits(), &mut |object| result = Some({name}_object(arguments, Some({given}))))
         .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
     result.unwrap_or(Err(Error::TypeMismatch))
 }}
+"
+            )
+            .map_err(encoding)?;
+            if lent_free {
+                writeln!(
+                    output,
+                    "#[allow(unused_variables)]
+fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{"
+                )
+            } else {
+                writeln!(
+                    output,
+                    "fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{
+    let mut object_{index} = object_{index};
+    with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| {name}_lent(arguments, lent, object_{index}.take()))
+}}
 
 #[allow(unused_variables)]
-fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{"
-        ),
+fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{
+    let _ = &mut *lent;"
+                )
+            }
+        }
         (true, None, None) => writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
@@ -12567,7 +12694,7 @@ fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}{parameter
 /// argument index and Rust type. Native code may have lent the object to
 /// the script closure that makes the call, which reaches it around the
 /// adapter's body, as the lend's accessor visits it.
-fn lent_object_input(plan: &Plan) -> Result<Option<(usize, String)>, request::Error> {
+fn lent_object_input(plan: &Plan) -> Result<Option<(usize, String, bool)>, request::Error> {
     let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(None);
     };
@@ -12575,7 +12702,9 @@ fn lent_object_input(plan: &Plan) -> Result<Option<(usize, String)>, request::Er
         if let convert::Type::Object(object) = substituted(input, signature, substitutions)?
             && let Some((rust, _)) = object::lent_family(&object)
         {
-            return Ok(Some((index, rust)));
+            let mutable =
+                object.pointer() == crate::classify::representability::object::Pointer::Mutable;
+            return Ok(Some((index, rust, mutable)));
         }
     }
     Ok(None)
@@ -12714,6 +12843,11 @@ fn slice_inputs(plan: &Plan) -> Result<Vec<SliceInput>, request::Error> {
     let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(Vec::new());
     };
+    // A call whose frame holds its lent slices reaches each in the frame
+    // (`render_lends_opening`).
+    if signature.scope() == Some(crate::classify::representability::signature::Scope::Lends) {
+        return Ok(Vec::new());
+    }
     let mut slices = Vec::new();
     for (index, input) in runtime_inputs(signature, offset) {
         let ty = substituted(input, signature, substitutions)?;
@@ -13997,8 +14131,36 @@ fn runtime_inputs(
 }
 
 /// The body of `plan`'s adapter, which takes its arguments, calls, and
-/// gives the output.
+/// gives the output. An argument reached around the body
+/// (`render_reached_around`) opens its scope before the body and closes it
+/// after, so the body's other arguments are made inside it as they are
+/// anywhere else.
 fn render_adapter_body(
+    plan: &Plan,
+    cohort: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let around = ReachedAround::enter();
+    let start = output.len();
+    render_adapter_steps(plan, cohort, profile, facade, output)?;
+    let scopes = around.scopes();
+    let openings = scopes
+        .iter()
+        .map(|(opening, _)| opening.as_str())
+        .collect::<String>();
+    output.splice(start..start, openings.into_bytes());
+    for (_, closing) in scopes.iter().rev() {
+        output
+            .write_all(closing.as_bytes())
+            .map_err(request::unwritable)?;
+    }
+    Ok(())
+}
+
+/// The statements of `plan`'s adapter body (`render_adapter_body`).
+fn render_adapter_steps(
     plan: &Plan,
     cohort: &[Plan],
     profile: &crate::profile::Proof,
@@ -14608,6 +14770,16 @@ fn render_adapter_body(
             )?;
         }
         Operation::Method {
+            receiver: Receiver::Owned,
+            signature,
+            substitutions,
+            ..
+        } if signature.scope()
+            == Some(crate::classify::representability::signature::Scope::Lends) =>
+        {
+            lends::render_lends_opening(plan, signature, substitutions, output)?;
+        }
+        Operation::Method {
             receiver,
             signature,
             substitutions,
@@ -14618,6 +14790,23 @@ fn render_adapter_body(
             slots,
             ..
         } if signature.scope().is_some() => {
+            // In a stand-in's lending region, a call whose output keeps
+            // its `&mut` receiver and the `&mut` inputs native code lent
+            // the stand-in borrows them there, and its output stays there
+            // (#2698).
+            let lends_only = render_lending_call(
+                plan,
+                &path,
+                *receiver,
+                signature,
+                substitutions,
+                constants,
+                *container_parameters,
+                output,
+            )?;
+            if lends_only {
+                return Ok(());
+            }
             // A `&'a T` the frame's output keeps with its receiver stays
             // the program's value until the frame reaches it (`kept_inputs`).
             let kept = kept_inputs(signature, substitutions)?;
@@ -14651,9 +14840,18 @@ fn render_adapter_body(
                     }
                 }
             }
+            let kept_mutable = kept_mutable_inputs(signature, substitutions)?;
             let taken = signature.inputs().iter().enumerate().filter(|_| !closure);
             for (index, ty) in taken {
-                if kept.iter().any(|input| input.position == index) {
+                if kept_mutable.iter().any(|input| input.position == index) {
+                    // Reached where it is by the frame (`render_method_opening`).
+                    writeln!(
+                        output,
+                        "    let argument_{index} = Lender::of(arguments.values.get({}).ok_or(Error::MissingArgument)?)?;",
+                        index + 1
+                    )
+                    .map_err(request::unwritable)?;
+                } else if kept.iter().any(|input| input.position == index) {
                     writeln!(
                         output,
                         "    let argument_{index} = (**arguments.values.get_mut({}).ok_or(Error::MissingArgument)?).take();",
@@ -14948,7 +15146,7 @@ fn render_adapter_body(
                     // A trait's method of its impl for `&str`, called on
                     // Rawr's string (`surface::text`), lent at the lifetime
                     // the impl names (#717).
-                    Receiver::Owned if str_member(signature) => {
+                    _ if str_member(signature) => {
                         render_str_receiver(
                             plan,
                             signature,
@@ -14957,6 +15155,29 @@ fn render_adapter_body(
                             *container_parameters,
                             output,
                         )?;
+                        // A method that borrows the `&str` itself, as iced's
+                        // `tag(&self)` of `impl Widget<..> for &str`, takes
+                        // a borrow of the runner's own `&str` of the string.
+                        let borrowed = match receiver {
+                            Receiver::Owned => "",
+                            _ if carries_lifetime(&substituted(
+                                signature.output(),
+                                signature,
+                                substitutions,
+                            )?) =>
+                            {
+                                return Err(request::drift(
+                                    "a `&str` receiver borrowed for a call whose output carries a lifetime",
+                                ));
+                            }
+                            Receiver::Shared => "    let receiver = &receiver;\n",
+                            Receiver::Mutable => {
+                                "    let receiver_given = receiver;\n    let mut receiver_place = receiver_given;\n    let receiver = &mut receiver_place;\n"
+                            }
+                        };
+                        output
+                            .write_all(borrowed.as_bytes())
+                            .map_err(request::unwritable)?;
                         let annotation = concrete_type(&substituted(
                             signature.output(),
                             signature,
@@ -14971,7 +15192,7 @@ fn render_adapter_body(
                         .map_err(request::unwritable)?;
                         render_method_head(
                             plan.name(),
-                            *receiver,
+                            Receiver::Owned,
                             signature,
                             substitutions,
                             constants,
@@ -14980,6 +15201,26 @@ fn render_adapter_body(
                         )?;
                         argument_list(signature.inputs().len(), 1, output)?;
                         output.write_all(b"));\n").map_err(request::unwritable)?;
+                        // Rawr's string is a value the runner lends a `&str`
+                        // of: the string the method left in its `&mut self`
+                        // goes back to the program first among the copies
+                        // after the call's value, as a `&mut String` input
+                        // does (D558 slice 2), and the program stores it.
+                        if matches!(receiver, Receiver::Mutable) {
+                            let mut given = Vec::new();
+                            render_give(
+                                &substituted(signature.output(), signature, substitutions)?,
+                                "output",
+                                &mut given,
+                            )?;
+                            let given = String::from_utf8(given).map_err(request::unwritable)?;
+                            let copied = copied_back(signature, substitutions)?;
+                            writeln!(
+                                output,
+                                "    let _ = receiver_given;\n    let receiver_copy = Dynamic::from(ImmutableString::from(receiver_place));\n    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given, receiver_copy{copied}]))"
+                            )
+                            .map_err(request::unwritable)?;
+                        }
                     }
                     Receiver::Owned => {
                         render_scoped_receiver(
@@ -15054,6 +15295,19 @@ fn render_adapter_body(
                                 format!(
                                     "`{container}` is invariant in its lifetime, so one made outside the view can't join those the view makes"
                                 )
+                            )
+                        } else if lifetime_free
+                            && !container.contains(['\'', '&'])
+                            && !container
+                                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                                .any(|word| word == "_")
+                        {
+                            // A receiver native code lent where the method
+                            // takes it by value, as `limits.width(w)` of a
+                            // `limits: &Limits`, is a copy of it, as rustc
+                            // copies the `Copy` place autoderef reaches.
+                            format!(
+                                "match lent_copy!(arguments, 0, {container}) {{ Some(copy) => copy, None => take_native(arguments, 0) }}"
                             )
                         } else {
                             "take_native(arguments, 0)".to_owned()
@@ -15156,6 +15410,8 @@ fn render_adapter_body(
                 // future holds no borrow, as wgpu's `request_device`.
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 match future_output(returned) {
+                    // The str branch gave its value and the string back.
+                    _ if str_member(signature) && matches!(receiver, Receiver::Mutable) => {}
                     Some(element)
                         if matches!(receiver, Receiver::Owned) || signature.detached_future() =>
                     {
@@ -16085,6 +16341,258 @@ fn frame_copies(
     })
 }
 
+/// The positions of the `&'a mut T` inputs of crate values a scope
+/// frame's output keeps with its `&'a mut` receiver (`Signature::lends`),
+/// as iced's `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)` keeps
+/// its tree, each with the crate type it borrows, written.
+fn kept_mutable_inputs(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Vec<KeptInput>, request::Error> {
+    if signature.scope() != Some(crate::classify::representability::signature::Scope::Borrows) {
+        return Ok(Vec::new());
+    }
+    let mut kept = Vec::new();
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        if !u32::try_from(position).is_ok_and(|at| signature.lends().contains(&at)) {
+            continue;
+        }
+        if let convert::Type::Borrowed { mutable: true, ty } =
+            substituted(declared, signature, substitutions)?
+            && matches!(*ty, convert::Type::Nominal { .. })
+            && !carries_lifetime(&ty)
+            && !is_value(&ty)
+        {
+            let rust = concrete_type(&ty).ok_or_else(|| request::drift("a kept input's type"))?;
+            kept.push(KeptInput { position, rust });
+        }
+    }
+    Ok(kept)
+}
+
+/// The start of the adapter of a call whose output keeps its `&'a mut`
+/// receiver and `&'a mut` inputs borrowed (`kept_mutable_inputs`), as
+/// `self.content.overlay(tree, ..)` in a program's impl of iced's
+/// `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)` (#2698): where the
+/// call is made in a stand-in's lending region, and native code lent the
+/// stand-in each such input kept in that region, the call borrows them,
+/// and a receiver it lent or the arena holds, at the region's lifetime,
+/// and its output stays there, so the stand-in gives it native code at
+/// the lifetime native code lent them. Elsewhere the adapter goes on to
+/// open a frame of its own. Nothing for another call.
+#[allow(clippy::too_many_arguments)]
+fn render_lending_call(
+    plan: &Plan,
+    path: &str,
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<bool, request::Error> {
+    let encoding = request::unwritable;
+    let kept = kept_mutable_inputs(signature, substitutions)?;
+    if kept.is_empty() || !matches!(receiver, Receiver::Mutable) {
+        return Ok(false);
+    }
+    // An input borrowed for the call alone, as iced's `renderer:
+    // &Renderer`, is reached for the call, which a frame that runs the
+    // rest of the scope can't hold: such a call runs only in a lending
+    // region.
+    let mut lends_only = false;
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        if !kept.iter().any(|input| input.position == position)
+            && matches!(
+                substituted(declared, signature, substitutions)?,
+                convert::Type::Borrowed { .. }
+            )
+        {
+            lends_only = true;
+        }
+    }
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        receiver,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    // The call lends the arena to a program value's methods it calls back,
+    // as a column's `overlay` asks each child stand-in for its own.
+    let call = format!(
+        "lend(arguments.arena, || {})",
+        String::from_utf8(call).map_err(request::unwritable)?
+    );
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        render_to_dynamic(&returned, "made", 0, &mut converted)?;
+        converted
+    };
+    let lends = kept
+        .iter()
+        .map(|KeptInput { position, .. }| {
+            format!(
+                "lent_value(arguments, {}).is_some_and(|lent| lent.is_kept_in(anchor))",
+                position + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let mut taken = Vec::new();
+    // Each crate value the call borrows shared for the call alone, as
+    // iced's `renderer: &Renderer`, is reached where it is: native code
+    // lent it the stand-in, or the arena holds it (`reach_lender`).
+    let mut shared = Vec::new();
+    for (position, ty) in signature.inputs().iter().enumerate() {
+        if kept.iter().any(|input| input.position == position) {
+            writeln!(
+                taken,
+                "        let argument_{position}_lent = lent_value(arguments, {}).ok_or(Error::MissingArgument)?;",
+                position + 1
+            )
+            .map_err(encoding)?;
+        } else if let convert::Type::Borrowed {
+            mutable: false,
+            ty: target,
+        } = substituted(ty, signature, substitutions)?
+            && let Some(rust) = viewed_native(&convert::Type::Borrowed {
+                mutable: false,
+                ty: target,
+            })
+            .and_then(concrete_type)
+        {
+            writeln!(
+                taken,
+                "        let argument_{position}_lender = Lender::of(arguments.values.get({}).ok_or(Error::MissingArgument)?)?;",
+                position + 1
+            )
+            .map_err(encoding)?;
+            shared.push((position, rust));
+        } else {
+            render_take_input(
+                position,
+                position + 1,
+                ty,
+                signature,
+                substitutions,
+                None,
+                &mut taken,
+            )?;
+        }
+    }
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    // A receiver a region holds, as a view's widget is, is lent from its
+    // slot for as long as the output borrows it (`Region::lease_scoped`).
+    let scoped = match container_family(path, &container) {
+        Some(family) => format!(
+            "Some(scoped) => region.lease_scoped::<{}, _>(scoped, |receiver| {call}).map_err(|error| Error::Lent(scoped.name(), error))?,",
+            family.named().ok_or_else(|| request::drift("a lent receiver's family"))?
+        ),
+        None => String::new(),
+    };
+    let mut reached = String::new();
+    for KeptInput { position, rust } in &kept {
+        reached.push_str(&format!(
+            "
+            let argument_{position}: &mut {rust} = region.lent_mut::<{rust}>(argument_{position}_lent).map_err(|error| Error::Lent(argument_{position}_lent.name(), error))?;"
+        ));
+    }
+    // The body, as a function of the shared inputs when there are any,
+    // which the reaches around it give it.
+    let (open, close) = if shared.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let parameters = shared
+            .iter()
+            .map(|(position, rust)| format!("argument_{position}: &{rust}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let passed = shared
+            .iter()
+            .map(|(position, _)| format!("argument_{position}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut reach = format!(
+            "(body.take().ok_or(Error::Unhandled).map_err(runtime_error)?)({passed}).map_err(runtime_error)"
+        );
+        for (position, rust) in shared.iter().rev() {
+            reach = format!(
+                "reach_lender::<{rust}>(&argument_{position}_lender, &mut |argument_{position}| {{ {reach} }})"
+            );
+        }
+        (
+            format!("let mut body = Some(|{parameters}| -> Result<Dynamic, Error> {{"),
+            format!(
+                "}});
+            {reach}.map_err(unreached)"
+            ),
+        )
+    };
+    writeln!(
+        output,
+        "    if let Some(anchor) = __rawr_internal::scope::anchor().filter(|&anchor| {lends}) {{
+        let receiver_lent = lent_value(arguments, 0);
+        let receiver_scoped = scoped_value(arguments, 0);
+        let receiver_handle = match (receiver_scoped, receiver_lent) {{
+            (None, None) => Some(native_handle(arguments, 0, false)?),
+            _ => None,
+        }};
+{taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{open}{reached}
+            let made = match (receiver_lent, receiver_handle) {{
+                (Some(lent), _) => {{
+                    #[allow(unused_mut)]
+                    let mut receiver: &mut {container} = region.lent_mut::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?;
+                    {call}
+                }}
+                (None, Some(handle)) => {{
+                    #[allow(unused_mut)]
+                    let mut receiver: &mut {container} = arguments.arena.lease_place::<{container}>(handle)?.lend_to(region)?;
+                    {call}
+                }}
+                (None, None) => match receiver_scoped {{
+                    {scoped}
+                    _ => return Err(Error::Lent({container:?}, __rawr_internal::scope::Error::Mismatch)),
+                }},
+            }};
+            {converted}
+        {close}}})
+        .map_err(|error| Error::Lent(\"a lending call's region\", error))?;
+    }}"
+    )
+    .map_err(encoding)?;
+    if lends_only {
+        let name = format!("{}::{}", rust_path(plan), plan.name());
+        writeln!(
+            output,
+            "    Err(Error::Value({:?}.to_owned()))",
+            format!(
+                "rawr calls `{name}` only where native code asks a program's value for what it keeps borrowed, as iced's `overlay` is, and lent it each `&mut` the output keeps"
+            )
+        )
+        .map_err(encoding)?;
+    }
+    Ok(lends_only)
+}
+
 /// A method call whose output borrows what it takes besides its receiver
 /// (D558 tier 1), as quick-xml's `read_event_into(&mut buf)`: it gives a
 /// scope frame the statement it is in opens. The frame reaches the
@@ -16196,14 +16704,29 @@ fn render_method_opening(
                 .to_owned()
         };
         let reached = format!("{pinned}{reached}");
+        // Each `&'a mut T` the output keeps with the receiver is reached
+        // where it is for the rest of the scope, as the frame holds the
+        // receiver (`kept_mutable_inputs`).
+        let made = kept_mutable_inputs(signature, substitutions)?
+            .iter()
+            .rev()
+            .fold(
+                format!("let made = {call};\n            {frame}"),
+                |made, KeptInput { position, rust }| {
+                    format!(
+                    "reach_lender_mut::<{rust}>(&argument_{position}, &mut |argument_{position}| {{
+            {made}
+        }})"
+                )
+                },
+            );
         let scoped = match container_family(path, &container) {
             Some(family) => format!(
                 "Some(scoped) => __rawr_internal::scope::{claim}::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
             #[allow(unused_mut)]
             let mut receiver = region.{}.map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?;
             {reached}
-            let made = {call};
-            {frame}
+            {made}
         }})
         .map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?,",
                 family.call(family_reach, "scoped")
@@ -16265,7 +16788,7 @@ fn render_method_opening(
             .iter()
             .any(|input| object::lent_slice_element(input).is_some());
         let lent = lent_opening(
-            receiver, signature, &container, &call, &converted, &frame, &kept, &texts, &reached,
+            receiver, signature, &container, &call, &converted, &made, &kept, &texts, &reached,
             holds,
         )?;
         let anchored = arena_anchored(receiver, holds, &kept, &container, &call, &converted);
@@ -16288,8 +16811,7 @@ fn render_method_opening(
             None => {{
                 {held}
                 {reached}
-                let made = {call};
-                {frame}
+                {made}
             }}
         }}
     {closed}}}){with};
@@ -16332,8 +16854,9 @@ fn render_method_opening(
 /// let Some(lent)`. A lend native code keeps as long as an anchored call's
 /// result is borrowed in that call's region, where the output stays, so the
 /// result may keep it. Any other is reached through its accessor while the
-/// rest of the scope runs, as a frame holds a receiver of the arena. Each
-/// of `keeps` (`kept_inputs`) is reached beside a kept receiver in its
+/// rest of the scope runs, as a frame holds a receiver of the arena, and
+/// `made` makes the output and runs the frame. Each of `keeps`
+/// (`kept_inputs`) is reached beside a kept receiver in its
 /// region, and by `reached` beside another. Each `&'a str` input at
 /// `texts` is pinned in a kept receiver's region, which outlives the
 /// frame's own copy of it. A frame that `holds` objects made for the call
@@ -16345,7 +16868,7 @@ fn lent_opening(
     container: &str,
     call: &str,
     converted: &str,
-    frame: &str,
+    made: &str,
     keeps: &[KeptInput],
     texts: &[usize],
     reached: &str,
@@ -16413,8 +16936,7 @@ fn lent_opening(
                 if let Some({taken}) = taken.take() {{
                     result = Some((|| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
                         {reached}
-                        let made = {call};
-                        {frame}
+                        {made}
                     }})());
                 }}
             }})
@@ -16717,6 +17239,56 @@ fn render_scoped_receiver(
             format!("?;\n        return Ok(Dynamic::from_array(vec![given{copied}]))"),
         )
     };
+    // A native call made on a value a region holds lends the arena to the
+    // program's code it calls back, as a call on an arena value does: the
+    // call above already does, whether or not its output is annotated.
+    // A shared borrow of the receiver claims its region shared, and a
+    // `&mut` one takes its slot alone, so a call back into the program
+    // reaches the region's other values meanwhile, as iced's `Column`
+    // asks each child widget of the view (`scope::with_slot`).
+    let claim = if pinned.is_empty() && !converted.contains("region") {
+        if reached.starts_with("get::<") {
+            Some("with_ref")
+        } else if reached.starts_with("get_mut::<") {
+            Some("with")
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some("with_ref") = claim {
+        return writeln!(
+            output,
+            "    if let Some(scoped) = {scoped}(arguments, 0) {{
+        {given} __rawr_internal::scope::with_ref::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+            let receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
+            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?{returned};
+    }}"
+        )
+        .map_err(encoding);
+    }
+    if claim.is_some()
+        && let Some(family) = reached
+            .strip_prefix("get_mut::<")
+            .and_then(|rest| rest.split_once('>'))
+            .map(|(family, _)| family)
+    {
+        return writeln!(
+            output,
+            "    if let Some(scoped) = {scoped}(arguments, 0) {{
+        {given} __rawr_internal::scope::with_slot::<{family}, _>(scoped, |receiver| -> Result<Dynamic, Error> {{
+            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?{returned};
+    }}"
+        )
+        .map_err(encoding);
+    }
     writeln!(
         output,
         "    if let Some(scoped) = {scoped}(arguments, 0) {{
@@ -16766,7 +17338,12 @@ fn render_scoped_input(
         {
             return Ok(());
         }
-        let regional = u32::try_from(position).is_ok_and(|at| signature.regional().contains(&at));
+        // A `&P` of a type parameter takes any value the call fills `P`
+        // with, a region's too, as the trait's method over its `Self`
+        // takes `&Self` at iced's `Text<'a>`.
+        let regional = u32::try_from(position).is_ok_and(|at| signature.regional().contains(&at))
+            || matches!(declared, convert::Type::Borrowed { ty, .. }
+                if matches!(**ty, convert::Type::Parameter(_)));
         if scoped.is_some() || !regional {
             continue;
         }
@@ -16832,6 +17409,55 @@ fn render_scoped_input(
         render_to_dynamic(&returned, "output", 0, &mut converted)?;
         converted
     };
+    // A native call made on a value a region holds lends the arena to the
+    // program's code it calls back, as a call on an arena value does.
+    let call = if call.starts_with("lend(") {
+        call
+    } else {
+        format!("lend(arguments.arena, || {call})")
+    };
+    // A call that needs nothing else of the region takes the value's slot
+    // alone, so a call back into the program reaches the region's other
+    // values meanwhile, as iced's `Column::diff` asks each child widget of
+    // the view for its `tag` (`scope::with_slot`).
+    if !body.contains("region")
+        && !converted.contains("region")
+        && reached.starts_with("get_mut::<")
+    {
+        let family = reached
+            .strip_prefix("get_mut::<")
+            .and_then(|rest| rest.split_once('>'))
+            .map(|(family, _)| family)
+            .ok_or_else(|| request::drift("a region-held argument's family"))?;
+        return writeln!(
+            output,
+            "    if let Some(scoped) = scoped_value(arguments, {position}) {{
+        return __rawr_internal::scope::with_slot::<{family}, _>(scoped, |argument_{position}| -> Result<Dynamic, Error> {{
+{body}            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}"
+        )
+        .map_err(request::unwritable);
+    }
+    // A shared borrow of the value claims its region shared, so a call back
+    // into the program reads the region's other values meanwhile, as
+    // iced's `Column::mouse_interaction` asks each child widget of the view.
+    if !body.contains("region") && !converted.contains("region") && reached.starts_with("get::<") {
+        return writeln!(
+            output,
+            "    if let Some(scoped) = scoped_value(arguments, {position}) {{
+        return __rawr_internal::scope::with_ref::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+{body}            let argument_{position} = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
+            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}"
+        )
+        .map_err(request::unwritable);
+    }
     writeln!(
         output,
         "    if let Some(scoped) = scoped_value(arguments, {position}) {{
@@ -16929,6 +17555,13 @@ fn render_receiver_kept(
         converted
     };
     let index = position + 1;
+    // A native call made on a value a region holds lends the arena to the
+    // program's code it calls back, as a call on an arena value does.
+    let call = if call.starts_with("lend(") {
+        call
+    } else {
+        format!("lend(arguments.arena, || {call})")
+    };
     writeln!(
         output,
         "    let handle = native_handle(arguments, 0, false)?;
@@ -17408,6 +18041,9 @@ fn declare_wrapper(plan: &Plan) -> Result<Option<convert::Type>, request::Error>
     let convert::Type::Nominal { definition, .. } = &returned else {
         return Ok(None);
     };
+    if signature.scope() == Some(crate::classify::representability::signature::Scope::Lends) {
+        return lends::declare_lent_wrapper(plan, returned);
+    }
     if !holds_opaque(&returned) || !carries_lifetime(&returned) {
         return Ok(None);
     }
@@ -18033,10 +18669,7 @@ fn render_lender_slice(
     writeln!(
         output,
         "    let witness = output_witness().ok_or(Error::Unwitnessed)?;
-    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
+    let lender = Lender::of(&**arguments.values.first().ok_or(Error::MissingArgument)?)?;
     let held = lender.clone();
     let lends = lends::<{container}>();
     __rawr_internal::place::slice::lent_by_holding::<{policy}>(
@@ -20226,6 +20859,27 @@ fn render_function_arguments(
                         "    let argument_{position}{named} = take_native::<{rust}>(arguments, {runtime})?;"
                     )
                     .map_err(request::unwritable)?;
+                } else if let Some((call, mutable)) =
+                    call.and_then(|call| borrowed_closure(ty, call))
+                {
+                    // A borrow of the closure, as a borrowed callable's
+                    // object is read (`&mut dyn FnMut(..)` of iced's
+                    // `Operation::traverse`): the call's borrow of the
+                    // closure made here, which rustc coerces to the object.
+                    render_take_callable(
+                        position,
+                        runtime,
+                        call,
+                        signature,
+                        substitutions,
+                        output,
+                    )?;
+                    let borrow = if mutable { "&mut " } else { "&" };
+                    writeln!(
+                        output,
+                        "    #[allow(unused_mut)]\n    let mut argument_{position} = argument_{position};\n    let argument_{position} = {borrow}argument_{position};"
+                    )
+                    .map_err(request::unwritable)?;
                 } else if let Some(call) = call
                     .filter(|call| *ty == convert::Type::Parameter(call.parameter()))
                     .or_else(|| crossed.closure_at(position, ty))
@@ -20331,7 +20985,9 @@ fn function_argument_list(
             // A script closure, made a Rust closure (D513.7 b), or an
             // `Option` of one.
             _ if callable_parameter(ty, signature)
-                || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature)) =>
+                || matches!(ty,
+                    convert::Type::Option(inner) | convert::Type::Borrowed { ty: inner, .. }
+                    if callable_parameter(inner, signature)) =>
             {
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
@@ -20663,6 +21319,36 @@ fn render_take_input(
     // does beside a `&T` native code lent (`LENT_ARGUMENTS`), whose values
     // a copy would take out of their slots for good.
     let lent = substituted(ty, signature, substitutions)?;
+    // `&Box<dyn Fn(A..) -> B>`, as iced's `Catalog::style(&self, class:
+    // &StyleFn<'_, Theme>)` takes the class a container holds: the box
+    // native code made, lent from its slot, or a closure calling the
+    // program's callable, boxed for the call (#2698).
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: boxed,
+    } = &lent
+        && let Some(rust) = dyn_callable_type(boxed)
+    {
+        let made = render_dyn_callable(boxed, &format!("argument_{local}_value"))?;
+        return writeln!(
+            output,
+            "    let argument_{local}_value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten();
+    #[allow(unused_mut)]
+    let mut argument_{local}_held: PlaceHeld<{rust}>;
+    let argument_{local}_made: {rust};
+    let argument_{local}: &{rust} = match argument_{local}_value.clone().try_cast_result::<NativeHandle>() {{
+        Ok(handle) => {{
+            argument_{local}_held = arguments.arena.lease_place(handle)?;
+            &*argument_{local}_held.get_mut()
+        }}
+        Err(_) => {{
+            argument_{local}_made = {made}?;
+            &argument_{local}_made
+        }}
+    }};"
+        )
+        .map_err(request::unwritable);
+    }
     // `&[Option<&dyn Value>]`, as tracing-core's `value_set_all` takes:
     // the objects native code makes of the program's values, each held for
     // as long as the slice lends it (#1591).
@@ -21092,12 +21778,17 @@ fn render_take_input(
     if let convert::Type::Borrowed { .. } = ty
         && !leases_whole(&substituted(ty, signature, substitutions)?)
     {
-        let future = is_future(&substituted(signature.output(), signature, substitutions)?);
+        let given = substituted(signature.output(), signature, substitutions)?;
+        let future = is_future(&given);
+        // The rest of the body may run inside a lend's accessor only when
+        // what the call gives borrows nothing (`render_reached_around`).
+        let around = !future && !carries_lifetime_or_borrow(&given);
         return render_lease(
             local,
             index,
             &substituted(ty, signature, substitutions)?,
             future,
+            around,
             output,
         );
     }
@@ -21667,18 +22358,26 @@ fn future_borrows(
 /// goes back when the lease drops, before the arena is next used (D558.5).
 /// Only a `future` that may run on another thread holds it as a `Held`,
 /// which asks `Send`; a call holds it on the owner thread, so a value that
-/// isn't `Send`, as rand's `ThreadRng`, is lent as rustc lends it.
+/// isn't `Send`, as rand's `ThreadRng`, is lent as rustc lends it. A `&mut
+/// T` of a type that carries a lifetime is reached around the rest of the
+/// body when `around` (`render_reached_around`).
 fn render_lease(
     local: usize,
     index: usize,
     ty: &convert::Type,
     future: bool,
+    around: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let convert::Type::Borrowed { mutable, ty } = ty else {
         return Err(request::drift("a lease of other than a borrow"));
     };
     let rust = concrete_type(ty).ok_or_else(|| request::drift("borrowed input type"))?;
+    if around && *mutable && carries_lifetime(ty) && matches!(**ty, convert::Type::Nominal { .. }) {
+        return output
+            .write_all(render_reached_around(local, index, &rust).as_bytes())
+            .map_err(request::unwritable);
+    }
     let borrow = if *mutable { "" } else { "&*" };
     let (held, lease) = if future {
         ("Held", "lease")
@@ -21734,6 +22433,58 @@ fn render_lease(
         "    let mut argument_{local}_held: {held}<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
     )
     .map_err(request::unwritable)
+}
+
+/// The statements that make `argument_{local}`, a `&mut T` input of a
+/// type `rust` that carries a lifetime, as iced's `&mut Shell<'_,
+/// Message>`, and open the closure the rest of the body runs in. A value
+/// native code lent (D558.3) is reached through its accessor, which is
+/// higher-ranked over the type's lifetime where `with_lent_arguments`
+/// erases only `'static` types, so the call runs inside it, as
+/// `lent_object_input` nests an object. A `'static` value in the arena is
+/// leased for the call. The opening goes before the body, as it reads only
+/// `arguments`, and the closing (`REACHED_AROUND`) calls the closure with
+/// whichever it is. A value a region holds, as a receiver the view made,
+/// is the region branch's own (`scoped_value`), so the closure runs with
+/// none. The body takes the value where it would make the argument, in
+/// each branch it renders the argument in, and the scope opens once
+/// however many branches do.
+fn render_reached_around(local: usize, index: usize, rust: &str) -> String {
+    let opening = format!(
+        "    let argument_{local}_lent = lent_value(arguments, {index});
+    #[allow(unused_mut)]
+    let mut argument_{local}_held: Option<PlaceHeld<{rust}>> = match argument_{local}_lent {{
+        Some(_) => None,
+        None if scoped_value(arguments, {index}).is_some() => None,
+        None => Some({{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease_place(handle)? }}),
+    }};
+    let mut argument_{local}_rest = Some(|#[allow(unused_mut)] mut argument_{local}_reached: Option<&mut {rust}>| -> Result<Dynamic, Error> {{
+"
+    );
+    let closing = format!(
+        "    }});
+    match (argument_{local}_lent, argument_{local}_held.as_mut()) {{
+        (Some(lent), _) => {{
+            let failed = |error| Error::Lent(lent.name(), error);
+            let access: fn(u64, &mut dyn FnMut(&mut {rust})) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
+            let mut result = None;
+            access(lent.nonce().bits(), &mut |value| result = argument_{local}_rest.take().map(|#[allow(unused_mut)] mut rest| rest(Some(value))))
+                .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            result.unwrap_or(Err(failed(__rawr_internal::scope::Error::Busy)))
+        }}
+        (None, Some(held)) => (argument_{local}_rest.take().ok_or(Error::MissingArgument)?)(Some(held.get_mut())),
+        (None, None) => (argument_{local}_rest.take().ok_or(Error::MissingArgument)?)(None),
+    }}
+"
+    );
+    REACHED_AROUND.with_borrow_mut(|scopes| {
+        if !scopes.iter().any(|(open, _)| *open == opening) {
+            scopes.push((opening, closing));
+        }
+    });
+    format!(
+        "    let argument_{local}: &mut {rust} = argument_{local}_reached.take().ok_or(Error::MissingArgument)?;\n"
+    )
 }
 
 /// Whether `ty` is a callable type parameter of `signature`, as `F` of
@@ -21858,6 +22609,23 @@ fn boxed_callable(ty: &convert::Type) -> Option<&convert::Type> {
     }
 }
 
+/// The closure `call` fills and whether it is borrowed `&mut`, where `ty`
+/// borrows it, as a borrowed callable's object is read (`&mut dyn
+/// FnMut(..)` of iced's `Operation::traverse`).
+fn borrowed_closure<'c>(
+    ty: &convert::Type,
+    call: &'c crate::classify::representability::callable::Call,
+) -> Option<(&'c crate::classify::representability::callable::Call, bool)> {
+    match ty {
+        convert::Type::Borrowed { mutable, ty }
+            if **ty == convert::Type::Parameter(call.parameter()) =>
+        {
+            Some((call, *mutable))
+        }
+        _ => None,
+    }
+}
+
 /// Whether `ty` is an `Option` of the callable parameter `call` fills, as
 /// `on_toggle_maybe(f: Option<F>)` takes it.
 fn optional_callable(
@@ -21924,6 +22692,19 @@ enum Witnesses<'a> {
     /// The coerced callable the generated `Dynamic` named so holds, a
     /// trait object's (`object::Call`, #1981).
     Coerced(&'a str),
+}
+
+/// The definition of `ty`, or of what it borrows, when it is a crate's
+/// type with no arguments: the one type a value of it is.
+fn plain_nominal(ty: &convert::Type) -> Option<&crate::surface::identity::Definition> {
+    match ty {
+        convert::Type::Borrowed { ty, .. } => plain_nominal(ty),
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if arguments.is_empty() => Some(definition),
+        _ => None,
+    }
 }
 
 /// The block that makes a Rust closure calling the script callable
@@ -22026,6 +22807,21 @@ fn render_callable_closure(
             lends.push(lend);
             continue;
         }
+        // A native value the closure borrows shared whose type isn't
+        // `Clone`, as a palette's `Fn(&P) -> char` class takes `&P`: lent
+        // for the call alone, as a `&mut` one is, since no copy of it can
+        // cross.
+        if let convert::Type::Borrowed { mutable: false, ty } = input
+            && lent_mutably(ty)
+            && !clones(ty)
+        {
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("closure input type"))?;
+            parameters.push(format!("input_{position}: &{rust}"));
+            let lend = LentInput::new(position, false, rust);
+            values.push(lend.value());
+            lends.push(lend);
+            continue;
+        }
         // One whose type carries lifetimes, as ratatui's `draw(impl
         // FnOnce(&mut Frame))` lends `Frame<'_>` (#1457): lent for the call
         // too, at every lifetime its family takes, as a script function's
@@ -22051,10 +22847,22 @@ fn render_callable_closure(
             && let Some((rust, family)) = object::lent_family(object)
         {
             parameters.push(format!("input_{position}: {rust}"));
-            borrowed.push_str(&format!(
-                "let input_{position} = &input_{position};\n            "
-            ));
-            let lend = LentInput::scoped(position, false, rust, family);
+            // A `&mut dyn Trait`, as iced lends `operate` its `&mut dyn
+            // Operation`, is lent mutably, so the program's calls of its
+            // `&mut self` methods reach it.
+            let mutable =
+                object.pointer() == crate::classify::representability::object::Pointer::Mutable;
+            if mutable {
+                borrowed.push_str(&format!(
+                    "let mut input_{position} = input_{position};\n            let input_{position} = &mut input_{position};\n            "
+                ));
+                lent.push(position.to_string());
+            } else {
+                borrowed.push_str(&format!(
+                    "let input_{position} = &input_{position};\n            "
+                ));
+            }
+            let lend = LentInput::scoped(position, mutable, rust, family);
             values.push(lend.value());
             lends.push(lend);
             continue;
@@ -22099,9 +22907,19 @@ fn render_callable_closure(
         // So does a value that holds one, as a slot's input does.
         if native(input) || holds_native(input) {
             attested = true;
-            converted = format!(
-                "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
-            );
+            converted = match plain_nominal(input) {
+                Some(definition) => {
+                    let mut identity = Vec::new();
+                    byte_array(&mut identity, definition.as_bytes())?;
+                    let identity = String::from_utf8(identity).map_err(request::unwritable)?;
+                    format!(
+                        "({converted}).and_then(|value| attest_input_as(arguments.arena, value, witnesses.get({position}), {identity}))"
+                    )
+                }
+                None => format!(
+                    "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
+                ),
+            };
         }
         values.push(if native_inputs {
             format!("({converted})?")
@@ -22463,7 +23281,11 @@ fn render_take(
         ty if is_future(ty) => "take_script",
         // A crate's trait object (D872): lent for the call, or made.
         convert::Type::Object(object)
-            if object.pointer() == crate::classify::representability::object::Pointer::Shared =>
+            if matches!(
+                object.pointer(),
+                crate::classify::representability::object::Pointer::Shared
+                    | crate::classify::representability::object::Pointer::Mutable
+            ) =>
         {
             return object::render_lent_input(local, index, object, output);
         }
@@ -22706,7 +23528,7 @@ fn render_give(
         // one that leaves an argument to rustc is held as any native value.
         convert::Type::Nominal { .. }
             if IN_REGION.get()
-                && carries_lifetime(ty)
+                && (carries_lifetime(ty) || holds_borrowing_script(ty))
                 && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
         {
             writeln!(
@@ -22761,8 +23583,11 @@ fn render_give(
         // A crate's trait object native code gives (D872): held as itself.
         // A borrowed one lives no longer than its call.
         convert::Type::Object(object)
-            if object.pointer()
-                != crate::classify::representability::object::Pointer::Shared =>
+            if !matches!(
+                object.pointer(),
+                crate::classify::representability::object::Pointer::Shared
+                    | crate::classify::representability::object::Pointer::Mutable
+            ) =>
         {
             writeln!(
                 output,
@@ -22871,6 +23696,12 @@ fn render_from_dynamic(
         // (#1981). One a call takes is lent there.
         convert::Type::Object(object)
             if object.pointer()
+                == crate::classify::representability::object::Pointer::Mutable =>
+        {
+            return Err(request::drift("a program's value as a lent `&mut dyn` object"));
+        }
+        convert::Type::Object(object)
+            if object.pointer()
                 != crate::classify::representability::object::Pointer::Shared =>
         {
             return object::render_owned(object, value, depth, output);
@@ -22908,6 +23739,8 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
+        // A boxed closure: native code's own, or the program's callable.
+        ty if dyn_callable(ty).is_some() => write!(output, "{}", render_dyn_callable(ty, value)?),
         // Rawr's `Box`, which holds its value as itself, as Rust's `Box`.
         ty if let Some(element) = boxed_element(ty) => {
             let mut converted = String::new();
@@ -23054,6 +23887,20 @@ fn render_from_dynamic(
             write!(
                 output,
                 "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| take_handle_like(arguments.arena, handle, _w))"
+            )
+        }
+        // A value that borrows, taken out of the region it was made in at
+        // the region's lifetime, as a stand-in's lending call takes what
+        // the program's impl gave (#2698).
+        convert::Type::Nominal { .. }
+            if IN_REGION.get()
+                && (carries_lifetime(ty) || holds_borrowing_script(ty))
+                && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
+        {
+            write!(
+                output,
+                "{value}.try_cast_result::<__rawr_internal::scope::Scoped>().map_err(|_| Error::TypeMismatch).and_then(|scoped| region.{}.map_err(|error| Error::Lent(scoped.name(), error)))",
+                family.call(family::Reach::Take, "scoped")
             )
         }
         // At the type it is, as rustc infers none for a value in an
@@ -23252,6 +24099,12 @@ fn render_to_dynamic(
         convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
             write!(output, "{frame}.give_{slot}(arguments.arena, {value})")
         }
+        // A boxed closure native code made, held as itself, which native
+        // code takes back as it is.
+        ty if dyn_callable(ty).is_some() => write!(
+            output,
+            "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
+        ),
         // Rust's `Box`, as rawr's, which holds its value as itself.
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
@@ -23401,7 +24254,7 @@ fn render_to_dynamic(
         // argument to rustc is held as any native value.
         convert::Type::Nominal { .. }
             if IN_REGION.get()
-                && carries_lifetime(ty)
+                && (carries_lifetime(ty) || holds_borrowing_script(ty))
                 && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
         {
             write!(
@@ -23436,8 +24289,11 @@ fn render_to_dynamic(
         ),
         // A crate's trait object native code gives (D872): held as itself.
         convert::Type::Object(object)
-            if object.pointer()
-                != crate::classify::representability::object::Pointer::Shared =>
+            if !matches!(
+                object.pointer(),
+                crate::classify::representability::object::Pointer::Shared
+                    | crate::classify::representability::object::Pointer::Mutable
+            ) =>
         {
             write!(
                 output,
@@ -23534,6 +24390,40 @@ fn render_to_dynamic(
                 write!(output, "({converted})?, ").map_err(request::unwritable)?;
             }
             write!(output, "])) }})()")
+        }
+        // A `&'r mut T` or `&'r T` of a crate value an item of a region's
+        // value borrows, as `(Layout, &mut Tree)` of the iterator iced's
+        // `Layout::iter_mut` gives: the element lent to the program from
+        // the region for as long as it is open (`Region::lend`), as native
+        // code lends a value to a call.
+        convert::Type::Borrowed { mutable, ty: lent }
+            if IN_REGION.get() && matches!(**lent, convert::Type::Nominal { .. }) && lendable(lent) =>
+        {
+            let rust = concrete_type(lent)
+                .ok_or_else(|| request::drift("a lent element's Rust type"))?;
+            let mut family = Vec::new();
+            render_field_family(depth, &rust, *mutable, &mut family)?;
+            let family = String::from_utf8(family).map_err(request::unwritable)?;
+            let lend = if *mutable { "lend" } else { "lend_ref" };
+            write!(
+                output,
+                "{{ {family} let nonce = region.{lend}::<Field{depth}>({value}).map_err(|error| Error::Lent({rust:?}, error))?; Ok::<Dynamic, Error>({}) }}",
+                lent_field(depth, &rust, *mutable).replacen(
+                    "Dynamic::from(__rawr_internal::scope::Lent::new(",
+                    "Dynamic::from(region.keeping(__rawr_internal::scope::Lent::new(",
+                    1
+                ) + ")"
+            )
+        }
+        // The same out of any region: no frame holds what it borrows.
+        convert::Type::Borrowed { mutable: true, ty: lent }
+            if matches!(**lent, convert::Type::Nominal { .. }) && lendable(lent) =>
+        {
+            write!(
+                output,
+                "{{ let _ = {value}; Err::<Dynamic, Error>(Error::Value({:?}.to_owned())) }}",
+                "a `&mut` of a crate value lives only in the scope frame that holds what it borrows"
+            )
         }
         // A `&[T]` of crate values a field borrows, as a page's `children:
         // &'static [Block]` (#1283): each element copied by its type's
@@ -23758,6 +24648,61 @@ fn std_time(ty: &convert::Type) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+/// The inputs and output of `ty` when it is a crate's `Box<dyn Fn(A..) ->
+/// B>`, as iced's `StyleFn<'a, Theme>` is: the box native code makes or
+/// takes as it is, which a program's closure fills (#2698).
+fn dyn_callable(ty: &convert::Type) -> Option<(&[convert::Type], &convert::Type)> {
+    let convert::Type::Nominal { definition, .. } = boxed_element(ty)? else {
+        return None;
+    };
+    if *definition != crate::surface::identity::Definition::callable() {
+        return None;
+    }
+    let convert::Type::Nominal { arguments, .. } = boxed_element(ty)? else {
+        return None;
+    };
+    let (output, inputs) = arguments.split_last()?;
+    Some((inputs, output))
+}
+
+/// `Box<dyn Fn(A..) -> B>` of `ty`, a [`dyn_callable`], spelled.
+fn dyn_callable_type(ty: &convert::Type) -> Option<String> {
+    let (inputs, output) = dyn_callable(ty)?;
+    let inputs = inputs
+        .iter()
+        .map(concrete_type)
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!(
+        "Box<dyn Fn({}) -> {}>",
+        inputs.join(", "),
+        concrete_type(output)?
+    ))
+}
+
+/// A generated `Result<Box<dyn Fn(..) -> ..>, Error>` expression of the
+/// [`dyn_callable`] `ty` from the `Dynamic` named `value`: the box native
+/// code gave, moved out of its slot, or a closure calling the program's
+/// callable `value` holds, boxed.
+fn render_dyn_callable(ty: &convert::Type, value: &str) -> Result<String, request::Error> {
+    use crate::classify::representability::{callable, signature};
+    let unwritten = || request::drift("a boxed closure's type");
+    let (inputs, output) = dyn_callable(ty).ok_or_else(unwritten)?;
+    let rust = dyn_callable_type(ty).ok_or_else(unwritten)?;
+    let call = callable::Call::new(0, inputs.into(), output.clone());
+    let signature = signature::Signature::new(Box::default(), inputs.into(), output.clone());
+    let closure = render_callable_closure(
+        Witnesses::Coerced(value),
+        &format!("{value}.clone()"),
+        &call,
+        &signature,
+        &[],
+        None,
+    )?;
+    Ok(format!(
+        "match {value}.clone().try_cast_result::<NativeHandle>() {{ Ok(handle) => arguments.arena.take::<{rust}>(handle), Err(_) => (|| -> Result<{rust}, Error> {{ let made = {closure}; Ok(Box::new(made)) }})() }}"
+    ))
 }
 
 /// `T` of Rust's `Box<T>`, which crosses as rawr's `Box`: the value it
@@ -24188,6 +25133,23 @@ fn instantiated(
         {
             substitution(ty, signature, substitutions)?.clone()
         }
+        // `&mut P` of a `&mut dyn Trait` input is that object lent mutably,
+        // as a widget's `operate` passes on its `&mut dyn Operation`.
+        convert::Type::Borrowed { mutable: true, ty }
+            if matches!(**ty, convert::Type::Parameter(_))
+                && matches!(
+                    substitution(ty, signature, substitutions),
+                    Some(convert::Type::Object(_))
+                ) =>
+        {
+            let Some(convert::Type::Object(object)) = substitution(ty, signature, substitutions)
+            else {
+                unreachable!("matched an object");
+            };
+            convert::Type::Object(Box::new(
+                object.behind(crate::classify::representability::object::Pointer::Mutable),
+            ))
+        }
         convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
             mutable: *mutable,
             ty: one(ty)?,
@@ -24403,7 +25365,26 @@ fn render_function_path(
     associated: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    if associated {
+    // A trait impl's associated function is called through the trait,
+    // `<Theme as Catalog>::default`, as the type's other impls may give
+    // one of the same name (`classify::through_implemented`).
+    let through = match signature.instance() {
+        None if associated => through_trait(signature, substitutions, None)?,
+        _ => None,
+    };
+    if let Some(through) = through {
+        output.write_all(b"<").map_err(request::unwritable)?;
+        render_container_path(
+            &rust_path(plan),
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            output,
+        )?;
+        write!(output, " as {through}>::{}", plan.name()).map_err(request::unwritable)
+    } else if associated {
         render_container_path(
             &rust_path(plan),
             signature,
@@ -24676,6 +25657,9 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The scopes an adapter body's arguments reached around the body
+    /// open, each one's opening and closing (`render_reached_around`).
+    static REACHED_AROUND: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The argument whose trait object native code lent a script closure
     /// an adapter's body has as `object_{index}`, reached around the body
     /// (`lent_object_input`, #28).
@@ -25976,6 +26960,28 @@ impl Drop for LentArguments {
     }
 }
 
+/// Collects the scopes one adapter body opens (`REACHED_AROUND`), and
+/// gives back the enclosing body's when it drops.
+struct ReachedAround(Vec<(String, String)>);
+
+impl ReachedAround {
+    fn enter() -> Self {
+        Self(REACHED_AROUND.take())
+    }
+
+    /// The scopes this body's arguments open, each its opening and
+    /// closing, in opening order.
+    fn scopes(&self) -> Vec<(String, String)> {
+        REACHED_AROUND.with_borrow(Clone::clone)
+    }
+}
+
+impl Drop for ReachedAround {
+    fn drop(&mut self) {
+        REACHED_AROUND.set(std::mem::take(&mut self.0));
+    }
+}
+
 /// Sets `LENT_OBJECT` for as long as it lives.
 struct LentObject(Option<usize>);
 
@@ -26156,8 +27162,40 @@ fn spelled_scoped(ty: &convert::Type, opaque: &mut Option<OpaqueSpelling<'_>>) -
         convert::Type::Borrowed { mutable: false, ty } if script_slice(ty).is_none() => {
             Some(format!("&'x {}", borrowed_target(ty)?))
         }
+        convert::Type::Tuple(members) if members.iter().any(carries_lifetime_or_borrow) => {
+            let members = members
+                .iter()
+                .map(|member| spelled_scoped(member, opaque))
+                .collect::<Option<Vec<_>>>()?;
+            Some(format!("({},)", members.join(", ")))
+        }
+        // An item's `&mut Tree` of the iterator iced's `Layout::iter_mut`
+        // gives (`lends_slice`).
+        convert::Type::Borrowed { mutable: true, ty }
+            if matches!(**ty, convert::Type::Nominal { .. }) =>
+        {
+            Some(format!("&'x mut {}", borrowed_target(ty)?))
+        }
+        // A program's value of a crate-source type at a borrow, as iced's
+        // `Container<'a, &'a str>`: its proxy, written as `concrete_type`
+        // writes it, at the borrow's lifetime.
+        convert::Type::Script { arguments, .. } if arguments.iter().any(carries_lifetime) => {
+            let named = concrete_type(ty)?;
+            let (named, _) = named.split_once('<')?;
+            let arguments = arguments
+                .iter()
+                .map(|ty| spelled_scoped(ty, opaque))
+                .collect::<Option<Vec<_>>>()?;
+            Some(format!("{named}<{}>", arguments.join(", ")))
+        }
         ty => concrete_type(ty),
     }
+}
+
+/// Whether `ty` borrows, or carries a lifetime: what a tuple of it is
+/// spelled at `'x` for (`spelled_scoped`).
+fn carries_lifetime_or_borrow(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Borrowed { .. }) || carries_lifetime(ty)
 }
 
 /// `.to_vec()` after a call whose output is a `&[T]` it lends: the copy
@@ -26292,6 +27330,18 @@ fn carries_lifetime(ty: &convert::Type) -> bool {
     }
 }
 
+/// Whether `ty` holds a program's value of a crate-source type at a
+/// borrow, as iced's `Row<Container<'a, &'a str>>` of `row(..)` over
+/// `container("")` does: the runner writes the value's proxy at the
+/// borrow's lifetime, so a region holds what holds it.
+fn holds_borrowing_script(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Script { arguments, .. } => arguments.iter().any(carries_lifetime),
+        convert::Type::Nominal { arguments, .. } => arguments.iter().any(holds_borrowing_script),
+        _ => false,
+    }
+}
+
 /// The name of the scope family of the imported type spelled `text` at
 /// `'x`, whose own path and lifetimes are `path` and `lifetimes`. The
 /// family is declared in `rawr_families`. A type that leaves an argument
@@ -26381,7 +27431,7 @@ fn family_of(ty: &convert::Type) -> Option<family::Family> {
     else {
         return None;
     };
-    if !carries_lifetime(ty) {
+    if !carries_lifetime(ty) && !holds_borrowing_script(ty) {
         return None;
     }
     if is_opaque(definition) {
@@ -27160,6 +28210,25 @@ fn render_impl(
     }
     let mut items = String::new();
     for function in script.functions() {
+        // The inputs a method's output keeps borrowed at its receiver's
+        // lifetime are the trait's, as its stand-in's method has them: an
+        // impl of iced's `Widget` for a program's type runs its `overlay` in
+        // a lending region as the stand-in's does (#2698).
+        let kept_function;
+        let function = match revealed
+            .as_ref()
+            .and_then(|revealed| revealed.outputs.object())
+            .and_then(|methods| {
+                methods
+                    .iter()
+                    .find(|method| method.name() == function.name())
+            }) {
+            Some(method) if function.kept().is_empty() && !method.kept().is_empty() => {
+                kept_function = function.clone().with_kept(method.kept().into());
+                &kept_function
+            }
+            _ => function,
+        };
         let frame = if function.generics().is_empty() {
             None
         } else {
@@ -27169,6 +28238,7 @@ fn render_impl(
         };
         body.push_str(&render_impl_function(
             function,
+            Callee::Member(function.member()),
             generics,
             frame.as_ref(),
             revealed.as_ref(),
@@ -27247,9 +28317,21 @@ impl Revealed<'_> {
     }
 }
 
-/// One function of a script impl, as `render_impls` writes it.
+/// What a function of a runner's impl calls in the program.
+#[derive(Clone, Copy)]
+enum Callee<'a> {
+    /// The member at this path, of the proxy's impl (D594).
+    Member(&'a str),
+    /// The member the program's trait object `self.0` names by this key,
+    /// of the trait's stand-in (`crossing::Object`, #2698).
+    Object(&'a str),
+}
+
+/// One function of a script impl, as `render_impls` writes it, or of a
+/// trait's stand-in (`object::render_stand_ins`).
 fn render_impl_function(
     function: &crate::surface::instance::ScriptImplFunction,
+    callee: Callee<'_>,
     generics: &[Box<str>],
     frame: Option<&frame::Frame>,
     revealed: Option<&Revealed<'_>>,
@@ -27293,6 +28375,21 @@ fn render_impl_function(
     let formatter = function
         .formatter()
         .and_then(|position| usize::try_from(position).ok());
+    // A method whose output borrows its `&mut self` receiver and inputs
+    // native code lends at the receiver's lifetime runs in a lending
+    // region, which each such input is lent kept in
+    // (`render_lending_function`).
+    let lending = matches!(function.receiver(), ImplReceiver::Mutable)
+        && frame.is_none()
+        && !function.kept().is_empty()
+        && carries_lifetime(function.output());
+    let kept_in = |position: usize| {
+        lending
+            && function
+                .kept()
+                .iter()
+                .any(|kept| usize::try_from(*kept).ok() == Some(position))
+    };
     for (position, input) in function.inputs().iter().enumerate() {
         let name = format!("input_{position}");
         let at = values.len();
@@ -27393,7 +28490,26 @@ fn render_impl_function(
             {
                 let target =
                     concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
-                let lend = LentInput::new(position, *borrowed_mutably, target);
+                let mut lend = LentInput::new(position, *borrowed_mutably, target);
+                lend.kept_in = kept_in(position);
+                values.push(lend.value());
+                lends.push(lend);
+            }
+            // A crate trait's object native code lends, as iced lends
+            // `operate` its `&mut dyn Operation`: lent for the call, as a
+            // script closure's is (#28).
+            convert::Type::Object(object)
+                if let Some((target, family)) = object::lent_family(object) =>
+            {
+                let lent_mutably =
+                    object.pointer() == crate::classify::representability::object::Pointer::Mutable;
+                if lent_mutably {
+                    if let Some(parameter) = parameters.last_mut() {
+                        *parameter = format!("mut {parameter}");
+                    }
+                    mutable.push(at.to_string());
+                }
+                let lend = LentInput::object(position, lent_mutably, target, family);
                 values.push(lend.value());
                 lends.push(lend);
             }
@@ -27491,11 +28607,13 @@ fn render_impl_function(
     );
     // Each thread finds the member once per generation, with its witnesses,
     // and each call enters that generation (`crossing::Member`).
-    let entered = format!(
-        "static MEMBER: __rawr_internal::crossing::Member = __rawr_internal::crossing::Member::new({:?});
-        let member = MEMBER.enter();",
-        function.member()
-    );
+    let entered = match callee {
+        Callee::Member(path) => format!(
+            "static MEMBER: __rawr_internal::crossing::Member = __rawr_internal::crossing::Member::new({path:?});
+        let member = MEMBER.enter();"
+        ),
+        Callee::Object(key) => format!("let member = self.0.enter({key:?});"),
+    };
     let mutable = mutable.join(", ");
     // An output that borrows, as a `view(&self) -> impl Widget<..> + 'a`'s
     // widgets do: made in a region, as a slot's is, anchored on the strings
@@ -27562,6 +28680,30 @@ fn render_impl_function(
             frame.function_header(),
             parameters.join(", ")
         ));
+    }
+    // An output that borrows the `&mut self` receiver, and the `&mut`
+    // inputs native code lends at its lifetime, as iced's `overlay<'b>(&'b
+    // mut self, tree: &'b mut Tree, ..) -> Vec<overlay::Element<'b, ..>>`
+    // does: the impl runs in a lending region at that lifetime, where each
+    // crate call it makes that borrows so leaves its output, and the
+    // stand-in takes what the impl gives out of it (#2698).
+    if lending {
+        if !slices.is_empty() || !places.is_empty() || !held.is_empty() {
+            return Err(drift(
+                "a stand-in's method whose output borrows its receiver takes a slice or a mirror",
+            ));
+        }
+        return render_lending_function(
+            function,
+            &entered,
+            &parameters,
+            &values,
+            &restores,
+            &mutable,
+            lends,
+            count,
+            &rust,
+        );
     }
     // An output that borrows may keep a `&[T]` native code lent the
     // function, as a crate call in its body that keeps the slice gives it
@@ -27651,6 +28793,88 @@ fn render_impl_function(
     ))
 }
 
+/// A stand-in's method whose output borrows its `&mut self` receiver,
+/// and each input at `function.kept()` it takes at the receiver's
+/// lifetime, as iced's `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)
+/// -> Vec<overlay::Element<'b, ..>>` (#2698): the program's impl runs in a
+/// lending region at that lifetime (`Object::lending`), each kept input
+/// lent kept in it, so a crate call the impl makes that borrows them and a
+/// native value it holds leaves its output there, and the output is taken
+/// out of that region at the lifetime.
+#[allow(clippy::too_many_arguments)]
+fn render_lending_function(
+    function: &crate::surface::instance::ScriptImplFunction,
+    entered: &str,
+    parameters: &[String],
+    values: &str,
+    restores: &str,
+    mutable: &str,
+    lends: Vec<LentInput>,
+    count: usize,
+    rust: &str,
+) -> Result<String, request::Error> {
+    let kept = function
+        .kept()
+        .iter()
+        .filter_map(|position| usize::try_from(*position).ok())
+        .collect::<Vec<_>>();
+    // The receiver, each kept input and the output at one lifetime.
+    let parameters = parameters
+        .iter()
+        .enumerate()
+        .map(|(at, parameter)| {
+            if at == 0 {
+                return "&'rawr mut self".to_owned();
+            }
+            let position = at - 1;
+            if !kept.contains(&position) {
+                return parameter.clone();
+            }
+            let Some((name, ty)) = parameter.split_once(": ") else {
+                return parameter.clone();
+            };
+            match ty.strip_prefix('&') {
+                Some(target) => format!("{name}: &'rawr {target}"),
+                None => parameter.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let rust = rust.replace("'_", "'rawr");
+    let mut converted = String::new();
+    {
+        let _region = InRegion::enter();
+        render_from_dynamic(function.output(), "value", 0, &mut converted)?;
+    }
+    let values = values.replace("self.0.", "object.");
+    let restores = restores.replace("self.0.", "object.");
+    let call = format!(
+        "let mut values: [Dynamic; {count}] = {values};
+        let value = member.call(&mut values, &[{mutable}]);{restores}
+        value"
+    );
+    let (items, call) = lent_around(&lends, call);
+    Ok(format!(
+        "    fn {name}<'rawr>({parameters}) -> {rust} {{
+{items}        let _arena = CallArena::enter();
+        {entered}
+        self.0.lending(
+            |object, anchor| {{
+                let _ = anchor;
+                let witnesses = member.witnesses();
+                {call}
+            }},
+            |region, value| {{
+                with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }})
+                    .unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))
+            }},
+        )
+    }}
+",
+        name = function.name(),
+        parameters = parameters.join(", "),
+    ))
+}
+
 /// The Rust type of the crate value a script impl function's `&T` output
 /// borrows from its receiver (#2001), where it takes one by reference: a
 /// value of the arena, whose type carries no lifetime.
@@ -27684,6 +28908,13 @@ struct LentInput {
     /// Native code keeps the borrow as long as the slot's output, which
     /// borrows it (`Lent::kept`).
     kept: bool,
+    /// Native code keeps the `&mut` borrow as long as the output of the
+    /// stand-in's lending call, whose region's nonce is `anchor`
+    /// (`Lent::kept_in`).
+    kept_in: bool,
+    /// The value is `input_{position}` itself, a trait object's pointer,
+    /// lent by a borrow of its parameter (`LentInput::object`).
+    placed: bool,
 }
 
 impl LentInput {
@@ -27698,6 +28929,8 @@ impl LentInput {
             rust,
             reads: true,
             kept: false,
+            kept_in: false,
+            placed: false,
         }
     }
 
@@ -27719,6 +28952,19 @@ impl LentInput {
             family,
             reads: false,
             kept: false,
+            kept_in: false,
+            placed: false,
+        }
+    }
+
+    /// A crate trait's object native code lends a script impl function, as
+    /// iced lends `operate` its `&mut dyn Operation`: the parameter holds
+    /// the object's pointer `rust`, which is lent by a borrow of the
+    /// parameter, at every lifetime `family` names.
+    fn object(position: usize, mutable: bool, rust: String, family: String) -> Self {
+        Self {
+            placed: true,
+            ..Self::scoped(position, mutable, rust, family)
         }
     }
 
@@ -27730,6 +28976,7 @@ impl LentInput {
             rust,
             reads,
             kept,
+            kept_in,
             ..
         } = self;
         let writer = if *mutable {
@@ -27742,7 +28989,11 @@ impl LentInput {
         } else {
             String::new()
         };
-        let kept = if *kept { ".kept()" } else { "" };
+        let kept = match (*kept, *kept_in) {
+            (_, true) => ".kept_in(anchor)",
+            (true, false) => ".kept()",
+            (false, false) => "",
+        };
         format!(
             "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {rust:?}, {writer}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)){reads}{kept})"
         )
@@ -27775,6 +29026,7 @@ fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
         rust: target,
         family,
         reads,
+        placed,
         ..
     } in lends.iter().rev()
     {
@@ -27783,8 +29035,13 @@ fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
         } else {
             "lend_ref"
         };
+        let given = match (*placed, *borrowed_mutably) {
+            (false, _) => format!("input_{position}"),
+            (true, false) => format!("&input_{position}"),
+            (true, true) => format!("&mut input_{position}"),
+        };
         call = format!(
-            "__rawr_internal::scope::{lend}::<Lend{position}, _>(input_{position}, |lent_{position}| {{
+            "__rawr_internal::scope::{lend}::<Lend{position}, _>({given}, |lent_{position}| {{
         {call}
         }})"
         );
@@ -28490,6 +29747,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         ty if let Some(element) = range_inclusive_element(ty) => {
             format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
+        ty if let Some(rust) = dyn_callable_type(ty) => rust,
         ty if let Some(element) = boxed_element(ty) => format!("Box<{}>", concrete_type(element)?),
         ty if let Some((rust, element)) = std_generic(ty) => {
             format!("{rust}<{}>", concrete_type(element)?)

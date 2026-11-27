@@ -311,6 +311,10 @@ pub(super) struct Found {
     /// Each template whose instances the reading read: each its calls
     /// bind, the calls it keeps no record of among them (`called_templates`).
     pub(super) templates: BTreeSet<crate::item::Key>,
+    /// Each opened impl of a crate trait a settled use of the trait fits,
+    /// with the parameters it fixes: a demand read's seed (decision 3).
+    #[serde(default)]
+    pub(super) seeds: Vec<super::demand::Seed>,
 }
 
 /// What reveal's reading of one body found, kept under its key with what
@@ -1240,6 +1244,7 @@ impl ExecutableOp {
             },
             Self::Sequence(constructor) => Self::Sequence(constructor.renewed(&schema)?),
             Self::CallableObject(coercion) => Self::CallableObject(coercion.renewed(&schema)?),
+            Self::StandIn(_) | Self::BoxedCallable => self.clone(),
             Self::Witnessed(op) => Self::Witnessed(Box::new(super::op::WitnessedOp::new(
                 op.template.renewed(models)?,
                 op.witnesses,

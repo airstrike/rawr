@@ -51,7 +51,7 @@ pub fn area() -> PathBuf {
 }
 
 /// Rawr's home: `$RAWR_HOME`, else `$CARGO_HOME/rawr`, else `~/.cargo/rawr`.
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     let cargo_home = std::env::var_os("CARGO_HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)

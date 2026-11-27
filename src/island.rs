@@ -642,6 +642,18 @@ pub(crate) fn object(value: Dynamic, owner: &str, trait_name: &str) -> Result<Dy
     }
 }
 
+/// Whether rawr's copy of the crate declares a stand-in for the program's
+/// type at `owner`, a native island's (#1264).
+pub(crate) fn declares_object(owner: &str) -> bool {
+    !owner.is_empty()
+        && MAKERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .makers
+            .iter()
+            .any(|(path, _)| *path == owner)
+}
+
 /// The program value of `handle` for one call of the impl's function it
 /// is the receiver of, `borrow`ed: a `&self` call shares it with any other
 /// that runs, at any depth of calls back into the same object (#1302), and

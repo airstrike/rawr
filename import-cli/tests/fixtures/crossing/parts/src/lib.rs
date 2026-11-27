@@ -410,6 +410,22 @@ impl<Theme> Note<'_, Theme> {
 pub mod widget {
     use super::PhantomData;
 
+    pub mod text {
+        //! A text widget's styles, as iced_core's `widget::text`, which
+        //! iced_widget's `text` re-exports by a glob.
+
+        /// What marks a frame for a palette, as iced_core's
+        /// `text::StyleFn`.
+        pub type MarkFn<'a, P> = Box<dyn Fn(&P) -> char + 'a>;
+
+        /// What a palette marks a frame with, as iced_core's
+        /// `text::Catalog`.
+        pub trait Catalog {
+            /// A mark's class.
+            type Class<'a>;
+        }
+    }
+
     /// A widget whose messages `F` turns, as iced_core's `widget::Map`,
     /// which iced's `Widget::map` gives and iced doesn't re-export: a
     /// program uses it without naming it.
@@ -499,3 +515,7 @@ pub struct Point {
     /// Its y.
     pub y: f32,
 }
+
+/// Places, as iced_core's `widget::tree` diffs a widget's children: generic
+/// code `events`' generic code calls through `events`' re-export of it.
+pub mod tally;

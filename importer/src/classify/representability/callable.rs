@@ -165,6 +165,13 @@ impl Item {
         }
     }
 
+    /// The item taking its receiver as `receiver` does: a trait's method of
+    /// its impl for `&str` that borrows the `&str` (`surface::text`).
+    pub(crate) const fn with_receiver(mut self, receiver: super::ownership::Receiver) -> Self {
+        self.receiver = Some(receiver);
+        self
+    }
+
     pub(crate) fn with_call(mut self, call: Option<Call>) -> Self {
         self.call = call;
         self

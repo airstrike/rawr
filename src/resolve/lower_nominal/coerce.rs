@@ -163,6 +163,14 @@ impl<'a> Parser<'a> {
             self.option_host_callable(value)?;
             source = self.inference.resolve(&value.ty);
         }
+        if let Ty::Reference {
+            target: borrowed, ..
+        } = &target
+            && matches!(self.inference.resolve(borrowed), Ty::Callable { .. })
+        {
+            self.borrowed_host_callable(value, false)?;
+            source = self.inference.resolve(&value.ty);
+        }
         // std's range where an iterator is taken (`-> impl Iterator`,
         // `Box<dyn Iterator>`): the iterator over its items, as the range
         // is its own `Iterator`. A box is its value at runtime.
@@ -547,6 +555,51 @@ impl<'a> Parser<'a> {
             {
                 return Err(unsendable.error(&self.models, value.span, None));
             }
+            // A value of the program's own type that implements a native
+            // trait, a crate's generic type at the program's arguments among
+            // them: the runner's one stand-in for the trait holds it, and
+            // calls the member of its impl each method names, so no runner
+            // is built for the type (#2698). A type of a native island's is
+            // the stand-in rawr's copy of the crate declares for it, where
+            // the running build has one (#1264).
+            #[cfg(feature = "rust-import")]
+            if self.models.native_trait(&trait_name)
+                && self.native_stand_in(&trait_name)
+                && matches!(
+                    target,
+                    Ty::Boxed(_) | Ty::Counted(..) | Ty::Reference { mutable: false, .. }
+                )
+                && let Some(members) = self.native_object_members(
+                    &concrete,
+                    (&trait_name, &dyn_arguments(&bindings)),
+                    value.span,
+                )?
+            {
+                let written = members
+                    .iter()
+                    .flat_map(|(name, path)| [name.as_str(), path.as_str()])
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let (owner, island) = self
+                    .native_object_owner(&concrete, &trait_name)
+                    .map_or_else(Default::default, |(owner, written)| {
+                        (owner, written.to_string())
+                    });
+                let source = std::mem::take(&mut value.source);
+                value.source = self.prelude_op(
+                    PreludeOp::NativeProgram,
+                    [
+                        source,
+                        format!("{written:?}").into(),
+                        format!("{owner:?}").into(),
+                        format!("{island:?}").into(),
+                    ],
+                );
+                value.source.cover(value.span);
+                value.ty = target;
+                value.lvalue = None;
+                return Ok(None);
+            }
             // A box of the program's own type that implements a native
             // trait becomes that trait's object: the stand-in rawr's copy of
             // the crate declares for the type, which holds the value's
@@ -560,6 +613,21 @@ impl<'a> Parser<'a> {
                 )
                 && let Some((owner, written)) = self.native_object_owner(&concrete, &trait_name)
             {
+                // Only a marked type of a native root has a stand-in of its
+                // own, in rawr's copy of its crate; any other value would
+                // reach native code as no type it takes.
+                #[cfg(feature = "rust-import")]
+                if !self.models.native_root {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: crate::resolve::Unsupported::said(format!(
+                            "coercing `{}` to the native trait object `dyn {trait_name}` is not \
+                             supported yet: rawr's runner has no stand-in for the trait, as a \
+                             method of it takes or gives a type the runner can't cross",
+                            concrete.name(&self.models)
+                        )),
+                        source: value.span,
+                    });
+                }
                 let source = std::mem::take(&mut value.source);
                 value.source = self.prelude_op(
                     PreludeOp::NativeObject,
@@ -830,10 +898,71 @@ impl<'a> Parser<'a> {
         expected: &Ty,
         argument: &mut ParsedExpr,
     ) -> Result<Option<String>, Error> {
+        #[cfg(feature = "rust-import")]
+        self.boxed_callable_argument(expected, argument)?;
         let outer = std::mem::replace(&mut self.crate_argument, true);
         let coerced = self.coerce_expr(expected, argument);
         self.crate_argument = outer;
         coerced
+    }
+
+    /// A crate call's `Box<dyn Fn(A..) -> B>` argument, or a borrow of one,
+    /// as `theme.style(&self.class)` lends a container's class (#2698): the
+    /// box native code gave, as it is, or the program's function pointer as
+    /// the callable that calls it, which the runner boxes. Which one it is
+    /// is known only at runtime (`op::boxed_callable`).
+    #[cfg(feature = "rust-import")]
+    fn boxed_callable_argument(
+        &mut self,
+        expected: &Ty,
+        argument: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        let boxed_function = |this: &Self, ty: &Ty| {
+            let ty = match this.inference.resolve(ty) {
+                Ty::Reference {
+                    mutable: false,
+                    target,
+                } => this.inference.resolve(&target),
+                ty => ty,
+            };
+            let Ty::Boxed(inner) = ty else {
+                return None;
+            };
+            Some(this.inference.resolve(&inner))
+        };
+        let (Some(Ty::Callable { .. }), Some(function @ Ty::Fn { .. })) = (
+            boxed_function(self, expected),
+            boxed_function(self, &argument.ty),
+        ) else {
+            return Ok(());
+        };
+        let given = self.temporary("boxed");
+        let mut callable = self.operator_expr(
+            origin::Fragment::plain(given.as_str()),
+            function,
+            argument.span,
+        );
+        self.host_callable(&mut callable)?;
+        if !matches!(self.inference.resolve(&callable.ty), Ty::Callable { .. }) {
+            return Ok(());
+        }
+        let helper = self.push_op(Op::BoxedCallable);
+        let mut rendered = origin::Fragment::plain(format!("{{ let {given} = "));
+        rendered.push(argument.rendered_source());
+        rendered.push_text("; ");
+        rendered.push(self.op_call(
+            &helper,
+            [
+                origin::Fragment::plain(given.as_str()),
+                callable.rendered_source(),
+            ],
+        ));
+        rendered.push_text(" }");
+        argument.prelude = origin::Fragment::default();
+        argument.source = rendered;
+        argument.source.cover(argument.span);
+        argument.lvalue = None;
+        Ok(())
     }
 
     /// iced's `impl IntoIterator<Item = Element>`, a facade slice of

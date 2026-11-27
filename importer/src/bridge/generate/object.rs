@@ -13,7 +13,9 @@ use std::fmt::Write as _;
 
 use super::{concrete_type, render_from_dynamic, request, TYPE_PATHS};
 use crate::classify::representability::convert;
-use crate::classify::representability::object::{Object, Pointer, ARGUMENTS, CALLABLE};
+use crate::classify::representability::object::{
+    Method, Object, Pointer, Supertrait, ARGUMENTS, CALLABLE, PROGRAM,
+};
 
 /// A type the facade implements a trait for that the adapter coerces a
 /// program's value of to the trait's object.
@@ -44,8 +46,26 @@ thread_local! {
 }
 
 /// Read each implementor of each trait the facade's impls are of, once
-/// `TYPE_PATHS` names the facade's types.
+/// `TYPE_PATHS` names the facade's types, and each trait's vtable its
+/// header holds (`Outputs::object`).
 pub(super) fn install(facade: Option<&crate::surface::facade::Plan>) {
+    VTABLES.with_borrow_mut(|vtables| {
+        vtables.clear();
+        let headers = facade
+            .into_iter()
+            .flat_map(crate::surface::facade::Plan::facades)
+            .flat_map(crate::surface::facade::Facade::trait_headers);
+        for header in headers {
+            if let Some(outputs) = header
+                .outputs()
+                .filter(|outputs| outputs.object().is_some())
+            {
+                vtables
+                    .entry(*header.identity())
+                    .or_insert_with(|| outputs.clone());
+            }
+        }
+    });
     IMPLEMENTORS.with_borrow_mut(|implementors| {
         implementors.clear();
         let headers = facade
@@ -67,6 +87,289 @@ pub(super) fn install(facade: Option<&crate::surface::facade::Plan>) {
 
 pub(super) fn clear() {
     IMPLEMENTORS.with_borrow_mut(BTreeMap::clear);
+    VTABLES.with_borrow_mut(BTreeMap::clear);
+    STAND_INS.with_borrow_mut(BTreeMap::clear);
+}
+
+/// The runner's one stand-in for a trait at its arguments (#2698): a
+/// struct holding a program's value of any type, whose impl of the trait
+/// calls the value's impl through `crossing::Object`.
+struct StandIn {
+    name: String,
+    /// Its declaration and impl.
+    text: String,
+}
+
+thread_local! {
+    /// The vtable of each trait whose header has one, by the trait's
+    /// identity, for one generation.
+    static VTABLES: RefCell<BTreeMap<[u8; 32], crate::classify::representability::signature::Outputs>> =
+        const { RefCell::new(BTreeMap::new()) };
+    /// Each stand-in an arm made, by its object's type behind a `Box`, or
+    /// `None` where its trait's impl can't be written, for one generation.
+    static STAND_INS: RefCell<BTreeMap<String, Option<StandIn>>> =
+        const { RefCell::new(BTreeMap::new()) };
+}
+
+/// The name of the stand-in a program's value of any type crosses as
+/// where native code takes `object`, written once per object type:
+/// `None` when the trait's vtable has a method the runner can't write
+/// (`Object::methods`).
+fn stand_in(object: &Object) -> Result<Option<String>, request::Error> {
+    let Some((methods, supertraits)) = vtable(object) else {
+        return Ok(None);
+    };
+    let Some(dynamic) = object_type(&object.behind(Pointer::Boxed)) else {
+        return Ok(None);
+    };
+    if let Some(known) = STAND_INS.with_borrow(|stand_ins| {
+        stand_ins
+            .get(&dynamic)
+            .map(|known| known.as_ref().map(|stand_in| stand_in.name.clone()))
+    }) {
+        return Ok(known);
+    }
+    let name = format!("__RawrObject{}", STAND_INS.with_borrow(BTreeMap::len));
+    let made = render_stand_in(object, (&methods, &supertraits), &name)?.map(|text| StandIn {
+        name: name.clone(),
+        text,
+    });
+    let named = made.as_ref().map(|_| name);
+    STAND_INS.with_borrow_mut(|stand_ins| stand_ins.insert(dynamic, made));
+    Ok(named)
+}
+
+/// The methods of `object`'s trait's vtable at the object's arguments,
+/// each parameter it leaves out at its default, and its supertraits'.
+fn vtable(object: &Object) -> Option<(Vec<Method>, Vec<Supertrait>)> {
+    VTABLES.with_borrow(|vtables| {
+        let outputs = vtables.get(object.principal().as_bytes())?;
+        let given = |index: u32| {
+            let index = usize::try_from(index).ok()?;
+            object
+                .arguments()
+                .get(index)
+                .cloned()
+                .or_else(|| outputs.defaults().get(index).cloned().flatten())
+        };
+        let methods = outputs
+            .object()?
+            .iter()
+            .map(|method| method.with_parameters(&given))
+            .collect::<Option<_>>()?;
+        Some((methods, outputs.supertraits().to_vec()))
+    })
+}
+
+/// One trait the stand-in implements: its path at its arguments, its
+/// methods, and the key of each method's member before its name.
+struct Implemented<'a> {
+    path: String,
+    methods: &'a [Method],
+    position: Option<usize>,
+}
+
+/// The declaration and impls of the stand-in `name` for `object`'s trait
+/// and each of its supertraits, each method calling the program's impl's
+/// (`Callee::Object`). `None` where a method's inputs or output can't
+/// cross, or a supertrait has no path.
+fn render_stand_in(
+    object: &Object,
+    (methods, supertraits): (&[Method], &[Supertrait]),
+    name: &str,
+) -> Result<Option<String>, request::Error> {
+    let Some(principal) = trait_type(object) else {
+        return Ok(None);
+    };
+    let dynamic = object_type(object).ok_or_else(|| request::drift("a trait object's type"))?;
+    let traits = std::iter::once(Implemented {
+        path: principal,
+        methods,
+        position: None,
+    })
+    .chain(
+        supertraits
+            .iter()
+            .enumerate()
+            .map(|(position, supertrait)| Implemented {
+                path: TYPE_PATHS
+                    .with_borrow(|paths| paths.get(supertrait.identity()).cloned())
+                    .unwrap_or_else(|| supertrait.path().to_owned()),
+                methods: supertrait.methods(),
+                position: Some(position),
+            }),
+    )
+    .collect::<Vec<_>>();
+    // A provided method the program's impl doesn't write runs the trait's
+    // body, over a second handle to the value whose impl writes only the
+    // required methods. One whose output borrows its `&mut self` receiver
+    // borrows that handle, which the value keeps for as long (#2698). One
+    // whose output borrows a `&self` receiver can't come back from that
+    // handle, and calls the impl's alone.
+    let defaulted = |method: &Method| {
+        method.provided()
+            && (!super::carries_lifetime(method.output())
+                || method.receiver() == crate::surface::instance::ImplReceiver::Mutable)
+    };
+    let defaults = format!("{name}Defaults");
+    let mut impls = String::new();
+    let mut required_impls = String::new();
+    for implemented in &traits {
+        let Some((body, required)) = render_stand_in_methods(implemented, &defaults, defaulted)?
+        else {
+            return Ok(None);
+        };
+        let path = &implemented.path;
+        write!(
+            impls,
+            "
+#[allow(unused_mut, unused_variables, clippy::all)]
+impl {path} for {name} {{
+{body}}}
+"
+        )
+        .map_err(request::unwritable)?;
+        write!(
+            required_impls,
+            "
+#[allow(unused_mut, unused_variables, clippy::all)]
+impl {path} for {defaults} {{
+{required}}}
+"
+        )
+        .map_err(request::unwritable)?;
+    }
+    let mut text = format!(
+        "/// The runner's one stand-in for `{dynamic}`: a program's value of any type, \
+         whose impl each method calls (#2698).
+pub struct {name}(pub __rawr_internal::crossing::Object);
+{impls}"
+    );
+    if traits
+        .iter()
+        .any(|implemented| implemented.methods.iter().any(defaulted))
+    {
+        write!(
+            text,
+            "
+/// The value of a [`{name}`] where a provided method its impl doesn't
+/// write runs the trait's body, which calls the impl's required methods.
+pub struct {defaults}(pub __rawr_internal::crossing::Object);
+{required_impls}"
+        )
+        .map_err(request::unwritable)?;
+    }
+    Ok(Some(text))
+}
+
+/// The methods of the stand-in's impl of `implemented`, and those of the
+/// impl of its `defaults` value, which writes only the required ones.
+/// `None` where a method's inputs or output can't cross.
+fn render_stand_in_methods(
+    implemented: &Implemented<'_>,
+    defaults: &str,
+    defaulted: impl Fn(&Method) -> bool,
+) -> Result<Option<(String, String)>, request::Error> {
+    use crate::surface::instance::ImplReceiver;
+    let mut body = String::new();
+    let mut required = String::new();
+    for method in implemented.methods {
+        let key = implemented.position.map_or_else(
+            || method.name().to_owned(),
+            |position| Supertrait::key(position, method.name()),
+        );
+        let function = crate::surface::instance::ScriptImplFunction::new(
+            method.name().into(),
+            Box::default(),
+            method.receiver(),
+            method.inputs().into(),
+            method.output().clone(),
+        )
+        .with_kept(method.kept().into());
+        let rendered = match request::trial(|| {
+            super::render_impl_function(&function, super::Callee::Object(&key), &[], None, None)
+        }) {
+            Ok(rendered) => rendered,
+            Err(request::Error::Unwritten(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if !method.provided() {
+            required.push_str(&rendered);
+        }
+        if !defaulted(method) {
+            body.push_str(&rendered);
+            continue;
+        }
+        let Some((header, rest)) = rendered.split_once("{\n") else {
+            return Err(request::drift("a stand-in's method"));
+        };
+        // An output that borrows the receiver borrows the defaults' value,
+        // which the value keeps for as long (`Object::defaulted`).
+        let borrows = super::carries_lifetime(method.output());
+        let receiver = match method.receiver() {
+            ImplReceiver::Mutable if borrows => "defaults",
+            ImplReceiver::Mutable => "&mut defaults",
+            ImplReceiver::Shared | ImplReceiver::None | ImplReceiver::Owned => "&defaults",
+        };
+        let inputs = std::iter::once(receiver.to_owned())
+            .chain((0..method.inputs().len()).map(|position| format!("input_{position}")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let made = if borrows {
+            format!("let shared = {defaults}(self.0.share());\n            let defaults = self.0.defaulted(shared);")
+        } else {
+            format!("let mut defaults = {defaults}(self.0.share());")
+        };
+        write!(
+            body,
+            "{header}{{\n        if !self.0.writes({key:?}) {{\n            {made}\n            return <{defaults} as {path}>::{method}({inputs});\n        }}\n{rest}",
+            path = implemented.path,
+            method = method.name(),
+        )
+        .map_err(request::unwritable)?;
+    }
+    Ok(Some((body, required)))
+}
+
+/// Each stand-in an arm made, declared with its impl.
+pub(super) fn render_stand_ins(output: &mut Vec<u8>) {
+    STAND_INS.with_borrow(|stand_ins| {
+        for stand_in in stand_ins.values().flatten() {
+            output.extend_from_slice(stand_in.text.as_bytes());
+        }
+    });
+}
+
+/// `Trait<..>`, the trait `object` is of at its arguments, as an impl's
+/// header names it.
+fn trait_type(object: &Object) -> Option<String> {
+    let mut text =
+        TYPE_PATHS.with_borrow(|paths| paths.get(object.principal().as_bytes()).cloned())?;
+    if !object.arguments().is_empty() {
+        let arguments = object
+            .arguments()
+            .iter()
+            .map(concrete_type)
+            .collect::<Option<Vec<_>>>()?;
+        write!(text, "<{}>", arguments.join(", ")).ok()?;
+    }
+    Some(text)
+}
+
+/// The arm of the stand-in for `object`, of the Rust type `rust`, made of
+/// the program's value `inner` behind the owning pointer, or `None` when
+/// the trait has no stand-in or the pointer owns nothing.
+fn program_arm(object: &Object, rust: &str) -> Result<Option<String>, request::Error> {
+    if !object.pointer().owns() {
+        return Ok(None);
+    }
+    let Some(name) = stand_in(object)? else {
+        return Ok(None);
+    };
+    let owner = owner(object.pointer());
+    Ok(Some(format!(
+        "Ok::<{rust}, Error>({owner}({name}(__rawr_internal::crossing::Object::new(inner))))"
+    )))
 }
 
 /// The implementor an impl's self type is, when the adapter coerces a
@@ -147,32 +450,46 @@ fn owner(pointer: Pointer) -> &'static str {
     match pointer {
         Pointer::Rc => "std::rc::Rc::new",
         Pointer::Arc => "std::sync::Arc::new",
-        Pointer::Boxed | Pointer::Lasting | Pointer::Shared => "Box::new",
+        Pointer::Boxed
+        | Pointer::Lasting
+        | Pointer::Shared
+        | Pointer::Mutable
+        | Pointer::StandIn => "Box::new",
     }
 }
 
-/// The Rust type of `object` behind its pointer.
+/// The Rust type of `object` behind its pointer: the trait's stand-in
+/// itself for [`Pointer::StandIn`], when the runner can write one.
 pub(super) fn rust_type(object: &Object) -> Option<String> {
+    if object.pointer() == Pointer::StandIn {
+        return stand_in(object).ok().flatten();
+    }
     let dynamic = object_type(object)?;
     Some(match object.pointer() {
         Pointer::Lasting => format!("&'static ({dynamic})"),
         Pointer::Shared => format!("&({dynamic})"),
+        Pointer::Mutable => format!("&mut ({dynamic})"),
         Pointer::Boxed => format!("Box<{dynamic}>"),
         Pointer::Rc => format!("std::rc::Rc<{dynamic}>"),
         Pointer::Arc => format!("std::sync::Arc<{dynamic}>"),
+        Pointer::StandIn => return None,
     })
 }
 
-/// The Rust type of a `&dyn Trait` native code lends a script closure for
-/// the call (#28), and the scope family of it at each lifetime `'x`, which
-/// the object's own lifetime is too. `None` for an object behind another
-/// pointer.
+/// The Rust type of a `&dyn Trait` or `&mut dyn Trait` native code lends a
+/// script closure for the call (#28), and the scope family of it at each
+/// lifetime `'x`, which the object's own lifetime is too. `None` for an
+/// object behind another pointer.
 pub(super) fn lent_family(object: &Object) -> Option<(String, String)> {
-    if object.pointer() != Pointer::Shared {
-        return None;
-    }
     let dynamic = object_type(object)?;
-    Some((format!("&({dynamic})"), format!("&'x ({dynamic} + 'x)")))
+    match object.pointer() {
+        Pointer::Shared => Some((format!("&({dynamic})"), format!("&'x ({dynamic} + 'x)"))),
+        Pointer::Mutable => Some((
+            format!("&mut ({dynamic})"),
+            format!("&'x mut ({dynamic} + 'x)"),
+        )),
+        _ => None,
+    }
 }
 
 /// A generated `Result<T, Error>` expression making the object `object`, a
@@ -186,6 +503,14 @@ pub(super) fn render_owned(
     output: &mut String,
 ) -> Result<(), request::Error> {
     let rust = rust_type(object).ok_or_else(|| request::drift("a trait object's type"))?;
+    // The stand-in holds a program's value, which only the program makes.
+    if object.pointer() == Pointer::StandIn {
+        return write!(
+            output,
+            "{{ let value = {value}; match __rawr_internal::object::Coerced::of(&value) {{ Some((inner, tag)) if tag.as_str() == {PROGRAM:?} => Ok::<{rust}, Error>({rust}(__rawr_internal::crossing::Object::new(inner))), _ => Err(Error::TypeMismatch) }} }}"
+        )
+        .map_err(request::unwritable);
+    }
     let mut arms = String::new();
     let implementors = IMPLEMENTORS.with_borrow(|implementors| {
         implementors
@@ -209,6 +534,9 @@ pub(super) fn render_owned(
     if let Some(made) = callable_arm(object, &rust)? {
         write!(arms, "{CALLABLE:?} => {made}, ").map_err(request::unwritable)?;
     }
+    if let Some(made) = program_arm(object, &rust)? {
+        write!(arms, "{PROGRAM:?} => {made}, ").map_err(request::unwritable)?;
+    }
     // An object native code gave, or a counted one made of the box a
     // program's own type is a native trait's object as (#1264, #1304).
     let given = match object.pointer() {
@@ -219,7 +547,11 @@ pub(super) fn render_owned(
                 "if arguments.arena.index::<{boxed}>(&handle).is_ok() {{ arguments.arena.take::<{boxed}>(handle).map(<{rust}>::from) }} else {{ arguments.arena.take::<{rust}>(handle) }}"
             )
         }
-        Pointer::Lasting | Pointer::Shared | Pointer::Boxed => {
+        Pointer::Lasting
+        | Pointer::Shared
+        | Pointer::Mutable
+        | Pointer::Boxed
+        | Pointer::StandIn => {
             format!("arguments.arena.take::<{rust}>(handle)")
         }
     };
@@ -349,6 +681,9 @@ pub(super) fn render_lent_input(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     use std::io::Write as _;
+    if object.pointer() == Pointer::Mutable {
+        return render_lent_mutable(local, index, object, output);
+    }
     let unwritten = || request::drift("a trait object's type");
     let rust = rust_type(object).ok_or_else(unwritten)?;
     let lasting = rust_type(&object.behind(Pointer::Lasting)).ok_or_else(unwritten)?;
@@ -417,6 +752,15 @@ pub(super) fn render_lent_input(
         )
         .map_err(request::unwritable)?;
     }
+    // A program's value of any type, its trait's stand-in boxed for the
+    // call (#2698).
+    if let Some(name) = stand_in(object)? {
+        write!(
+            arms,
+            "{PROGRAM:?} => {{ argument_{local}_made = Box::new({name}(__rawr_internal::crossing::Object::new(inner))); &*argument_{local}_made }}, "
+        )
+        .map_err(request::unwritable)?;
+    }
     // An object native code lent the script closure that makes the call,
     // which the adapter reached around its body (#28).
     let lent = if super::lent_object_at(index) {
@@ -444,6 +788,53 @@ pub(super) fn render_lent_input(
                 argument_{local}_lasting = arguments.arena.take::<{lasting}>(handle)?;
                 argument_{local}_lasting
             }}
+        }}
+    }};"
+    )
+    .map_err(request::unwritable)
+}
+
+/// The statements that make `argument_{local}`, the `&mut dyn Trait`
+/// input `object` of the call's argument `index`: the object native code
+/// lent the script closure that makes the call, reached around the
+/// adapter's body (#28), a `Box<dyn>` native code gave, borrowed from its
+/// slot for the call, or a program's value in the trait's stand-in, boxed
+/// for the call (#2698).
+fn render_lent_mutable(
+    local: usize,
+    index: usize,
+    object: &Object,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    use std::io::Write as _;
+    let unwritten = || request::drift("a trait object's type");
+    let rust = rust_type(object).ok_or_else(unwritten)?;
+    let boxed = rust_type(&object.behind(Pointer::Boxed)).ok_or_else(unwritten)?;
+    let arms = match stand_in(object)? {
+        Some(name) => format!(
+            "{PROGRAM:?} => {{ argument_{local}_made = Box::new({name}(__rawr_internal::crossing::Object::new(inner))); &mut *argument_{local}_made }}, "
+        ),
+        None => String::new(),
+    };
+    let lent = if super::lent_object_at(index) {
+        format!("object_{index}")
+    } else {
+        "None".to_owned()
+    };
+    writeln!(
+        output,
+        "    let argument_{local}_value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take();
+    #[allow(unused_variables, unused_mut)]
+    let mut argument_{local}_made: {boxed};
+    #[allow(unused_variables, unused_mut)]
+    let mut argument_{local}_held: PlaceHeld<{boxed}>;
+    let argument_{local}: {rust} = match (__rawr_internal::object::Coerced::of(&argument_{local}_value), {lent}) {{
+        (Some((inner, tag)), _) => match tag.as_str() {{ {arms}_ => return Err(Error::TypeMismatch) }},
+        (None, Some(object)) => object,
+        (None, None) => {{
+            let handle = argument_{local}_value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+            argument_{local}_held = arguments.arena.lease_place::<{boxed}>(handle)?;
+            &mut **argument_{local}_held.get_mut()
         }}
     }};"
     )
@@ -683,6 +1074,13 @@ fn held_object(object: &Object, value: &str, output: &mut String) -> Result<(), 
         write!(
             arms,
             "{CALLABLE:?} => (|| -> Result<_, Error> {{ Ok({held}::Made(Box::new({block}))) }})(), "
+        )
+        .map_err(request::unwritable)?;
+    }
+    if let Some(name) = stand_in(object)? {
+        write!(
+            arms,
+            "{PROGRAM:?} => Ok({held}::Made(Box::new({name}(__rawr_internal::crossing::Object::new(inner))))), "
         )
         .map_err(request::unwritable)?;
     }

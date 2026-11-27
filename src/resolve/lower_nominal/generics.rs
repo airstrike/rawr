@@ -89,6 +89,11 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        self.generic_crate_bounds = generics
+            .iter()
+            .filter(|generic| !generic.crate_bounds.is_empty())
+            .map(|generic| (generic.name.text.clone(), generic.crate_bounds.clone()))
+            .collect();
         self.generic_trait_arguments = generic_trait_arguments(generics);
         self.inference.equalities = generic_equalities(generics);
         self.inference.trait_arguments = self
@@ -401,11 +406,14 @@ impl<'a> Parser<'a> {
     /// The bounds `generics` write, from the `pending` ones on, as the
     /// call of `function` written `callee` needs its `arguments` to meet
     /// them: each at the argument whose parameter's type is the bounded
-    /// generic.
+    /// generic. A function another file declares, as an opened crate
+    /// module's, names its bound with no place: the diagnostic shows this
+    /// file alone.
     pub(super) fn place_bounds(
         &mut self,
         (bounds, traits): (usize, usize),
         function: &item::Function,
+        here: bool,
         callee: Span,
         arguments: &[ParsedExpr],
         substitution: &BTreeMap<ImmutableString, Ty>,
@@ -443,7 +451,7 @@ impl<'a> Parser<'a> {
             };
             Some(crate::resolve::Required {
                 item: function.name.text.clone(),
-                place: Some(Box::new(place)),
+                place: here.then(|| Box::new(place)),
             })
         };
         for index in bounds..self.pending_bounds.len() {
@@ -895,6 +903,8 @@ impl<'a> Parser<'a> {
             }
         }
         self.finish_objects()?;
+        #[cfg(feature = "rust-import")]
+        self.finish_stand_ins()?;
         self.finish_template_calls();
         for (id, value, at) in std::mem::take(&mut self.literal_values) {
             let value = Wide::Signed(value.into());
@@ -996,7 +1006,11 @@ impl<'a> Parser<'a> {
             {
                 ty = self.inference.resolve(target);
             }
-            let witness = self.witness(&ty, &parameter, span)?;
+            // A template call read for its instance has none to witness.
+            let witness = match self.witness(&ty, &parameter, span) {
+                Err(_) if self.collecting_instances => continue,
+                witness => witness?,
+            };
             if let Ty::Param(_, Parameter::Opaque(captured)) = &ty {
                 let arguments = self
                     .opaque_argument_witnesses(&captured.arguments, &parameter, span)
@@ -1226,6 +1240,11 @@ impl<'a> Parser<'a> {
         if instance.is_none() && self.collecting_instances {
             return Ok(function);
         }
+        if instance.is_none()
+            && let Some(miss) = self.missing_conversion(call)
+        {
+            return Err(miss);
+        }
         instance.ok_or_else(|| {
             let name = &function.definition.name.text;
             Error::InvalidMethodCall {
@@ -1341,6 +1360,35 @@ impl<'a> Parser<'a> {
         self.unify_type(source, kind)
     }
 
+    /// The native miss of a conversion a pending bound needs and the
+    /// runner lacks: an open literal for `Into<T>`, or `T: From<_>`, of a
+    /// crate type `T` that has no `from` yet. Rustc gives the literal its
+    /// kind from `T`'s impls, so the impls are demanded (`demand_from`)
+    /// rather than the literal left open, and no instance is ever chosen
+    /// at a kind a missing impl header left unsettled.
+    #[cfg(feature = "rust-import")]
+    fn missing_conversion(&mut self, call: Span) -> Option<Error> {
+        let pending = self.pending_traits.clone();
+        for (ty, trait_name, arguments, ..) in pending {
+            let [argument] = &arguments[..] else {
+                continue;
+            };
+            let (target, source) = match trait_name.as_str() {
+                "Into" => (argument, &ty),
+                "From" => (&ty, argument),
+                _ => continue,
+            };
+            let source = self.inference.resolve(source);
+            let target = self.inference.resolve(target);
+            if contains_open_literal(&source)
+                && let Err(miss) = self.demand_from(&target, call)
+            {
+                return Some(miss);
+            }
+        }
+        None
+    }
+
     /// Give `source`, an open literal's type, the source type of the one
     /// `From` impl of `target` it fits, if one alone does.
     fn fix_conversion_source(&mut self, target: type_def::Id, source: &Ty) -> bool {
@@ -1443,6 +1491,11 @@ impl<'a> Parser<'a> {
         if instance.is_none() && self.collecting_instances {
             return Ok(definition);
         }
+        if instance.is_none()
+            && let Some(miss) = self.missing_conversion(call)
+        {
+            return Err(miss);
+        }
         instance.ok_or_else(|| Error::InvalidMethodCall {
             owner: definition.owner_name().into(),
             method: definition.name().into(),
@@ -1485,6 +1538,17 @@ impl<'a> Parser<'a> {
                 receiver = *target;
             }
             self.require_type(&owner, &receiver, call)?;
+            // A trait impl's parameter only its trait's arguments name
+            // takes what the body's own bound on the receiver gives.
+            #[cfg(feature = "rust-import")]
+            if let Some(identity) = self.script_impl_trait(definition) {
+                let arguments = definition
+                    .trait_arguments()
+                    .iter()
+                    .map(|argument| instantiate(&Ty::from_resolved(argument), &substitution))
+                    .collect::<Vec<_>>();
+                self.fix_by_param_env(&receiver, identity, &arguments);
+            }
         }
         // `v.by_name::<String>(..)`: the method's own parameters take its
         // turbofish, as rustc's E0107 counts them.
@@ -1499,6 +1563,35 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(substitution)
+    }
+
+    /// The identity of the crate trait whose program impl `definition` is
+    /// a method of, by the impl's full trait path (`Models::script_impls`).
+    #[cfg(feature = "rust-import")]
+    fn script_impl_trait(&self, definition: &method::Definition) -> Option<[u8; 32]> {
+        let written = definition.trait_name()?;
+        let last = written.rsplit("::").next().unwrap_or(written);
+        let mut identities = self
+            .models
+            .script_impls
+            .iter()
+            .filter(|candidate| {
+                matches!(&candidate.owner, type_ref::Type::Path(type_ref::Path {
+                    target: type_ref::Target::Script { definition: owner, .. },
+                    ..
+                }) if *owner == definition.owner())
+                    && candidate.path.rsplit("::").next() == Some(last)
+            })
+            .filter_map(|candidate| {
+                let path = crate::host::path::Path::parse(&candidate.path).ok()?;
+                Some(self.models.host.trait_header(&path)?.identity)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter();
+        match (identities.next(), identities.next()) {
+            (Some(identity), None) => Some(identity),
+            _ => None,
+        }
     }
 
     /// rustc's E0599 for an inherent method whose impl's bounds the

@@ -184,6 +184,8 @@ impl Held {
                     parameters: header.parameters().map(ImmutableString::from).collect(),
                     defaults,
                     call: header.call().and_then(|call| runner::ty(call).ok()),
+                    object: host::facade::stand_in(header.outputs()),
+                    associated: header.associated().map(ImmutableString::from).collect(),
                 }
                 .resolve(self.root(), self)
             })

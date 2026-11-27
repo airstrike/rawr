@@ -19,12 +19,20 @@ pub enum Pointer {
     Lasting,
     /// `&'a dyn Trait`, lent for a call.
     Shared,
+    /// `&'a mut dyn Trait`, lent for a call, as iced lends a widget's
+    /// `operate` its `&mut dyn Operation`.
+    Mutable,
     /// `Box<dyn Trait>`, which owns its value.
     Boxed,
     /// `Rc<dyn Trait>`, which shares its value (#1304).
     Rc,
     /// `Arc<dyn Trait>`, which shares its value across threads (#1304).
     Arc,
+    /// The runner's one stand-in for the trait, a sized type that owns a
+    /// program's value of any type and implements the trait by calling
+    /// the value's impl: what a crate's `T: Trait` is where the program's
+    /// value fills it, so no runner is built for the value's type (#2698).
+    StandIn,
 }
 
 impl Pointer {
@@ -32,7 +40,7 @@ impl Pointer {
     /// rather than borrowing it.
     #[must_use]
     pub const fn owns(self) -> bool {
-        matches!(self, Self::Boxed | Self::Rc | Self::Arc)
+        matches!(self, Self::Boxed | Self::Rc | Self::Arc | Self::StandIn)
     }
 }
 
@@ -67,6 +75,153 @@ pub struct Object {
     /// T` (#1981).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     call: Option<Box<Call>>,
+}
+
+/// One method of a trait's vtable, each of the trait's parameters by
+/// position: what the runner's stand-in for the trait implements, at an
+/// object's arguments, by calling the program's impl (#2698).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Method {
+    name: Box<str>,
+    receiver: crate::surface::instance::ImplReceiver,
+    inputs: Box<[Type]>,
+    output: Type,
+    /// Whether the trait gives the method a body, which a program's impl
+    /// that writes none runs.
+    provided: bool,
+    /// The inputs, by position, borrowed at the receiver's lifetime where
+    /// the output names it, as iced's `overlay<'b>(&'b mut self, tree:
+    /// &'b mut Tree, ..)` takes its tree: the output borrows them as long
+    /// as it borrows the receiver.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    kept: Box<[u32]>,
+}
+
+impl Method {
+    #[must_use]
+    pub(crate) fn new(
+        name: Box<str>,
+        receiver: crate::surface::instance::ImplReceiver,
+        inputs: Box<[Type]>,
+        output: Type,
+        provided: bool,
+    ) -> Self {
+        Self {
+            name,
+            receiver,
+            inputs,
+            output,
+            provided,
+            kept: Box::new([]),
+        }
+    }
+
+    /// The method, whose output borrows the inputs at `kept` as long as it
+    /// borrows the receiver.
+    #[must_use]
+    pub(crate) fn with_kept(self, kept: Box<[u32]>) -> Self {
+        Self { kept, ..self }
+    }
+
+    /// The inputs, by position, its output borrows as long as it borrows
+    /// the receiver.
+    #[must_use]
+    pub fn kept(&self) -> &[u32] {
+        &self.kept
+    }
+
+    /// The method's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// How it takes `self`.
+    #[must_use]
+    pub const fn receiver(&self) -> crate::surface::instance::ImplReceiver {
+        self.receiver
+    }
+
+    /// Its inputs after `self`, in order.
+    #[must_use]
+    pub fn inputs(&self) -> &[Type] {
+        &self.inputs
+    }
+
+    #[must_use]
+    pub const fn output(&self) -> &Type {
+        &self.output
+    }
+
+    /// Whether the trait gives it a body.
+    #[must_use]
+    pub const fn provided(&self) -> bool {
+        self.provided
+    }
+
+    /// The method with each `Parameter(index)` of its trait's replaced by
+    /// what `given` gives for it, or `None` when it gives nothing for one.
+    #[must_use]
+    pub fn with_parameters(&self, given: &impl Fn(u32) -> Option<Type>) -> Option<Self> {
+        Some(Self {
+            inputs: self
+                .inputs
+                .iter()
+                .map(|input| input.with_parameters(given))
+                .collect::<Option<_>>()?,
+            output: self.output.with_parameters(given)?,
+            ..self.clone()
+        })
+    }
+}
+
+/// A supertrait of a trait whose vtable the runner's stand-in implements
+/// (#2698), as iced's `Widget` has `widget::Meta`: its identity, the path
+/// the runner names it by through the crate that defines it, and its
+/// methods, which name no type but `Self`.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Supertrait {
+    #[serde(with = "crate::hex")]
+    identity: [u8; 32],
+    path: Box<str>,
+    methods: Box<[Method]>,
+}
+
+impl Supertrait {
+    #[must_use]
+    pub(crate) const fn new(identity: [u8; 32], path: Box<str>, methods: Box<[Method]>) -> Self {
+        Self {
+            identity,
+            path,
+            methods,
+        }
+    }
+
+    /// The supertrait's identity.
+    #[must_use]
+    pub const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+
+    /// Its Rust path, through the crate that defines it.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Its methods.
+    #[must_use]
+    pub fn methods(&self) -> &[Method] {
+        &self.methods
+    }
+
+    /// The key the stand-in calls the value's impl of its method `name`
+    /// by, the supertrait at `position` among its trait's: the method's
+    /// name after the position, as no method of the trait's own is.
+    #[must_use]
+    pub fn key(position: usize, name: &str) -> String {
+        format!("{position}::{name}")
+    }
 }
 
 /// The inputs and output of the `Fn` bound of a trait's one impl for every
@@ -203,6 +358,11 @@ impl Object {
 /// trait the crate implements for every callable ([`Object::call`]): the
 /// adapter makes a Rust closure that calls it, which the impl takes.
 pub const CALLABLE: &str = "fn";
+
+/// The tag of a program's value of any type coerced to an object of a
+/// crate's trait: the runner's one stand-in for the trait holds it and
+/// calls its impl (`Object::methods`, #2698).
+pub const PROGRAM: &str = "program";
 
 /// The tag of the program's `format_args!` coerced to an object, core's
 /// `fmt::Arguments<'_>`, which the adapter formats where the call runs.

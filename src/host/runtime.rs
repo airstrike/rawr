@@ -157,6 +157,11 @@ pub struct Facade {
     bindings: BTreeMap<host::item::Fingerprint, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     instances: BTreeMap<(host::item::Fingerprint, [u8; 32]), Shared<dyn Callback>>,
+    /// Each binding of a crate's item, by the item's selector and its
+    /// instance: one defined item at one instance is one adapter, which a
+    /// requirement through any facade's path to it reaches (D1118).
+    #[cfg(feature = "rust-import")]
+    defined: BTreeMap<DefinedKey, Shared<dyn Callback>>,
     /// One binding per proof-backed application, by its identity.
     #[cfg(feature = "rust-import")]
     applications: BTreeMap<[u8; 32], Shared<dyn Callback>>,
@@ -166,6 +171,11 @@ pub struct Facade {
     #[cfg(feature = "rust-import")]
     imported_attestor: Option<(Shared<dyn TypeAttestor>, host::image::Held)>,
 }
+
+/// A crate item's binding by its selector's digest and, for an instance of
+/// a generic item, the instance's key.
+#[cfg(feature = "rust-import")]
+type DefinedKey = ([u8; 32], Option<[u8; 32]>);
 
 /// Runtime facade implementations available to one application launch.
 ///
@@ -445,7 +455,7 @@ impl Builder {
                 .is_some_and(|identity| identity.fingerprint() == *selector)
                 && (!self.bindings.contains_key(&item.fingerprint())
                     || (!path.is_empty()
-                        && host::path::visible(&item.path()) == host::path::visible(path)
+                        && same_item(&item.path().to_string(), path)
                         && !self.owned_bindings.contains(&item.fingerprint())))
         })
     }
@@ -807,7 +817,7 @@ impl Builder {
             .map(|definition| {
                 (
                     definition.fingerprint(),
-                    host::path::visible(&definition.path()) == host::path::visible(path),
+                    same_item(&definition.path().to_string(), path),
                 )
             })
             .collect::<Vec<_>>();
@@ -898,8 +908,7 @@ impl Builder {
         let definitions = definitions
             .iter()
             .map(|definition| {
-                let own = !path.is_empty()
-                    && host::path::visible(&definition.path()) == host::path::visible(path);
+                let own = !path.is_empty() && same_item(&definition.path().to_string(), path);
                 (definition.fingerprint(), own)
             })
             .collect::<Vec<_>>();
@@ -961,12 +970,31 @@ impl Builder {
             self.definition.fingerprint().clone(),
         );
         let dependencies = self.definition.dependencies().into_iter().collect();
+        #[cfg(feature = "rust-import")]
+        let defined = {
+            let items = self
+                .bindings
+                .iter()
+                .map(|(item, bound)| (item, None, bound));
+            let instances = self
+                .instances
+                .iter()
+                .map(|((item, instance), bound)| (item, Some(*instance), bound));
+            items
+                .chain(instances)
+                .filter_map(|(item, instance, bound)| {
+                    Some(((*item.imported()?, instance), Shared::clone(bound)))
+                })
+                .collect()
+        };
         Facade {
             dependency,
             dependencies,
             bindings: self.bindings,
             #[cfg(feature = "rust-import")]
             instances: self.instances,
+            #[cfg(feature = "rust-import")]
+            defined,
             #[cfg(feature = "rust-import")]
             applications: self.applications,
             structural: self.structural,
@@ -1278,14 +1306,24 @@ impl Registry {
         match &requirement.binding {
             #[cfg(feature = "rust-import")]
             // A call of an instance reaches that instance's adapter, never
-            // the item's other instances'.
+            // the item's other instances'. A crate's item another facade
+            // spells holds the one adapter of its definition there.
             Binding::Item(item) => match requirement.instance {
                 Some(instance) => facade
                     .instances
                     .get(&(item.clone(), instance))
                     .or_else(|| facade.applications.get(&instance)),
                 None => facade.bindings.get(item),
-            },
+            }
+            .or_else(|| {
+                if host::defined::opaque_member(&requirement.path) {
+                    return None;
+                }
+                let key = (*item.imported()?, requirement.instance);
+                self.facades
+                    .values()
+                    .find_map(|other| other.defined.get(&key))
+            }),
             #[cfg(not(feature = "rust-import"))]
             Binding::Item(item) => facade.bindings.get(item),
             Binding::Structural(definition) => facade.structural.get(definition),
@@ -1391,6 +1429,26 @@ impl StructuralAdapter {
     pub fn root(&self) -> &str {
         self.definition.owner().root()
     }
+}
+
+/// Whether the facade's item at `own` is the one an adapter was generated
+/// for at `path`: the same path past hidden segments, or, for a member of
+/// an opaque type, the same member of the opaque type of the same name,
+/// which each facade spells from its own root (`Layout::iter`'s and
+/// `Layout::iter_mut`'s `next` under one selector).
+#[cfg(feature = "rust-import")]
+fn same_item(own: &str, path: &str) -> bool {
+    if host::defined::opaque_member(own) && host::defined::opaque_member(path) {
+        let last = |path: &str| {
+            let mut segments = path.rsplit("::");
+            (
+                segments.next().map(str::to_owned),
+                segments.next().map(str::to_owned),
+            )
+        };
+        return last(own) == last(path);
+    }
+    host::path::visible(own) == host::path::visible(path)
 }
 
 impl Default for Registry {

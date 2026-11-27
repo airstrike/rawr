@@ -102,6 +102,62 @@ impl<'a> Parser<'a> {
         .ok()
     }
 
+    /// The associated types the crate's impls of each trait of
+    /// `Models::native_projected` give a crate type, which a projection on
+    /// a parameter is once the parameter is that type (`Inference::native`).
+    /// An impl with parameters of its own gives none here.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn read_native_associated(&mut self) {
+        let traits = Shared::clone(&self.models.native_projected);
+        let host = self.models.host.clone();
+        for trait_name in traits.iter() {
+            let Some(header) = crate::host::path::Path::parse(trait_name.as_str())
+                .ok()
+                .and_then(|path| host.trait_header(&path))
+            else {
+                continue;
+            };
+            for (implementation, declaring) in host.owned_impl_headers(header.identity) {
+                if !implementation.parameters.is_empty() {
+                    continue;
+                }
+                let mut parameters = BTreeMap::new();
+                let mut at = |this: &mut Self, ty| {
+                    this.instantiate_host_type(
+                        ty,
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        declaring,
+                        None,
+                    )
+                    .ok()
+                };
+                let Some(this) = at(self, &implementation.self_type) else {
+                    continue;
+                };
+                for (name, value) in implementation.associated.iter() {
+                    let Some(value) = at(self, value) else {
+                        continue;
+                    };
+                    // A boxed closure, as iced's `StyleFn<'a, Theme>`, is the
+                    // `Box<dyn Fn(A) -> B>` the program's code writes.
+                    let value = match value {
+                        Ty::Callable { inputs, output, .. } => {
+                            Ty::Boxed(Box::new(Ty::Fn { inputs, output }))
+                        }
+                        value => value,
+                    };
+                    self.inference
+                        .native
+                        .entry((trait_name.clone(), name.clone()))
+                        .or_default()
+                        .push((this.clone(), value));
+                }
+            }
+        }
+    }
+
     /// Fixes the open type parameters of `ty` by the one impl of the trait
     /// `identity` at `arguments` that fits it, then by that impl's
     /// where-clause bounds (D604). An impl for any type (`impl<T> Trait for
@@ -252,7 +308,48 @@ impl<'a> Parser<'a> {
             return None;
         };
         self.inference.commit(checkpoint);
+        // The impl's own bounds fix what the trait's arguments leave open,
+        // as `W: Widget<Message, Theme, Renderer>` of iced's `impl Widget
+        // for Container<'_, W, Theme>` gives its content's `Theme` the
+        // container's, by the content's impl (D604).
+        let substitution = types.iter().cloned().collect::<BTreeMap<_, _>>();
+        for (name, bound) in chosen.crate_bounds.iter() {
+            if let Some(bounded) = substitution.get(name) {
+                let _ = self.fix_opaque_in(bound, bounded, &substitution);
+            }
+        }
         self.impl_uses.push((chosen.index, types, full));
+        // The runner's impl at this instance needs the trait's supertraits'
+        // at it too, as rustc proves `Container<W>: Meta` for iced's `impl
+        // Widget for Container<W>`: each is selected for the same type.
+        let supertraits = self
+            .models
+            .host
+            .trait_paths(&identity)
+            .iter()
+            .find_map(|path| self.models.host.trait_header(path)?.object.clone())
+            .unwrap_or_default();
+        for (_, supertrait) in supertraits.iter() {
+            let Some(header) = self
+                .models
+                .host
+                .trait_paths(supertrait)
+                .iter()
+                .find_map(|path| self.models.host.trait_header(path).cloned())
+            else {
+                continue;
+            };
+            let arguments = header
+                .parameters
+                .iter()
+                .map(|_| self.inference.fresh())
+                .collect::<Vec<_>>();
+            let checkpoint = self.inference.checkpoint();
+            match self.select_script_impl(ty, header.identity, &arguments) {
+                Some(()) => self.inference.commit(checkpoint),
+                None => self.inference.rollback(checkpoint),
+            }
+        }
         Some(())
     }
 
@@ -1008,6 +1105,12 @@ impl<'a> Parser<'a> {
         let Some(trait_name) = definition.trait_name() else {
             return true;
         };
+        // The inherent methods a crate module whose generic code rawr runs
+        // gives one of its crate's own types are inherent: in scope
+        // wherever the type is (`crate_source`).
+        if crate::package::crate_source::is_inherent(trait_name) {
+            return true;
+        }
         // A dependency's trait the program implements (`impl
         // canvas::Program<Message> for Grid`) has no declaration here: a
         // `use` that binds it puts it in scope, or the impl the call is in.

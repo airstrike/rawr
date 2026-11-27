@@ -20,7 +20,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 81;
+const SCHEMA: u32 = 89;
 
 /// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
 /// outcome is of.
@@ -244,9 +244,17 @@ pub struct TraitHeader {
     /// program's type gives a value of one through a box (#2013).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     outputs: Option<representability::signature::Outputs>,
+    /// The names of its associated types.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    associated: Box<[Box<str>]>,
 }
 
 impl TraitHeader {
+    /// The names of its associated types, as `Class` of iced's
+    /// `container::Catalog`.
+    pub fn associated(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.associated.iter().map(AsRef::as_ref)
+    }
     /// The trait's path, relative to the root.
     #[must_use]
     pub fn path(&self) -> &str {
@@ -297,6 +305,12 @@ pub struct ImplHeader {
     bounds: Box<[ImplBound]>,
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     projections: Box<[ImplProjection]>,
+    /// Each associated type the impl gives, by name, at its parameters.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    associated: Box<[(Box<str>, Type)]>,
+    /// The trait's provided methods the impl leaves to the trait.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    defaulted: Box<[Box<str>]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type:
@@ -376,6 +390,18 @@ impl ImplHeader {
     #[must_use]
     pub fn projections(&self) -> &[ImplProjection] {
         &self.projections
+    }
+    /// Each associated type the impl gives, by name, at its parameters,
+    /// as `Class` of iced's `impl Catalog for Theme` is a boxed callable.
+    #[must_use]
+    pub fn associated(&self) -> &[(Box<str>, Type)] {
+        &self.associated
+    }
+    /// The names of the trait's provided methods the impl leaves to the
+    /// trait, whose own bodies rustc selects for its self type.
+    #[must_use]
+    pub fn defaulted(&self) -> &[Box<str>] {
+        &self.defaulted
     }
 }
 
@@ -844,6 +870,10 @@ struct ItemBody {
     /// declares it (`classify::Outcome::member`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     member: Option<super::identity::Definition>,
+    /// The trait whose impl the item is a member of, when it is a trait
+    /// impl's (`classify::Outcome::trait_of`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trait_of: Option<super::identity::Definition>,
 }
 
 /// Which of the opaque types that items at `path` give `identity` is, in
@@ -903,6 +933,11 @@ pub struct Signature {
     /// (`representability::signature::Scope`, D558 tier 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scope: Option<representability::signature::Scope>,
+    /// The inputs, by position, whose borrows the output keeps with the
+    /// receiver (`representability::signature::Signature::lends`), as
+    /// iced's `overlay` keeps its `&'b mut Tree` (#2698).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    lends: Box<[u32]>,
     /// Its callable parameters take a script function as a slot (D594).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     crossing: bool,
@@ -2369,6 +2404,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
                 relations: Box::default(),
                 guard: None,
                 scope: None,
+                lends: Box::default(),
                 crossing: false,
                 instance: None,
                 opaques: Box::default(),
@@ -2378,6 +2414,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
             },
             values: None,
             member: None,
+            trait_of: None,
         }),
     };
     let plan = Plan {
@@ -3583,6 +3620,11 @@ impl Item {
     pub fn member(&self) -> Option<super::identity::Definition> {
         self.body.member
     }
+    /// Return the trait whose impl the item is a member of, when it is a
+    /// trait impl's.
+    pub fn trait_of(&self) -> Option<super::identity::Definition> {
+        self.body.trait_of
+    }
     /// The item apart from its path: equal for this item at each of its
     /// paths, so whatever is made of one body serves them all.
     #[must_use]
@@ -3756,6 +3798,13 @@ impl Signature {
 
     pub const fn guard(&self) -> Option<representability::signature::Guard> {
         self.guard
+    }
+
+    /// The inputs, by position, whose borrows the output keeps with the
+    /// receiver.
+    #[must_use]
+    pub fn lends(&self) -> &[u32] {
+        &self.lends
     }
 
     /// Whether a script function fills each callable parameter as a slot
@@ -4022,6 +4071,7 @@ fn written_item(
                 relations: Box::default(),
                 guard: None,
                 scope: None,
+                lends: Box::default(),
                 crossing: false,
                 instance: None,
                 opaques: Box::default(),
@@ -4149,6 +4199,7 @@ fn written_item(
             signature,
             values,
             member: outcome.member(),
+            trait_of: outcome.trait_of(),
         }),
     }))
 }
@@ -4207,6 +4258,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         relations: relations(source)?,
         guard: source.guard(),
         scope: source.scope(),
+        lends: source.lends().into(),
         crossing: false,
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),
@@ -4405,6 +4457,16 @@ fn callable_signature(
             representability::convert::Type::Option(inner) if let Some(call) = made(inner) => {
                 Type::Option(Box::new(closure(call)?))
             }
+            // A borrow of one, as a borrowed callable's object is read
+            // (`&mut dyn FnMut(..)` of iced's `Operation::traverse`).
+            representability::convert::Type::Borrowed { mutable, ty: inner }
+                if let Some(call) = made(inner) =>
+            {
+                Type::Reference {
+                    mutable: *mutable,
+                    target: Box::new(closure(call)?),
+                }
+            }
             input => item_input_ty(input, all)?,
         });
     }
@@ -4418,6 +4480,7 @@ fn callable_signature(
         relations: relations(source)?,
         guard: source.guard(),
         scope: source.scope(),
+        lends: source.lends().into(),
         crossing: false,
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),

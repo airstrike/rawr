@@ -486,6 +486,87 @@ pub(super) fn without_reference(mut tokens: Vec<(Token, Position)>) -> Vec<(Toke
 /// them: each token as written, and a space after one that the source
 /// spaces from the next unless `space_between` says no. `None` when a
 /// position is not in `text`.
+/// The integer literal `source` writes at `position`, when it writes one
+/// there whose value is `value`, with its radix, separators and suffix.
+fn integer_as_written(source: &str, position: Position, value: crate::INT) -> Option<String> {
+    let line = source.split('\n').nth(position.line()?.checked_sub(1)?)?;
+    let written = line
+        .chars()
+        .skip(position.position()?.checked_sub(1)?)
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect::<String>();
+    let digits = written.replace('_', "");
+    let (radix, body) = match digits.get(..2) {
+        Some("0x") => (16, &digits[2..]),
+        Some("0o") => (8, &digits[2..]),
+        Some("0b") => (2, &digits[2..]),
+        _ => (10, digits.as_str()),
+    };
+    let end = body.find(['u', 'i']).unwrap_or(body.len());
+    let parsed = u128::from_str_radix(&body[..end], radix).ok()?;
+    #[allow(clippy::cast_sign_loss)]
+    let wanted = value as u64;
+    (u128::from(wanted) == parsed).then_some(written)
+}
+
+/// `tokens`, lexed from `text` at their places in it, with each
+/// `stringify!(..)` among them made the string of its tokens as `text`
+/// writes them, as rustc expands the builtin: a crate macro's expansion is
+/// placed at its call, where no token's own text can be read back, as
+/// `stringify!($hex)` of iced's `color!(0x00ff00)` needs `0x00ff00` and not
+/// the number's decimal digits.
+#[cfg(feature = "rust-import")]
+pub(super) fn stringified(text: &str, tokens: Vec<(Token, Position)>) -> Vec<(Token, Position)> {
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        let call = matches!(&tokens[index].0, Token::Identifier(name) if name.as_str() == "stringify")
+            && matches!(tokens.get(index + 1), Some((Token::Bang, _)))
+            && matches!(
+                tokens.get(index + 2),
+                Some((Token::LeftParen | Token::LeftBracket | Token::LeftBrace, _))
+            );
+        let close = call.then(|| {
+            let mut depth = 0usize;
+            (index + 3..tokens.len()).find(|&at| match tokens[at].0 {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => {
+                    depth += 1;
+                    false
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace if depth == 0 => true,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth -= 1;
+                    false
+                }
+                _ => false,
+            })
+        });
+        let written = close.flatten().and_then(|close| {
+            let inner = &tokens[index + 3..close];
+            let written = if inner.is_empty() {
+                String::new()
+            } else {
+                stringify_tokens(text, inner, tokens[close].1)?
+            };
+            Some((close, written))
+        });
+        match written {
+            Some((close, written)) => {
+                out.push((
+                    Token::StringConstant(Box::new(written.into())),
+                    tokens[index].1,
+                ));
+                index = close + 1;
+            }
+            None => {
+                out.push(tokens[index].clone());
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn stringify_tokens(
     text: &str,
     tokens: &[(Token, Position)],
@@ -503,11 +584,17 @@ pub(super) fn stringify_tokens(
         let index = line + at.position()?.checked_sub(1)?;
         (index <= chars.len()).then_some(index)
     };
+    // A token a crate's macro wrote has its place in the macro's own text,
+    // which is no place here: the token before it runs as far as it is
+    // written, as one written before tokens from elsewhere does.
     let starts = tokens
         .iter()
         .map(|(_, at)| offset(*at))
         .chain(std::iter::once(offset(end)))
-        .collect::<Option<Vec<usize>>>()?;
+        .collect::<Vec<Option<usize>>>();
+    if starts.iter().all(Option::is_none) {
+        return None;
+    }
     // A token runs to the next one's start. One a macro's expansion put
     // before tokens from elsewhere (`stringify!($hex)`) runs as far as it
     // is written: a word, a number or a quoted literal.
@@ -530,19 +617,17 @@ pub(super) fn stringify_tokens(
     let pieces: Vec<String> = starts
         .windows(2)
         .zip(tokens)
-        .map(|(pair, (token, _))| {
+        .map(|(pair, (token, _))| match (pair[0], pair[1]) {
             // Tokens a macro's own body wrote share its call's position.
-            if pair[1] == pair[0] {
-                return token.to_string();
-            }
-            if pair[1] < pair[0] {
-                return written(pair[0]);
-            }
-            chars[pair[0]..pair[1]]
+            (Some(start), Some(next)) if next == start => token.to_string(),
+            (Some(start), Some(next)) if next < start => written(start),
+            (Some(start), Some(next)) => chars[start..next]
                 .iter()
                 .collect::<String>()
                 .trim_end()
-                .to_string()
+                .to_string(),
+            (Some(start), None) => written(start),
+            (None, _) => token.to_string(),
         })
         .collect();
     // Rust's keywords, which an `(` after them is spaced from.
@@ -583,8 +668,8 @@ pub(super) fn stringify_tokens(
         };
         let next_piece = pieces[index + 1].as_str();
         // Joint in the source: no space.
-        let spaced = chars
-            .get(starts[index + 1].wrapping_sub(1))
+        let spaced = starts[index + 1]
+            .and_then(|next| chars.get(next.wrapping_sub(1)))
             .is_some_and(|c| c.is_whitespace());
         if !spaced {
             continue;
@@ -658,21 +743,29 @@ pub(super) fn split_arguments(tokens: Vec<(Token, Position)>) -> Vec<Vec<(Token,
 /// An expression's tokens as Rust's `stringify!` prints them: binary
 /// operators spaced, nothing around `.`, `::` and brackets.
 pub(crate) fn token_text(tokens: &[(Token, Position)]) -> String {
-    printed(tokens).0
+    printed(tokens, None).0
+}
+
+/// [`token_text`], each integer literal as `source` writes it at its
+/// place, where it does: `0x00ff00` stays `0x00ff00`, as a macro that
+/// stringifies it reads it (iced's `color!`), and not its value's digits.
+pub(crate) fn token_text_in(tokens: &[(Token, Position)], source: Option<&str>) -> String {
+    printed(tokens, source).0
 }
 
 /// Where the program writes each location call a crate macro call's
-/// expansion holds, from the call's input `tokens` as [`token_text`]
-/// prints them and where each call reads
+/// expansion holds, from the call's input `tokens` as [`token_text_in`]
+/// prints them from `source` and where each call reads
 /// (`rawr_import::expand::call::Location`): the token that starts the
 /// input's own call, or `None` for one the macro wrote, which reads at the
 /// call (#2291).
 #[cfg(feature = "rust-import")]
 pub(crate) fn location_origins(
     tokens: &[(Token, Position)],
+    source: Option<&str>,
     locations: &[Option<u32>],
 ) -> Vec<Option<Position>> {
-    let starts = printed(tokens).1;
+    let starts = printed(tokens, source).1;
     locations
         .iter()
         .map(|location| {
@@ -683,17 +776,23 @@ pub(crate) fn location_origins(
         .collect()
 }
 
-/// `tokens` as [`token_text`] prints them, and the byte offset in the
-/// text each token starts at.
-fn printed(tokens: &[(Token, Position)]) -> (String, Vec<usize>) {
+/// `tokens` as [`token_text_in`] prints them from `source`, and the byte
+/// offset in the text each token starts at.
+fn printed(tokens: &[(Token, Position)], source: Option<&str>) -> (String, Vec<usize>) {
     let mut text = String::new();
     let mut starts = Vec::with_capacity(tokens.len());
     let mut previous: Option<&Token> = None;
     let mut unary = false;
-    for (token, _) in tokens {
+    for (token, position) in tokens {
         let word = match token {
             Token::StringConstant(value) => format!("{:?}", value.as_str()),
             Token::CharConstant(value) => format!("{value:?}"),
+            Token::IntegerConstant(value)
+                if let Some(written) =
+                    source.and_then(|source| integer_as_written(source, *position, *value)) =>
+            {
+                written
+            }
             token => token.to_string(),
         };
         let operand_before = previous.is_some_and(ends_operand);
@@ -969,6 +1068,27 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
 #[cfg(test)]
 mod tests {
     use super::token_length;
+
+    /// A crate macro's expansion, as iced's `color!(0x00ff00)` gives it:
+    /// its `stringify!` is the literal as written, not its value's digits.
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_stringify_in_an_expansion_is_its_tokens_as_written() {
+        let text = "let hex = 0x00ff00 as u32; stringify!(0x00ff00).len()";
+        let lexed = super::lex_rust(&crate::Engine::new_raw(), text)
+            .into_iter()
+            .filter(|(token, _)| *token != crate::tokenizer::Token::EOF)
+            .collect();
+        let tokens = super::stringified(text, lexed);
+        assert!(tokens.iter().any(|(token, _)| matches!(
+            token,
+            crate::tokenizer::Token::StringConstant(written) if written.as_str() == "0x00ff00"
+        )));
+        assert!(!tokens.iter().any(|(token, _)| matches!(
+            token,
+            crate::tokenizer::Token::Identifier(name) if name.as_str() == "stringify"
+        )));
+    }
 
     #[test]
     fn a_tokens_length_is_its_whole_literal_or_word() {

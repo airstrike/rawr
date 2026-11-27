@@ -121,6 +121,9 @@ impl Proxy {
     /// `view(&state)` takes it.
     pub fn lend(&self) -> Dynamic {
         self.settle();
+        // What a lending call's output borrowed of it, which native code
+        // holds no longer (`Object::lending`).
+        self.pins.end_leases();
         self.value.clone()
     }
 
@@ -131,6 +134,26 @@ impl Proxy {
         self.settle();
         self.pins.clear();
         self.value.clone()
+    }
+
+    /// A call of the impl's method whose output borrows the value `&'b
+    /// mut`, and each `&'b mut` input native code lends it, past the call,
+    /// as [`Object::lending`] makes one for a trait's stand-in: the runner's
+    /// impl of iced's `Widget` for a program's type gives its `overlay`'s
+    /// elements so (#2698).
+    #[cfg(feature = "rust-import")]
+    pub fn lending<'b, R>(
+        &'b mut self,
+        call: impl FnOnce(&mut Self, crate::scope::Nonce) -> Dynamic,
+        give: impl FnOnce(&mut crate::scope::Region<'b>, Dynamic) -> R,
+    ) -> R {
+        let mut region = crate::scope::Region::<'b>::lending();
+        let nonce = region.nonce();
+        let value = crate::scope::open_anchored(&mut region, || call(self, nonce));
+        let output = give(&mut region, value);
+        let leases = region.take_leases();
+        self.pins.lease(leases, region);
+        output
     }
 
     /// Store what a script function that took the value `&mut` left in
@@ -541,9 +564,10 @@ pub struct Member {
 }
 
 thread_local! {
-    /// What each [`Member`] this thread called was found as, by the
-    /// member's address, in the generation it was found in.
-    static FOUND: std::cell::RefCell<std::collections::HashMap<usize, std::sync::Arc<Found>>> =
+    /// What each member this thread called was found as, by the
+    /// [`Member`]'s address or the [`Object`]'s path, in the generation it
+    /// was found in.
+    static FOUND: std::cell::RefCell<std::collections::HashMap<Place, std::sync::Arc<Found>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -573,46 +597,195 @@ impl Member {
         Call { found }
     }
 
-    /// The member in the generation current on this thread, found again
-    /// only when that generation is another than this thread found it in.
+    /// The member in the generation current on this thread ([`found`]).
     fn found(&self) -> RawrResultOf<std::sync::Arc<Found>> {
-        let program = crate::future::current_program().ok_or_else(|| {
-            crate::future::error("rawr: no program runs script code on this thread")
-        })?;
-        let address = std::ptr::from_ref(self).addr();
-        // A thread whose own values are being dropped finds it each call.
-        let kept = FOUND
-            .try_with(|found| found.borrow().get(&address).cloned())
-            .ok()
-            .flatten()
-            .filter(|found| {
-                std::ptr::addr_eq(
-                    std::sync::Arc::as_ptr(&found.program),
-                    std::sync::Arc::as_ptr(&program),
-                )
-            });
-        if let Some(found) = kept {
-            return Ok(found);
-        }
-        let function = program.member(self.path).ok_or_else(|| {
-            crate::future::error(format!("rawr: the running program has no `{}`", self.path))
-        })?;
-        let found = std::sync::Arc::new(Found {
-            witnesses: program.member_witnesses(self.path).into_boxed_slice(),
-            callable: crate::future::Callable::of_item(function, program.clone()),
-            program,
-        });
-        // The one found before drops once the table is let go, as its drop
-        // may call back into script code.
-        let before = FOUND
-            .try_with(|kept| kept.borrow_mut().insert(address, found.clone()))
-            .ok()
-            .flatten();
-        drop(before);
-        Ok(found)
+        found(Place::Static(std::ptr::from_ref(self).addr()), self.path)
     }
 }
 
+/// Where a thread keeps what a member was found as: by a [`Member`]'s
+/// address, or by the path an [`Object`] holds.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Place {
+    Static(usize),
+    #[cfg(feature = "rust-import")]
+    Path(crate::ImmutableString),
+}
+
+/// The member at `path` in the generation current on this thread, found
+/// again only when that generation is another than this thread found it
+/// in at `place`.
+fn found(place: Place, path: &str) -> RawrResultOf<std::sync::Arc<Found>> {
+    let program = crate::future::current_program()
+        .ok_or_else(|| crate::future::error("rawr: no program runs script code on this thread"))?;
+    // A thread whose own values are being dropped finds it each call.
+    let kept = FOUND
+        .try_with(|found| found.borrow().get(&place).cloned())
+        .ok()
+        .flatten()
+        .filter(|found| {
+            std::ptr::addr_eq(
+                std::sync::Arc::as_ptr(&found.program),
+                std::sync::Arc::as_ptr(&program),
+            )
+        });
+    if let Some(found) = kept {
+        return Ok(found);
+    }
+    let function = program.member(path).ok_or_else(|| {
+        crate::future::error(format!("rawr: the running program has no `{path}`"))
+    })?;
+    let found = std::sync::Arc::new(Found {
+        witnesses: program.member_witnesses(path).into_boxed_slice(),
+        callable: crate::future::Callable::of_item(function, program.clone()),
+        program,
+    });
+    // The one found before drops once the table is let go, as its drop may
+    // call back into script code.
+    let before = FOUND
+        .try_with(|kept| kept.borrow_mut().insert(place, found.clone()))
+        .ok()
+        .flatten();
+    drop(before);
+    Ok(found)
+}
+
+/// A program's value of any type as a crate trait's object (#2698): what
+/// the runner's one stand-in for the trait holds. Each method of the
+/// trait calls the member of the value's impl the coercion named, found
+/// in the generation current where native code calls it, as a proxy's
+/// impl calls its [`Member`], so a program type no runner was built for,
+/// a crate's generic type at the program's arguments among them, is the
+/// trait's object with no rebuild.
+#[cfg(feature = "rust-import")]
+pub struct Object {
+    proxy: Proxy,
+    members: std::sync::Arc<[(crate::ImmutableString, crate::ImmutableString)]>,
+}
+
+#[cfg(feature = "rust-import")]
+impl Object {
+    /// The object of the program's value `value` coerced to the trait
+    /// (`object::PROGRAM`). A panic when it is not one, as the adapter
+    /// reads it only under that tag.
+    #[must_use]
+    pub fn new(value: Dynamic) -> Self {
+        let program = value
+            .try_cast_result::<crate::object::Program>()
+            .unwrap_or_else(|_| panic!("rawr: a program's trait object crossed as another value"));
+        Self {
+            proxy: Proxy::new(program.value),
+            members: program.members,
+        }
+    }
+
+    /// A second object of the same value, shared with this one, as the
+    /// trait's own body for a provided method takes it.
+    #[must_use]
+    pub fn share(&self) -> Self {
+        Self {
+            proxy: Proxy::new(self.proxy.lend()),
+            members: self.members.clone(),
+        }
+    }
+
+    /// Whether the value's impl writes `method`, which the trait's own
+    /// body runs where it doesn't.
+    #[must_use]
+    pub fn writes(&self, method: &str) -> bool {
+        self.members.iter().any(|(name, _)| name == method)
+    }
+
+    /// Begin a call of the impl's `method` from native code, as
+    /// [`Member::enter`] does. A panic when the impl has none.
+    #[must_use]
+    pub fn enter(&self, method: &str) -> Call {
+        let _entry = crate::future::entry();
+        let path = self
+            .members
+            .iter()
+            .find(|(name, _)| name == method)
+            .map(|(_, path)| path.clone())
+            .unwrap_or_else(|| panic!("rawr: a program's trait object has no `{method}`"));
+        let found = found(Place::Path(path.clone()), &path)
+            .unwrap_or_else(|error| panic!("{}", crate::future::message(&error)));
+        Call { found }
+    }
+
+    /// The value, lent shared for one call ([`Proxy::lend`]).
+    pub fn lend(&self) -> Dynamic {
+        self.proxy.lend()
+    }
+
+    /// `defaults`, the value whose impl runs a provided method's body
+    /// where the program's impl writes none, kept in the value's pins for
+    /// as long as `self` is borrowed: a provided method whose output
+    /// borrows its `&'b mut` receiver, as iced's `overlay` of a widget
+    /// that writes none, gives what borrows it for `'b` (#2698).
+    pub fn defaulted<D: 'static>(&mut self, defaults: D) -> &mut D {
+        // What an earlier call kept, which nothing borrows now that `self`
+        // is borrowed `&mut` again.
+        self.proxy.pins.end_leases();
+        let place = self.proxy.pins.keep_leased(defaults);
+        // SAFETY: `keep_leased` made the place from a box it keeps until
+        // the pins let their leases go, which only a borrow of `self`
+        // does, and the result borrows `self` exclusively for `'b`. No
+        // other reference is made from the place.
+        unsafe { &mut *place }
+    }
+
+    /// A call of the impl's method whose output borrows the value `&'b
+    /// mut`, and each `&'b mut` input native code lends it, past the call,
+    /// as iced's `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)` gives
+    /// elements that borrow both (#2698). `call` runs in a lending region
+    /// at `'b` whose nonce it takes, so each crate call the impl makes
+    /// that borrows so makes its output there ([`Region::lending`]), and
+    /// `give` takes what the impl gave out of that region at `'b`. What
+    /// those calls borrow of the value is kept in its pins, with the
+    /// region, while native code may hold the output: rustc ends the
+    /// output's borrow of the value before native code reaches it again,
+    /// and that is where the pins let them go.
+    ///
+    /// [`Region::lending`]: crate::scope::Region::lending
+    pub fn lending<'b, R>(
+        &'b mut self,
+        call: impl FnOnce(&mut Self, crate::scope::Nonce) -> Dynamic,
+        give: impl FnOnce(&mut crate::scope::Region<'b>, Dynamic) -> R,
+    ) -> R {
+        let mut region = crate::scope::Region::<'b>::lending();
+        let nonce = region.nonce();
+        let value = crate::scope::open_anchored(&mut region, || call(self, nonce));
+        let output = give(&mut region, value);
+        let leases = region.take_leases();
+        self.proxy.pins.lease(leases, region);
+        output
+    }
+
+    /// The value, lent `&mut` for one call ([`Proxy::lend_mut`]).
+    pub fn lend_mut(&mut self) -> Dynamic {
+        self.proxy.lend_mut()
+    }
+
+    /// Store what a call that took the value `&mut` left in its place
+    /// ([`Proxy::restore`]).
+    pub fn restore(&mut self, value: Dynamic) {
+        self.proxy.restore(value);
+    }
+
+    /// The value, given back whole ([`Proxy::into_dynamic`]).
+    pub fn into_dynamic(self) -> Dynamic {
+        self.proxy.into_dynamic()
+    }
+
+    /// The strings native values borrow from the value while it is lent
+    /// shared.
+    #[must_use]
+    pub const fn pins(&self) -> &crate::scope::Pins {
+        self.proxy.pins()
+    }
+}
+
+/// One call from native code into a [`Member`], in one generation.
 /// One call from native code into a [`Member`], in one generation.
 pub struct Call {
     found: std::sync::Arc<Found>,

@@ -42,6 +42,33 @@ pub fn argument_impl_name(index: u32) -> Box<str> {
     format!("{RESERVED}impl_{index}").into_boxed_str()
 }
 
+/// The index of the parameter [`argument_impl_name`] names `name`, when
+/// it is such a name.
+#[must_use]
+pub fn argument_impl_index(name: &str) -> Option<u32> {
+    name.strip_prefix(RESERVED)?
+        .strip_prefix("impl_")?
+        .parse()
+        .ok()
+}
+
+/// The name a signature declares a borrowed trait-object input's own
+/// parameter by ([`OBJECT_INPUT`]), apart from a declared `impl Trait`'s:
+/// the object, which is unsized, may fill it.
+#[must_use]
+pub fn object_input_name(index: u32) -> Box<str> {
+    format!("{RESERVED}object_{index}").into_boxed_str()
+}
+
+/// Whether `name` is a borrowed trait-object input's own parameter's
+/// ([`object_input_name`]).
+#[must_use]
+pub fn is_object_input(name: &str) -> bool {
+    name.strip_prefix(RESERVED)
+        .and_then(|rest| rest.strip_prefix("object_"))
+        .is_some_and(|index| index.parse::<u32>().is_ok())
+}
+
 /// The name a signature declares the synthetic parameter `identity`
 /// ([`projection_output`]) by: its parameter's index and its ordinal. It
 /// is reserved, as [`argument_impl_name`]'s is, so a crate's own `SOutput`
@@ -113,6 +140,10 @@ pub enum Kind {
 /// The bit that marks a synthetic type parameter: the `Output` of the
 /// future parameter in its low bits (D527).
 pub const FUTURE_OUTPUT: u32 = 0x8000_0000;
+
+/// The name's prefix of the type parameter a borrowed trait-object input
+/// (`&dyn Trait`) is read as before it is renamed ([`object_input_name`]).
+pub const OBJECT_INPUT: &str = "impl dyn#";
 
 /// The synthetic parameter that stands for `F::Output` of the future
 /// parameter at `index`.
@@ -266,14 +297,56 @@ pub struct Forwarding {
 pub struct Outputs {
     defaults: Box<[Option<super::convert::Type>]>,
     methods: Box<[(Box<str>, Opaque)]>,
+    /// Each method of the trait's vtable, each parameter by position, when
+    /// the trait is object safe and the runner can write each: a program's
+    /// value of any type crosses as the trait's one stand-in, which calls
+    /// the value's impl through them (#2698).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    object: Option<Box<[super::object::Method]>>,
+    /// The supertraits whose vtables the stand-in implements too.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    supertraits: Box<[super::object::Supertrait]>,
 }
 
 impl Outputs {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         defaults: Box<[Option<super::convert::Type>]>,
         methods: Box<[(Box<str>, Opaque)]>,
     ) -> Self {
-        Self { defaults, methods }
+        Self {
+            defaults,
+            methods,
+            object: None,
+            supertraits: Box::default(),
+        }
+    }
+
+    /// These outputs, of a trait whose vtable holds `object`, beside its
+    /// `supertraits`'.
+    #[must_use]
+    pub(crate) fn with_object(
+        self,
+        object: Option<Box<[super::object::Method]>>,
+        supertraits: Box<[super::object::Supertrait]>,
+    ) -> Self {
+        Self {
+            object,
+            supertraits,
+            ..self
+        }
+    }
+
+    /// The supertraits whose vtables the trait's stand-in implements.
+    #[must_use]
+    pub fn supertraits(&self) -> &[super::object::Supertrait] {
+        &self.supertraits
+    }
+
+    /// The methods of the trait's vtable, each parameter by position, when
+    /// the runner's stand-in for the trait can implement each.
+    #[must_use]
+    pub fn object(&self) -> Option<&[super::object::Method]> {
+        self.object.as_deref()
     }
 
     /// The default of each of the trait's type parameters other than
@@ -556,6 +629,11 @@ pub enum Scope {
     /// The output borrows the receiver, as `BytesStart::name(&self)`'s
     /// does: the frame holds the receiver borrowed.
     Borrows,
+    /// The output keeps slices of crate values borrowed that the program
+    /// lends from places, as iced's `layout.iter_mut(&mut tree.children)`
+    /// does: the frame holds each lend for the rest of the scope, and
+    /// each element an item borrows is lent from the frame's region.
+    Lends,
 }
 
 /// How a method's guard output is reached: read through `Deref`, as
@@ -903,7 +981,17 @@ impl Parameter {
     /// signature can declare it: rustc's own name, as `impl Into<Size>`,
     /// is what a message shows.
     pub(crate) fn into_argument_impl(mut self) -> Self {
-        let written = std::mem::replace(&mut self.name, argument_impl_name(self.index));
+        let object = self
+            .shown
+            .as_deref()
+            .unwrap_or(&self.name)
+            .starts_with(OBJECT_INPUT);
+        let name = if object {
+            object_input_name(self.index)
+        } else {
+            argument_impl_name(self.index)
+        };
+        let written = std::mem::replace(&mut self.name, name);
         self.shown.get_or_insert(written);
         self.argument_impl = true;
         self

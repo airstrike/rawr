@@ -634,6 +634,32 @@ impl<'a> Parser<'a> {
                 Some(self.models.definition(id).clone())
             }
             Some(ty) if qualified_model.is_none() => {
+                // A crate type's function of a crate trait the parameter's
+                // bound names, as iced's `Theme::default()` of `Theme:
+                // Catalog` at iced's `Theme`: the crate's item at the type's
+                // path, as `Ink::default()` written out is (#2698).
+                if let Ty::Host { proof, .. } = &ty
+                    && owner_id(&ty).is_none_or(|id| self.models.method(id, &member).is_none())
+                {
+                    let path = format!("{}::{member}", proof.definition.path());
+                    let items = self.models.host_items(&path).map(<[_]>::to_vec);
+                    // Of a family of several impls' functions, the one of
+                    // the trait the bound names.
+                    #[cfg(feature = "rust-import")]
+                    let items = items.or_else(|| self.bound_family_items(&ty, &path));
+                    if let Some(items) = items {
+                        let item_owner = self.models.item_owner(&path).cloned();
+                        let items = value_or_call(
+                            items,
+                            matches!(self.peek(), Token::LeftParen | Token::Unit),
+                        );
+                        return self.parse_host_function_or_item(
+                            items.into_boxed_slice(),
+                            item_owner,
+                            path_span,
+                        );
+                    }
+                }
                 let Some(definition) = owner_id(&ty)
                     .and_then(|id| self.models.method(id, &member))
                     .cloned()
@@ -662,7 +688,10 @@ impl<'a> Parser<'a> {
             if let Some(definition) = self.models.host.type_(&full).cloned()
                 && self.models.host_items(&format!("{full}::from")).is_none()
             {
-                let target = type_def::Id::foreign(&definition.path());
+                let target = type_def::Id::foreign(&crate::host::defined::Defined::of_type(
+                    &definition,
+                    self.models.item_owner(&full),
+                ));
                 // `Element::from(widget)`: a widget has no `From` conversion
                 // into the type its facade trait erases to, as in rustc.
                 if !self.models.conversions.contains_key(&target)
@@ -780,6 +809,23 @@ impl<'a> Parser<'a> {
                     owner_span,
                     member_span,
                 );
+            }
+            // `Tree::new(widget)` of a crate type an opened module's
+            // inherent impl gives the generic `new`: that function from
+            // source at the call's types, as `Self::new` there is.
+            #[cfg(feature = "rust-import")]
+            if let item::Import::Type { definition, owner } = &binding.target
+                && let Some(function) = self.source_inherent_member(
+                    type_def::Id::foreign(&crate::host::defined::Defined::of_type(
+                        definition,
+                        owner.as_ref(),
+                    )),
+                    &member,
+                )
+                && function.receiver().is_none()
+            {
+                let ty = impl_self_ty(&function, &BTreeMap::new());
+                return self.parse_owner_function(ty, function, owner_span, member, member_span);
             }
             let path = format!("{}::{member}", binding.qualified);
             // `Trait::method(receiver, ..)` through a crate's trait a `use`
@@ -963,14 +1009,17 @@ impl<'a> Parser<'a> {
                 _ => crate::resolve::std_reexport(&format!("{owner}::{member}"), &self.models.host)
                     .to_string(),
             };
+            // A macro beside a crate function of its name, as
+            // `events::framed!` beside the `framed` a glob re-exports: the
+            // namespace the `!` names, as rustc's.
+            let bang = matches!(self.peek(), Token::Bang);
             if let Some(items) = self
                 .models
                 .host_items(&path)
+                .map(|items| macro_or_value(items.to_vec(), bang))
                 .filter(|items| items.iter().all(|item| item.imported_identity().is_none()))
-                .map(<[_]>::to_vec)
             {
                 let item_owner = self.models.item_owner(&path).cloned();
-                let items = macro_or_value(items, matches!(self.peek(), Token::Bang));
                 let items =
                     value_or_call(items, matches!(self.peek(), Token::LeftParen | Token::Unit));
                 return if items.first().is_some_and(|item| item.kind().is_macro())
@@ -1147,7 +1196,8 @@ impl<'a> Parser<'a> {
                     member_span,
                 );
             }
-            let path = format!("{owner}::{member}");
+            let path =
+                self.imported_member_path(&definition, format!("{owner}::{member}"), &member);
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 if let Some(error) = self.pending_family_call(&path, &member, member_span) {
                     return Err(error);

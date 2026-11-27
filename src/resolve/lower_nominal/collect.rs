@@ -164,6 +164,82 @@ impl<'a> Parser<'a> {
         Ok(format!("{SENTINEL}{index}"))
     }
 
+    /// The native uses a template's generic read reached at types that
+    /// are the crates' alone (`all_native`), which every instance of the
+    /// template makes: its calls collected so far and its structural uses
+    /// whose types are settled. A read stops at the first thing it can't
+    /// lower generically, so what it reached is what it gives.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn all_native_uses(&mut self) -> Vec<ImportedUse> {
+        self.reached_uses(|using| {
+            using
+                .types
+                .iter()
+                .all(rawr_import::classify::representability::convert::Type::all_native)
+                && using.functions.is_empty()
+                && using.mappers.is_empty()
+                && using.slots.is_empty()
+                && !using.callable
+        })
+    }
+
+    /// The native uses a demand read reached at settled types (decision
+    /// 3): the runner's stand-ins for the program's types among them, as
+    /// `crate::Message`, and a call that takes a closure, whose adapter
+    /// takes it whatever it is. One that fills a slot or takes one of the
+    /// program's functions is the program's to make.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn demanded_uses(&mut self) -> Vec<ImportedUse> {
+        self.reached_uses(|using| {
+            using
+                .types
+                .iter()
+                .all(rawr_import::classify::representability::convert::Type::settled)
+                && using.functions.is_empty()
+                && using.mappers.is_empty()
+                && using.slots.is_empty()
+        })
+    }
+
+    /// The uses a read reached that `keep` keeps: its calls collected so
+    /// far and its structural uses whose types are settled.
+    #[cfg(feature = "rust-import")]
+    fn reached_uses(&mut self, keep: impl Fn(&ImportedUse) -> bool) -> Vec<ImportedUse> {
+        let ops = std::mem::take(&mut self.ops);
+        for op in &ops {
+            if let Op::Intrinsic { operation } = op
+                && operation.item.imported_identity().is_some()
+            {
+                let _ = self.collect_imported_call(operation);
+            }
+        }
+        let mut unsettled = BTreeSet::new();
+        for (index, instance, span) in std::mem::take(&mut self.pending_structural) {
+            let Some(context) = self.imported.as_mut() else {
+                break;
+            };
+            let types = instance
+                .iter()
+                .map(|ty| imported_surface_type(&self.inference, &self.models, ty, span, context))
+                .collect::<Result<Box<[_]>, _>>();
+            match types {
+                Ok(types) => context.uses[index].types = types,
+                Err(_) => {
+                    unsettled.insert(index);
+                }
+            }
+        }
+        let Some(context) = self.imported.as_mut() else {
+            return Vec::new();
+        };
+        std::mem::take(&mut *context.uses)
+            .into_iter()
+            .enumerate()
+            .filter(|(index, using)| !unsettled.contains(index) && keep(using))
+            .map(|(_, using)| using)
+            .collect()
+    }
+
     #[cfg(feature = "rust-import")]
     pub(super) fn finish_structural_instances(&mut self) -> Result<(), Error> {
         self.finish_projections();
@@ -231,7 +307,12 @@ impl<'a> Parser<'a> {
             for op in ops {
                 if let Op::Intrinsic { operation } = op {
                     if operation.item.imported_identity().is_some() {
-                        self.collect_imported_call(operation)?;
+                        // A demand read keeps each call it can settle: one
+                        // on a parameter it leaves open adds nothing.
+                        match self.collect_imported_call(operation) {
+                            Err(_) if self.demand.is_some() => {}
+                            collected => collected?,
+                        }
                     } else if self.symbolic_only {
                         self.collect_symbolic_call(operation);
                     }
@@ -316,6 +397,176 @@ impl<'a> Parser<'a> {
             .collect_dependencies(dependencies);
     }
 
+    /// The trait's arguments a call of its method over its `Self`
+    /// (`surface::member`) on `receiver` leaves open, from the body's
+    /// param-env, as rustc selects `W: Widget<Message, ..>` for
+    /// `self.content.size()` in an instance at `W = Text`.
+    #[cfg(feature = "rust-import")]
+    fn fix_member_by_param_env(
+        &mut self,
+        item: &crate::host::item::Definition,
+        ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+        receiver: Option<&Ty>,
+    ) {
+        let path = item.path();
+        let (Some((trait_path, _)), Some(receiver)) =
+            (path.rsplit_once("::__rawr_self::"), receiver)
+        else {
+            return;
+        };
+        let Some(header) = crate::host::path::Path::parse(trait_path)
+            .ok()
+            .and_then(|path| self.models.host.trait_header(&path).cloned())
+        else {
+            return;
+        };
+        let Some(arguments) = header
+            .parameters
+            .iter()
+            .map(|name| {
+                ordered
+                    .iter()
+                    .find(|(candidate, ..)| candidate == name)
+                    .map(|(_, ty, _)| ty.clone())
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let mut receiver = self.inference.resolve(receiver);
+        while let Ty::Reference { target, .. } = receiver {
+            receiver = self.inference.resolve(&target);
+        }
+        self.fix_by_param_env(&receiver, header.identity, &arguments);
+    }
+
+    /// The parameters a crate impl's own method on `receiver` leaves open
+    /// that none of its inputs or its output names, from the body's
+    /// param-env, as rustc's generic body calls `self.content.draw(..)`
+    /// under `W: Widget<Message, ..>` at the program's `Message` where the
+    /// instance's `W` is iced's `Text`, whose impl is at any `Message`.
+    /// The impl's header gives its trait's arguments at the impl's own
+    /// parameters.
+    #[cfg(feature = "rust-import")]
+    fn fix_impl_member_by_param_env(
+        &mut self,
+        item: &crate::host::item::Definition,
+        ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+        receiver: Option<&Ty>,
+    ) {
+        let (Some(identity), Some(receiver)) = (item.trait_of().copied(), receiver) else {
+            return;
+        };
+        if !ordered
+            .iter()
+            .any(|(_, ty, _)| contains_inference(&self.inference.resolve(ty)))
+        {
+            return;
+        }
+        // The receiver after each autoderef step, innermost first: a `&str`
+        // impl's `self` is the string's `&str` itself, as rustc's probe
+        // stops at the `&str` for `impl Widget<..> for &str`.
+        let mut receivers = vec![self.inference.resolve(receiver)];
+        while let Some(Ty::Reference { target, .. }) = receivers.last() {
+            let target = self.inference.resolve(target);
+            receivers.push(target);
+        }
+        // A string a text member takes `&mut` as a `String` (`surface::
+        // text`) is the `&str` a bound names too: Rawr's string is one type
+        // for both.
+        if receivers.last() == Some(&Ty::String) {
+            receivers.push(Ty::Str);
+        }
+        for receiver in receivers.into_iter().rev() {
+            if self.fix_impl_member_at(identity, ordered, &receiver) {
+                return;
+            }
+        }
+    }
+
+    /// [`Self::fix_impl_member_by_param_env`] at one `receiver`: whether
+    /// the body's param-env bounds it by the trait `identity` and one of
+    /// the trait's impl headers fits it.
+    #[cfg(feature = "rust-import")]
+    fn fix_impl_member_at(
+        &mut self,
+        identity: [u8; 32],
+        ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+        receiver: &Ty,
+    ) -> bool {
+        let receiver = receiver.clone();
+        let Some(given) = self.param_env_arguments(&receiver, identity) else {
+            return false;
+        };
+        let headers = self
+            .models
+            .host
+            .owned_impl_headers(identity)
+            .map(|(header, owner)| (header.clone(), owner.cloned()))
+            .collect::<Vec<_>>();
+        let mut fitting = Vec::new();
+        for (header, owner) in headers {
+            let Some(mut parameters) = impl_parameters(&header.parameters, ordered) else {
+                continue;
+            };
+            let Ok(self_type) = self.instantiate_host_type(
+                &header.self_type,
+                &mut parameters,
+                "impl",
+                Span::NONE,
+                owner.as_ref(),
+                None,
+            ) else {
+                continue;
+            };
+            // An impl for `&str` is Rawr's string's, whichever of its
+            // types the call holds it as (`surface::text`).
+            let text = self.inference.resolve(&self_type).is_text() && receiver.is_text();
+            if !text && !self.unifies(&self_type, &receiver) {
+                continue;
+            }
+            let Ok(arguments) = header
+                .arguments
+                .iter()
+                .map(|argument| {
+                    self.instantiate_host_type(
+                        argument,
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        owner.as_ref(),
+                        None,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                continue;
+            };
+            // Each facade that holds the impl gives its header: one impl.
+            let arguments = arguments
+                .iter()
+                .map(|argument| self.inference.resolve(argument))
+                .collect::<Vec<_>>();
+            if !fitting.contains(&arguments) {
+                fitting.push(arguments);
+            }
+        }
+        let Ok([arguments]) = <[_; 1]>::try_from(fitting) else {
+            return false;
+        };
+        if given.len() == arguments.len()
+            && given
+                .iter()
+                .zip(&arguments)
+                .all(|(given, argument)| self.unifies(given, argument))
+        {
+            for (given, argument) in given.iter().zip(&arguments) {
+                let _ = self.unify_type(given, argument);
+            }
+        }
+        true
+    }
+
     #[cfg(feature = "rust-import")]
     pub(super) fn collect_imported_call(
         &mut self,
@@ -328,6 +579,7 @@ impl<'a> Parser<'a> {
             operands,
             output,
             span,
+            stand_ins,
             ..
         } = operation;
         let span = *span;
@@ -404,10 +656,48 @@ impl<'a> Parser<'a> {
             .imported_constants(item, requirements)
             .ok_or_else(|| unknown_const_argument(item, span))?;
         let ordered = instance_parameters(item, requirements);
+        // A demand read takes them as the program's check does, so its
+        // uses are the ones a later instance's check makes (decision 3).
+        if !self.collecting_instances || self.demand.is_some() {
+            let receiver = operands.first().map(|(ty, ..)| ty);
+            self.fix_member_by_param_env(item, &ordered, receiver);
+            self.fix_impl_member_by_param_env(item, &ordered, receiver);
+        }
+        // A demand read's call through a bound on a parameter it leaves
+        // open binds the native impls' members before its own use, which
+        // the open parameter keeps from crossing.
+        if self.demand.is_some() {
+            self.bind_exact_instances(item, requirements, span);
+        }
         let mut types = self.imported_entries(ordered.len())?;
         for (name, ty, _) in ordered {
             if reaches_param(&self.inference.resolve(ty)) {
                 self.reaches_host = true;
+            }
+            // A trait's argument the call of the trait's method leaves open
+            // that none of the method's inputs or its output names, as `M`
+            // of `<Label as Diffed<_>>::label(&mut self)`, is one rustc
+            // can't infer where the runner calls the method either (E0282).
+            if matches!(self.inference.resolve(ty), Ty::Infer(_))
+                && !self.collecting_instances
+                && rawr_import::surface::member::declared(&item.path())
+                && !item
+                    .signature()
+                    .parameters()
+                    .iter()
+                    .chain(std::iter::once(item.signature().output()))
+                    .any(|ty| ty.mentions_parameter(name))
+            {
+                return Err(Error::InvalidHostOperation {
+                    item: rawr_import::surface::member::written(&item.path()).into(),
+                    reason: format!(
+                        "type annotations needed: cannot infer type of the type parameter \
+                         `{}` (E0282)",
+                        item.signature().shown(name)
+                    )
+                    .into(),
+                    operation: span,
+                });
             }
             let length = self.related_array_length(item, name, ty);
             let convert = if fixed_parameter(item, name) {
@@ -415,7 +705,7 @@ impl<'a> Parser<'a> {
             } else {
                 imported_surface_type
             };
-            let mut surface = convert(
+            let surface = convert(
                 &self.inference,
                 &self.models,
                 ty,
@@ -435,6 +725,7 @@ impl<'a> Parser<'a> {
                 },
                 error => error,
             })?;
+            let mut surface = super::object_stand_in::standing_in(surface, name, stand_ins);
             fix_array_length(&mut surface, length);
             types.push(surface);
         }
@@ -558,6 +849,9 @@ impl<'a> Parser<'a> {
             application: item.application().copied(),
             span,
         });
+        if self.demand.is_none() {
+            self.bind_exact_instances(item, requirements, span);
+        }
         Ok(())
     }
 
@@ -667,4 +961,36 @@ impl<'a> Parser<'a> {
             })
             .collect()
     }
+}
+
+/// The types an impl member's call gives the parameters of its impl's
+/// header, `declared` in the impl's order, from the member's own
+/// (`ordered`): each by its name, or, where the member's signature names
+/// it by its index (`signature::argument_impl_name`), as a member names a
+/// parameter its receiver's type doesn't give, the next of those by
+/// index. `None` when they don't pair one to one.
+#[cfg(feature = "rust-import")]
+fn impl_parameters(
+    declared: &[ImmutableString],
+    ordered: &[&(ImmutableString, Ty, crate::capability::Set)],
+) -> Option<BTreeMap<ImmutableString, Ty>> {
+    let mut unnamed = ordered
+        .iter()
+        .filter_map(|(name, ty, _)| {
+            let index =
+                rawr_import::classify::representability::signature::argument_impl_index(name)?;
+            Some((index, ty))
+        })
+        .collect::<Vec<_>>();
+    unnamed.sort_by_key(|(index, _)| *index);
+    let mut unnamed = unnamed.into_iter().map(|(_, ty)| ty);
+    let mut parameters = BTreeMap::new();
+    for name in declared {
+        let ty = match ordered.iter().find(|(own, ..)| own == name) {
+            Some((_, ty, _)) => ty,
+            None => unnamed.next()?,
+        };
+        parameters.insert(name.clone(), ty.clone());
+    }
+    unnamed.next().is_none().then_some(parameters)
 }

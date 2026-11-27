@@ -136,6 +136,7 @@ fn check(
         default: None,
         host: false,
         crate_bounds: Box::default(),
+        native_traits: Box::default(),
         lifted: false,
         constant: None,
         fixed: None,

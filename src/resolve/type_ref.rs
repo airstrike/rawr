@@ -731,6 +731,8 @@ fn resolve_path(
                 span: binding.span,
             })));
         }
+        #[cfg(feature = "rust-import")]
+        defaulted_trait_arguments(&name, &mut arguments, host, span);
         return Ok(Path {
             name: format!("{DYN_PREFIX}{name}").into(),
             target: Target::Builtin,
@@ -745,11 +747,26 @@ fn resolve_path(
         .position(|segment| segment.name.text == item::type_ref::QUALIFIED_SEGMENT)
     {
         let segments = &parsed.segments;
+        // A crate trait is known by its path, which two of a parameter's
+        // bounds' traits may end alike (`text::Catalog` and
+        // `container::Catalog`); a program's trait by its name.
         let trait_name = match &segments[index].arguments[..] {
-            [item::type_ref::Argument::Type(item::type_ref::Type::Path(path))] => path
-                .segments
-                .last()
-                .map(|segment| segment.name.text.clone()),
+            [item::type_ref::Argument::Type(item::type_ref::Type::Path(path))] => {
+                let written = path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                if path.segments.len() > 1 && super::crate_trait_identity(host, &written).is_some()
+                {
+                    Some(written.into())
+                } else {
+                    path.segments
+                        .last()
+                        .map(|segment| segment.name.text.clone())
+                }
+            }
             _ => None,
         };
         let (Some(trait_name), [last]) = (trait_name, &segments[index + 1..]) else {
@@ -784,9 +801,15 @@ fn resolve_path(
         .join("::")
         .into();
     // A path into std, core or alloc is std's, as rustc resolves it: one std
-    // doesn't have, or an unstable item, is refused here (D711).
+    // doesn't have, or an unstable item, is refused here (D711). A path
+    // through a module a `use` binds by std's name, as iced's `use
+    // crate::core;`, is the module's, which the scope holds it by.
     let std = match parsed.segments.first() {
-        Some(first) if !parsed.global && !types.contains_key(first.name.text.as_str()) => {
+        Some(first)
+            if !parsed.global
+                && !types.contains_key(first.name.text.as_str())
+                && !types.contains_key(name.as_str()) =>
+        {
             super::std_path::check(&name, crate::std_table::Namespace::Type, "type", span)?
         }
         _ => None,
@@ -808,10 +831,15 @@ fn resolve_path(
     };
 
     // `T::Output`, `Self::Output` or `Shape::Output`: an associated type of a
-    // generic parameter or a script type.
+    // generic parameter or a script type. A generic associated type's
+    // lifetimes, as `Theme::Class<'a>` of iced's `Container` names, are
+    // erased as every lifetime is.
     if let [prefix @ .., last] = &parsed.segments[..]
         && !prefix.is_empty()
-        && last.arguments.is_empty()
+        && last
+            .arguments
+            .iter()
+            .all(|argument| matches!(argument, item::type_ref::Argument::Lifetime(_)))
         && declared(types, name.as_str()).is_none()
     {
         let base_name = prefix
@@ -1141,6 +1169,54 @@ fn defaulted_arguments(
     arguments.extend(filled.drain(written..).map(Argument::Type));
 }
 
+/// The defaulted arguments a native trait's object is written without, as
+/// rustc fills them: `dyn Operation` is `dyn Operation<()>`, as the crate's
+/// signatures name it. `arguments` holds the written ones first, then the
+/// `=Name<T>` bindings. Nothing is filled unless every missing argument
+/// has a default Rawr can name.
+#[cfg(feature = "rust-import")]
+fn defaulted_trait_arguments(
+    trait_name: &str,
+    arguments: &mut Vec<Argument>,
+    host: &host::Registry,
+    span: Span,
+) {
+    if !is_native_trait(trait_name) {
+        return;
+    }
+    let Some(header) = host::path::Path::parse(trait_name)
+        .ok()
+        .and_then(|path| host.trait_header(&path))
+    else {
+        return;
+    };
+    let bound = |argument: &Argument| {
+        matches!(argument, Argument::Type(Type::Path(binding))
+            if binding.name.starts_with(item::type_ref::BINDING_PREFIX))
+    };
+    let mut filled = arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            Argument::Type(ty) if !bound(argument) => Some(ty.clone()),
+            Argument::Type(_) | Argument::Lifetime(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let written = filled.len();
+    let owner = host.type_owner(trait_name);
+    for index in written..header.parameters.len() {
+        let Some(Some(default)) = header.defaults.get(index) else {
+            return;
+        };
+        let parameters = &header.parameters[..index];
+        let Some(ty) = host_type(default, parameters, &filled, owner, None, host, span) else {
+            return;
+        };
+        filled.push(ty);
+    }
+    let at = arguments.iter().position(bound).unwrap_or(arguments.len());
+    arguments.splice(at..at, filled.drain(written..).map(Argument::Type));
+}
+
 /// A host signature type as a header names it, with `parameters` read as
 /// `arguments`. `None` when the header cannot name it.
 fn host_type(
@@ -1234,6 +1310,24 @@ fn host_type(
             convert(std::slice::from_ref(element.as_ref()), owner)?,
         ),
         Shape::Keyed(name, types) => path(name, Target::Builtin, convert(types, owner)?),
+        // A `dyn Fn(A..) -> B` a crate's alias boxes, as iced_core's
+        // `text::StyleFn<'a, Theme>` is `Box<dyn Fn(&Theme) -> Style +
+        // 'a>`: the function type the program writes so, its inputs then
+        // its output.
+        Shape::Callable { input, output } => {
+            let inputs = match input.shape() {
+                Shape::Unit => Vec::new(),
+                Shape::Tuple(members) => members.to_vec(),
+                _ => vec![input.as_ref().clone()],
+            };
+            let mut types = convert(&inputs, owner)?.into_vec();
+            types.extend(convert(std::slice::from_ref(output.as_ref()), owner)?);
+            path(
+                item::type_ref::FN_TYPE,
+                Target::Builtin,
+                types.into_boxed_slice(),
+            )
+        }
         Shape::Reference { mutable, target } => Type::Reference {
             mutable: *mutable,
             lifetime: None,

@@ -128,6 +128,9 @@ impl Graph {
                             .flat_map(|bin| std::iter::once(bin.root()).chain(bin.modules())),
                     )
                     .map(|module| (module.path().to_path_buf(), module.text().to_owned()))
+                    // A crate module whose generic items rawr runs is a
+                    // Rust input too: its source holds only those items.
+                    .chain(package.crate_sources().iter().cloned())
                     .collect(),
                 cargo: package
                     .cargo_manifest()

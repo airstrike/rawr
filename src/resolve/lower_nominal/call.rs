@@ -504,6 +504,13 @@ impl<'a> Parser<'a> {
         if place.lvalue.is_none() {
             return Ok(origin::Fragment::default());
         }
+        if let Some(Lvalue::Slice(slice)) = &place.lvalue
+            && let Some(single) = &slice.single
+        {
+            let mut element = place.clone();
+            element.lvalue = Some((**single).clone());
+            return self.store_into(&element, &format!("{value}[0]"));
+        }
         if let Some(Lvalue::Slice(slice)) = &place.lvalue {
             self.require_mutable_binding(&slice.binding, place.span)?;
             let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
@@ -530,6 +537,21 @@ impl<'a> Parser<'a> {
         Ok(target)
     }
 
+    /// The place `value` is when it is `self` in a `&mut self` method:
+    /// the receiver's binding, whose fields are places too.
+    pub(super) fn mutable_receiver_place(&self, value: &ParsedExpr) -> Option<Lvalue> {
+        let receiver = value.lvalue.is_none()
+            && self.closures.is_empty()
+            && value.source.as_str() == "self"
+            && self.bindings.get("self").is_some_and(|binding| {
+                binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
+            });
+        receiver.then(|| Lvalue::Binding {
+            binding: "self".into(),
+            ty: value.ty.clone(),
+        })
+    }
+
     /// The `&mut` arguments at `indexes` of a call, each a `&mut` place
     /// borrowed once, as Rust's borrow rules have them (E0499): two
     /// borrows of one local are apart only as two of its fields.
@@ -545,18 +567,9 @@ impl<'a> Parser<'a> {
             };
             // `self` in a `&mut self` method, passed on to a `&mut`
             // parameter, is the receiver's place.
-            let receiver = place.lvalue.is_none()
-                && self.closures.is_empty()
-                && place.source.as_str() == "self"
-                && self.bindings.get("self").is_some_and(|binding| {
-                    binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
-                });
             let mut place = place.clone();
-            if receiver {
-                place.lvalue = Some(Lvalue::Binding {
-                    binding: "self".into(),
-                    ty: place.ty.clone(),
-                });
+            if place.lvalue.is_none() {
+                place.lvalue = self.mutable_receiver_place(&place);
             }
             let place = &place;
             // `twice(&mut |x| v.push(x))`: the closure is a temporary the
@@ -1008,6 +1021,37 @@ impl<'a> Parser<'a> {
 
     pub(super) fn host_callable(&mut self, value: &mut ParsedExpr) -> Result<(), Error> {
         self.host_callable_of(value, false)
+    }
+
+    /// `&mut f` or `&f` of a named function or closure where the host takes
+    /// a borrow of a callable, as `operation.traverse(&mut |operation| ..)`
+    /// gives iced's `&mut dyn FnMut(&mut dyn Operation)`: the host callable
+    /// it is, borrowed by the binding for the call alone.
+    pub(super) fn borrowed_host_callable(
+        &mut self,
+        value: &mut ParsedExpr,
+        nullary: bool,
+    ) -> Result<(), Error> {
+        let Ty::Reference { mutable, target } = self.inference.resolve(&value.ty) else {
+            return Ok(());
+        };
+        if !matches!(self.inference.resolve(&target), Ty::FnItem { .. }) {
+            return Ok(());
+        }
+        let mut item = value.clone();
+        item.ty = *target;
+        self.host_callable_of(&mut item, nullary)?;
+        if !matches!(item.ty, Ty::Callable { .. }) {
+            return Ok(());
+        }
+        value.source = item.source;
+        value.prelude = item.prelude;
+        value.ty = Ty::Reference {
+            mutable,
+            target: Box::new(item.ty),
+        };
+        value.lvalue = None;
+        Ok(())
     }
 
     /// [`host_callable`](Self::host_callable), where a function of no
@@ -1534,9 +1578,11 @@ impl<'a> Parser<'a> {
             let pending = (self.pending_bounds.len(), self.pending_traits.len());
             let substitution = self.instantiate_generics(&function.definition.generics, call)?;
             let callee = self.callee_path(call, &function.definition.name.text);
+            let here = self.models.in_this_file(function.source);
             self.place_bounds(
                 pending,
                 &function.definition,
+                here,
                 callee,
                 &arguments,
                 &substitution,

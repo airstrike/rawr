@@ -923,6 +923,37 @@ impl Type {
         &self.0
     }
 
+    /// Whether this type names the item's type parameter `name` anywhere,
+    /// so rustc can infer it where a call gives or takes the type.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn mentions_parameter(&self, name: &str) -> bool {
+        let each = |types: &[Self]| types.iter().any(|ty| ty.mentions_parameter(name));
+        match &self.0 {
+            Shape::Unit | Shape::Builtin(_) | Shape::Constant(_) => false,
+            Shape::Parameter(path) => path.name() == name,
+            Shape::Tuple(members) | Shape::Keyed(_, members) => each(members),
+            Shape::Array { element, .. }
+            | Shape::Option(element)
+            | Shape::Reference {
+                target: element, ..
+            }
+            | Shape::Iter(element)
+            | Shape::Range(element)
+            | Shape::Boxed(element)
+            | Shape::Counted(_, element)
+            | Shape::JoinHandle(element)
+            | Shape::RangeInclusive(element) => element.mentions_parameter(name),
+            Shape::Result(ok, err) => ok.mentions_parameter(name) || err.mentions_parameter(name),
+            Shape::Callable { input, output } | Shape::ImportedFunctionItem { input, output } => {
+                input.mentions_parameter(name) || output.mentions_parameter(name)
+            }
+            Shape::Registered { arguments, .. }
+            | Shape::Imported { arguments, .. }
+            | Shape::Object { arguments, .. }
+            | Shape::External { arguments, .. } => each(arguments),
+        }
+    }
+
     /// Whether this type holds no native value: a number, `bool`, `char`,
     /// `String` or the unit, alone or in an `Option`, a `Result`, a `Vec`,
     /// an array or a tuple. Rawr holds such a value as its own, so a field
@@ -1172,6 +1203,8 @@ impl crate::digest::Write for Type {
                     Pointer::Boxed => 0x2363,
                     Pointer::Rc => 0x2364,
                     Pointer::Arc => 0x2365,
+                    Pointer::StandIn => 0x2366,
+                    Pointer::Mutable => 0x2367,
                 });
                 writer.bytes(identity);
                 write_slice(writer, arguments)?;

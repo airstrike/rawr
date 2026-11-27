@@ -317,8 +317,12 @@ impl Proof {
         let result = result?;
         // A scope frame a variant's lender made: the fields it lends are
         // reached only through their own types' accessors, and the copies
-        // it makes are Rawr's own values.
-        if self.definition.kind().lends() && crate::scope::is_opening(&result) {
+        // it makes are Rawr's own values. So is a field borrowed of a value
+        // native code lent, which the lend reaches at each use, as `&
+        // tree.children` of a lent `&Tree` borrows it.
+        if self.definition.kind().lends()
+            && (crate::scope::is_opening(&result) || result.is::<crate::scope::Projected>())
+        {
             return Ok(result);
         }
         if let Err(error) = self.output.validate(&result, model, runtime) {

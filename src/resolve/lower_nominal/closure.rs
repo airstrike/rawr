@@ -110,6 +110,13 @@ impl<'a> Parser<'a> {
                         .inputs
                         .iter()
                         .map(|input| match self.inference.resolve(input) {
+                            // A borrow of a callable, as `&mut |operation| ..`
+                            // gives iced's `&mut dyn FnMut(&mut dyn
+                            // Operation)`, hints the closure it borrows.
+                            Ty::Reference { target, .. } => match self.inference.resolve(&target) {
+                                Ty::Callable { inputs, .. } => Some((Some(inputs), None)),
+                                _ => None,
+                            },
                             // An input still open gives no parameter types,
                             // but the output still converts, as a table
                             // column's `|row: &Row| text(..)` into `Element`.

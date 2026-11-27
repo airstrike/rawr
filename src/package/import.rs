@@ -15,6 +15,12 @@ mod unresolved;
 
 pub use kept::Kept;
 
+/// The digest of the sources this build of rawr was compiled from, its
+/// lowering's own among them: a check cached by another build lowered the
+/// program with other code, so its native uses may not be this build's.
+#[doc(hidden)]
+pub const BUILD: &str = env!("RAWR_BUILD_DIGEST");
+
 /// Same-pass compilation against metadata owned by the retained native compiler.
 #[doc(hidden)]
 pub mod resident;
@@ -319,6 +325,7 @@ impl crate::Engine {
                     None => None,
                 };
                 let hidden = hidden_member_misses(contract, &failure.error);
+                said_misses("resolve", demand.iter().chain(&hidden));
                 let error = super::Error::resolution(sources.clone(), failure);
                 return Err(match demand {
                     Some((path, through_alias, member)) => {
@@ -441,6 +448,7 @@ impl crate::Engine {
                     }
                     _ => None,
                 };
+                said_misses("lowering", demand.iter().chain(&misses));
                 if let Some(report) =
                     imported_lowering_report(&evidence, &error, &sources, &paths, &project)
                         .map_err(super::Error::diagnostic)?
@@ -1149,6 +1157,18 @@ impl ImportedNamespace {
             ),
             Self::Either => true,
         }
+    }
+}
+
+/// Under `RAWR_VERBOSE=1`, one line on stderr naming what a pass of the
+/// check, `pass`, missed and the next round demands.
+fn said_misses<'m>(pass: &str, misses: impl Iterator<Item = &'m (String, bool, bool)>) {
+    if std::env::var_os("RAWR_VERBOSE").is_none_or(|verbose| verbose != "1") {
+        return;
+    }
+    let paths = misses.map(|(path, ..)| path.as_str()).collect::<Vec<_>>();
+    if !paths.is_empty() {
+        eprintln!("rawr-import: the {pass} pass missed {}", paths.join(", "));
     }
 }
 
@@ -3140,9 +3160,10 @@ fn build(
             continue;
         };
         // Its signature is written with no closure, so a callable
-        // parameter would be named undeclared.
-        if plan.receiver()
-            != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
+        // parameter would be named undeclared. A method that borrows the
+        // `&str` itself takes the string all the same: the runner lends the
+        // borrow (`surface::text`).
+        if plan.receiver().is_none()
             || !writes_declared(plan.signature(), None, &[])
             || left_out(path, *associated)
             || !names_declared(*associated, resolved)
@@ -3163,7 +3184,22 @@ fn build(
             representability::convert::Type::Builtin(representability::convert::Builtin::Str),
         );
         // A `&str` receiver, as rustc's `<&str as Trait>::method(text)`
-        // takes it, not a `String` (#706).
+        // takes it, not a `String` (#706). A method that borrows the `&str`
+        // mutably may make it another string: it takes the program's string
+        // as a `&mut String`, copied in and back out (D558 slice 2).
+        let instance = if plan.receiver() == Some(representability::ownership::Receiver::Mutable)
+            && instance
+                == representability::convert::Type::Builtin(representability::convert::Builtin::Str)
+        {
+            representability::convert::Type::Borrowed {
+                mutable: true,
+                ty: Box::new(representability::convert::Type::Builtin(
+                    representability::convert::Builtin::String,
+                )),
+            }
+        } else {
+            instance
+        };
         let receiver = types.convert_input(&instance, &[], allocation)?;
         let signature = signature_with(&types, plan.signature(), Some(receiver), allocation)?;
         let lent = (lent_static(plan.signature()) << 1)
@@ -3176,7 +3212,8 @@ fn build(
         builder.item(
             host::item::Definition::function(path, signature)?
                 .imported(associated.identity().selector().try_clone()?)
-                .lending_static(lent),
+                .lending_static(lent)
+                .implementing(associated.trait_of().map(|trait_of| *trait_of.as_bytes())),
         )?;
     }
     // A trait's method over its `Self`, which a program's own type that
@@ -3231,6 +3268,17 @@ fn build(
         &opaque,
         &facade.trait_identities,
     );
+    // The traits whose header holds the vtable of the runner's one
+    // stand-in for each (#2698).
+    let objects = contract
+        .outcomes()
+        .filter_map(|outcome| {
+            Some((
+                *outcome.identity().definition()?.as_bytes(),
+                host::facade::stand_in(outcome.outputs())?,
+            ))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     for header in trait_headers {
         if let Some(undeclared) =
             Undeclared::first(header.defaults.iter().flatten(), &header.parameters)
@@ -3276,6 +3324,12 @@ fn build(
                 .collect(),
             defaults,
             call,
+            objects.get(&header.identity).cloned(),
+            header
+                .associated
+                .iter()
+                .map(|name| ImmutableString::from(&**name))
+                .collect(),
         )?;
     }
     for header in impl_headers {
@@ -3364,6 +3418,16 @@ fn build(
             self_type,
             bounds,
             projections,
+            associated: header
+                .associated
+                .iter()
+                .filter_map(|(name, value)| Some((ImmutableString::from(&**name), convert(value)?)))
+                .collect(),
+            defaulted: header
+                .defaulted
+                .iter()
+                .map(|name| ImmutableString::from(&**name))
+                .collect(),
         })?;
     }
     // A re-exported variant names its enum's variant, through a path the
@@ -3578,7 +3642,8 @@ fn imported_item(
         | Representability::Rejected(_) => None,
     };
     let member = outcome.member().map(|member| *member.as_bytes());
-    Ok(item.map(|item| item.instancing(member)))
+    let trait_of = outcome.trait_of().map(|trait_of| *trait_of.as_bytes());
+    Ok(item.map(|item| item.instancing(member).implementing(trait_of)))
 }
 
 /// The inputs of `signature`, by bit, whose borrows the output keeps for
@@ -4054,9 +4119,11 @@ fn written(
             match object.pointer() {
                 Pointer::Lasting => format!("&'static dyn {name}"),
                 Pointer::Shared => format!("&dyn {name}"),
+                Pointer::Mutable => format!("&mut dyn {name}"),
                 Pointer::Boxed => format!("Box<dyn {name}>"),
                 Pointer::Rc => format!("Rc<dyn {name}>"),
                 Pointer::Arc => format!("Arc<dyn {name}>"),
+                Pointer::StandIn => format!("impl {name}"),
             }
         }
     }
@@ -4394,7 +4461,7 @@ fn writes_declared(
     let closure = |input: &Type| {
         calls().any(|filled| *input == Type::Parameter(filled.parameter()))
             || call.is_some_and(|call| {
-                matches!(input, Type::Option(inner)
+                matches!(input, Type::Option(inner) | Type::Borrowed { ty: inner, .. }
                     if **inner == Type::Parameter(call.parameter()))
             })
     };
@@ -5140,8 +5207,23 @@ fn callable_signature(
             matches!(input, representability::convert::Type::Option(inner)
                 if **inner == representability::convert::Type::Parameter(call.parameter()))
         });
+        // A borrow of the closure, as a borrowed callable's object is read
+        // (`&mut dyn FnMut(..)` of iced's `Operation::traverse`).
+        let borrowed = call.and_then(|call| match input {
+            representability::convert::Type::Borrowed { mutable, ty }
+                if **ty == representability::convert::Type::Parameter(call.parameter()) =>
+            {
+                Some((call, *mutable))
+            }
+            _ => None,
+        });
         if let Some(call) = found {
             builder.try_parameter(closure(call, allocation)?)?;
+        } else if let Some((call, mutable)) = borrowed {
+            builder.try_parameter(host::type_ref::Type::reference(
+                mutable,
+                closure(call, allocation)?,
+            ))?;
         } else if let Some(call) = optional {
             builder.try_parameter(host::type_ref::Type::option(closure(call, allocation)?))?;
         } else {

@@ -44,6 +44,13 @@ pub(super) enum Op {
         call: Ty,
         span: Span,
     },
+    /// A crate call's argument that may fill its parameter as the trait's
+    /// stand-in (#2698), passed on as the trait's object when it does.
+    #[cfg(feature = "rust-import")]
+    StandIn(super::object_stand_in::Coercion),
+    /// A crate call's `Box<dyn Fn>` argument (`boxed_callable`).
+    #[cfg(feature = "rust-import")]
+    BoxedCallable,
     #[cfg(feature = "rust-import")]
     Imported {
         path: ImmutableString,
@@ -463,6 +470,15 @@ pub(super) enum PreludeOp {
     /// runner's adapter makes the object of (`object::Coerced`).
     #[cfg(feature = "rust-import")]
     NativeCoerce,
+    /// A program's value of any type coerced to a crate's trait object
+    /// (#2698), with the member of its impl each of the trait's methods
+    /// calls: `program(value, members, owner, trait)`, `members` each
+    /// method's name and member path on lines of their own, which the
+    /// runner's one stand-in for the trait holds (`crossing::Object`). Where
+    /// rawr's copy of the crate declares a stand-in for `owner`, a native
+    /// island's type, it is that one's, as `NativeObject` makes it.
+    #[cfg(feature = "rust-import")]
+    NativeProgram,
     /// A static declared in a body, of a native type (D862): its place,
     /// or before its block writes it, its slot. A static the interpreter
     /// holds: the value its first read kept. `value(key)`.
@@ -622,6 +638,8 @@ impl PreludeOp {
             Self::NativeObject => "island.object",
             #[cfg(feature = "rust-import")]
             Self::NativeCoerce => "object.coerce",
+            #[cfg(feature = "rust-import")]
+            Self::NativeProgram => "object.program",
             Self::StaticValue => "static.value",
             Self::StaticReserved => "static.reserved",
             Self::StaticSettle => "static.settle",
@@ -942,6 +960,13 @@ impl PreludeOp {
             ],
             #[cfg(feature = "rust-import")]
             Self::NativeCoerce => vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()],
+            #[cfg(feature = "rust-import")]
+            Self::NativeProgram => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<ImmutableString>(),
+            ],
         }
     }
 
@@ -1053,6 +1078,26 @@ impl PreludeOp {
                 let value = args[0].take();
                 let value = counted::value(&value).unwrap_or(value);
                 return Ok(Dynamic::from(crate::object::Coerced::new(value, tag)));
+            }
+            #[cfg(feature = "rust-import")]
+            Self::NativeProgram => {
+                let written = args[1].clone_cast::<ImmutableString>();
+                let mut lines = written.lines();
+                let mut members = Vec::new();
+                while let (Some(name), Some(path)) = (lines.next(), lines.next()) {
+                    members.push((ImmutableString::from(name), ImmutableString::from(path)));
+                }
+                let owner = args[2].clone_cast::<ImmutableString>();
+                let trait_name = args[3].clone_cast::<ImmutableString>();
+                let value = args[0].take();
+                let value = counted::value(&value).unwrap_or(value);
+                if crate::island::declares_object(&owner) {
+                    return crate::island::object(value, &owner, &trait_name).or_else(&panic);
+                }
+                return Ok(Dynamic::from(crate::object::Program::coerced(
+                    value,
+                    members.into(),
+                )));
             }
             // Only a native trait's object makes one, which needs the crate.
             #[cfg(not(feature = "rust-import"))]
@@ -1969,7 +2014,9 @@ pub(super) fn owner_id(ty: &Ty) -> Option<type_def::Id> {
     match ty {
         Ty::Script(id, _) => Some(*id),
         Ty::Boxed(..) | Ty::Counted(..) | Ty::Weak(..) => None,
-        Ty::Host { proof, .. } => Some(type_def::Id::foreign(&proof.definition.path())),
+        Ty::Host { proof, .. } => Some(type_def::Id::foreign(
+            &crate::host::defined::Defined::of_type(&proof.definition, proof.owner.as_ref()),
+        )),
 
         ty => builtin_code(ty).map(type_def::Id::builtin),
     }
@@ -2126,6 +2173,10 @@ pub(super) enum ExecutableOp {
     #[cfg(feature = "rust-import")]
     CallableObject(callable_object::Coercion),
     #[cfg(feature = "rust-import")]
+    StandIn(super::object_stand_in::Coercion),
+    #[cfg(feature = "rust-import")]
+    BoxedCallable,
+    #[cfg(feature = "rust-import")]
     Imported {
         proof: crate::host::structural::Proof,
     },
@@ -2200,6 +2251,9 @@ pub(super) struct IntrinsicOperation {
     pub(super) operands: Box<[(Ty, Span, bool)]>,
     pub(super) output: Ty,
     pub(super) span: Span,
+    /// The type parameters the call fills with the trait's stand-in, a
+    /// program's value of any type (#2698).
+    pub(super) stand_ins: Box<[ImmutableString]>,
 }
 
 #[cfg(feature = "rust-import")]
@@ -2412,6 +2466,8 @@ impl ExecutableOp {
             Self::Sequence(constructor) => constructor.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::CallableObject(coercion) => coercion.dependencies(),
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(_) | Self::BoxedCallable => BTreeSet::new(),
             Self::Witnessed(op) => op.placeholder.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof.dependencies(),
@@ -2437,7 +2493,11 @@ impl ExecutableOp {
             Self::Witnessed(op) => op.placeholder.projection_requirement(),
             Self::Projection { proof } => Some((**proof).clone()),
             #[cfg(feature = "rust-import")]
-            Self::Imported { .. } | Self::Sequence(_) | Self::CallableObject(_) => None,
+            Self::Imported { .. }
+            | Self::Sequence(_)
+            | Self::CallableObject(_)
+            | Self::StandIn(_)
+            | Self::BoxedCallable => None,
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
             | Self::Struct { .. }
@@ -2460,7 +2520,10 @@ impl ExecutableOp {
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
             #[cfg(feature = "rust-import")]
-            Self::Sequence(_) | Self::CallableObject(_) => None,
+            Self::Sequence(_)
+            | Self::CallableObject(_)
+            | Self::StandIn(_)
+            | Self::BoxedCallable => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
             Self::Symbolic { .. }
             | Self::Projection { .. }
@@ -2492,6 +2555,10 @@ impl ExecutableOp {
             Self::Sequence(constructor) => return constructor.name(),
             #[cfg(feature = "rust-import")]
             Self::CallableObject(coercion) => return coercion.name(),
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(coercion) => return coercion.name(),
+            #[cfg(feature = "rust-import")]
+            Self::BoxedCallable => return "\0rawr.boxed_callable".to_owned(),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
             }
@@ -2562,6 +2629,10 @@ impl ExecutableOp {
             ],
             #[cfg(feature = "rust-import")]
             Self::CallableObject(_) => vec![TypeId::of::<Dynamic>()],
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(_) => vec![TypeId::of::<Dynamic>()],
+            #[cfg(feature = "rust-import")]
+            Self::BoxedCallable => vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()],
             // A bare generic operand takes any value; the proof checks it.
             Self::Witnessed(op) => {
                 let parameter = intrinsic::Type::witness_parameter(0).runtime();
@@ -2647,6 +2718,10 @@ impl ExecutableOp {
             Self::Sequence(constructor) => constructor.invoke(context.as_ref(), args),
             #[cfg(feature = "rust-import")]
             Self::CallableObject(coercion) => coercion.invoke(context.as_ref(), args),
+            #[cfg(feature = "rust-import")]
+            Self::StandIn(coercion) => coercion.invoke(args),
+            #[cfg(feature = "rust-import")]
+            Self::BoxedCallable => boxed_callable(args),
             Self::Witnessed(op) => op.invoke(context, args, models),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {
@@ -3086,4 +3161,20 @@ fn stored_type_id(ty: &Ty, models: &Models) -> TypeId {
         Ty::Reference { mutable: true, .. } => TypeId::of::<Dynamic>(),
         ty => ty.type_id(models),
     }
+}
+
+/// The value a crate call's `Box<dyn Fn>` argument `arguments[0]` crosses
+/// as: the program's function pointer as the callable `arguments[1]` that
+/// calls it, which native code calls through the box the runner makes of
+/// it, and else the box native code gave, as it is (#2698).
+#[cfg(feature = "rust-import")]
+fn boxed_callable(arguments: &mut FnCallArgs) -> RawrResult {
+    let [given, callable] = arguments else {
+        return Err(invariant("a boxed closure's argument lost its operands"));
+    };
+    Ok(if given.is_fnptr() {
+        callable.take()
+    } else {
+        given.take()
+    })
 }

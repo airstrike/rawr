@@ -202,6 +202,8 @@ pub struct Lent {
     /// Native code keeps the borrow for as long as the region of the call
     /// it lent the value to is anchored ([`Lent::kept`]).
     kept: bool,
+    /// The lending region a `&mut` lend is kept in ([`Lent::kept_in`]).
+    kept_in: Option<Nonce>,
 }
 
 /// How script code reads a lent value through its type's traits, as the
@@ -276,6 +278,7 @@ impl Lent {
             shared,
             reads: None,
             kept: false,
+            kept_in: None,
         }
     }
 
@@ -294,6 +297,26 @@ impl Lent {
     #[must_use]
     pub const fn is_kept(&self) -> bool {
         self.kept
+    }
+
+    /// The lent value, which native code keeps borrowed `&mut` for as long
+    /// as what the call it lent the value to gives back lives, as the
+    /// `tree: &'b mut Tree` of iced's `overlay<'b>(&'b mut self, tree,
+    /// ..) -> Vec<overlay::Element<'b, ..>>` (#2698): a call in that call's
+    /// lending region `region` may borrow it there ([`Region::lent_mut`]).
+    #[must_use]
+    pub const fn kept_in(self, region: Nonce) -> Self {
+        Self {
+            kept_in: Some(region),
+            ..self
+        }
+    }
+
+    /// Whether native code keeps the `&mut` borrow as long as the result
+    /// of the call whose lending region is `region` ([`Lent::kept_in`]).
+    #[must_use]
+    pub fn is_kept_in(&self, region: Nonce) -> bool {
+        self.kept_in == Some(region)
     }
 
     /// The lent value, read through its type's traits by `reads`.
@@ -653,6 +676,43 @@ pub fn with_ref<F: Family, R>(
     Ok(f(value))
 }
 
+/// Run `f` on the value `scoped` names, of the family `F`, mutably, with
+/// only its own slot taken out of its region for the call: the region's
+/// other values stay reachable meanwhile, as rustc lets a call that borrows
+/// one local `&mut` leave the others free. A crate call on a view's
+/// widget that calls back into the program, which reaches a sibling
+/// widget of the view, as iced's `Column::diff` asks each child for its
+/// `tag`, needs that. The value goes back to its slot when `f` returns or
+/// unwinds, and leaks if its region ended meanwhile. `f` takes the value
+/// at every lifetime its type has, as [`with`] gives it.
+pub fn with_slot<F: Regional, R>(
+    scoped: Scoped,
+    f: impl for<'x> FnOnce(&mut F::Of<'x>) -> R,
+) -> Result<R, Error> {
+    let place = with::<RegionF, _>(scoped.nonce, |region| {
+        region.settle();
+        region.slot_of::<F>(scoped)?;
+        let slot = region.slots[scoped.index as usize]
+            .take()
+            .ok_or(Error::Moved)?;
+        // As in `Region::take`, the box holds a slot of `F` at that
+        // region's lifetime, which only the type names.
+        Ok::<_, Error>(Box::into_raw(slot).cast::<Slot<'static, F>>())
+    })??;
+    let back = SlotLease::<F> {
+        place,
+        nonce: scoped.nonce,
+        index: scoped.index,
+    };
+    // SAFETY: the slot is out of its region, so this is the only reference
+    // made from the place until `back` puts it back. `f` takes the value at
+    // every lifetime, so it can't keep a borrow of it or store a shorter
+    // one in it.
+    let output = f(unsafe { &mut (*place).0 });
+    drop(back);
+    Ok(output)
+}
+
 /// What a scope frame's [`Region`] keeps of a [`Family`]'s values: the Rust
 /// name of its type, and how to print and copy one. A generated runner
 /// implements it for each imported type that carries a lifetime.
@@ -779,11 +839,78 @@ pub struct Region<'r> {
     /// they drop first.
     holds: RefCell<Vec<Hold>>,
     slots: Vec<Option<Box<dyn Erased<'r> + 'r>>>,
+    /// Slots given back while the region was claimed shared, each by its
+    /// index ([`SlotLease`]): its value is back where it was, and the
+    /// region's next `&mut` reach puts it in its slot ([`Region::settle`]).
+    returned: RefCell<Vec<(u32, Box<dyn Erased<'r> + 'r>)>>,
     /// Where script strings a call in the region borrows live for `'r`,
     /// in a region a slot opens at the lifetime of a script value it lent
     /// (D594).
     pins: Option<&'r Pins>,
+    /// Whether the region is the one of a call whose output borrows its
+    /// `&'r mut` receiver past the call ([`Region::lending`]).
+    lending: bool,
+    /// What calls in a lending region borrow at `'r` that the region's
+    /// owner keeps past the call ([`Region::lease`]).
+    leases: RefCell<Vec<std::rc::Rc<dyn Any>>>,
     _r: PhantomData<fn(&'r ()) -> &'r ()>,
+}
+
+/// A native value the program holds, lent `&mut` to a crate call made in a
+/// lending region ([`Region::lease`]): given back where it came from when
+/// the lease drops.
+struct Lease<T: 'static> {
+    place: *mut T,
+    give_back: Option<Box<dyn FnOnce(Box<T>)>>,
+}
+
+/// A region's slot lent to a crate call in a lending region
+/// ([`Region::lease_scoped`]): put back in its region when the lease
+/// drops, or leaked if that region is gone.
+struct SlotLease<F: Regional> {
+    place: *mut Slot<'static, F>,
+    nonce: Nonce,
+    index: u32,
+}
+
+impl<F: Regional> Drop for SlotLease<F> {
+    fn drop(&mut self) {
+        let place = self.place;
+        let index = self.index;
+        let back = with::<RegionF, _>(self.nonce, |region| {
+            region.settle();
+            // SAFETY: `Box::into_raw` made the place of a slot of this
+            // region at its lifetime (`Region::lease_scoped`), and it is
+            // turned back once, here.
+            let slot: Box<Slot<'_, F>> = unsafe { Box::from_raw(place.cast()) };
+            if let Some(empty) = region.slots.get_mut(index as usize) {
+                *empty = Some(slot);
+            }
+        });
+        // A region a crate call claims shared, as a view's region is while
+        // native code asks a widget that calls back into the program, takes
+        // the slot back beside its others: the program code that runs
+        // meanwhile reaches the value where it was, as rustc's borrow of it
+        // has ended.
+        if back == Err(Error::Busy) {
+            let _ = with_ref::<RegionF, _>(self.nonce, |region| {
+                // SAFETY: as above.
+                let slot: Box<Slot<'_, F>> = unsafe { Box::from_raw(place.cast()) };
+                region.returned.borrow_mut().push((index, slot));
+            });
+        }
+    }
+}
+
+impl<T: 'static> Drop for Lease<T> {
+    fn drop(&mut self) {
+        // SAFETY: `Box::into_raw` made the place (`Region::lease`), and it
+        // is turned back once, here.
+        let value = unsafe { Box::from_raw(self.place) };
+        if let Some(give_back) = self.give_back.take() {
+            give_back(value);
+        }
+    }
 }
 
 /// A guard a region keeps beside the value it borrows ([`Region::yoke`]):
@@ -845,9 +972,170 @@ impl<'r> Region<'r> {
             nonce: fresh(),
             holds: RefCell::new(Vec::new()),
             slots: Vec::new(),
+            returned: RefCell::new(Vec::new()),
             pins: None,
+            lending: false,
+            leases: RefCell::new(Vec::new()),
             _r: PhantomData,
         }
+    }
+
+    /// The region of a call native code makes on a program's value whose
+    /// output borrows the value `&'r mut`, and each `&'r mut` input it
+    /// lends it, past the call, as iced's `overlay<'b>(&'b mut self, tree:
+    /// &'b mut Tree, ..)` gives elements that borrow both (#2698). A crate
+    /// call the program makes in it borrows a `&mut` input native code
+    /// lent kept in it ([`Region::lent_mut`]) and a native value the
+    /// program holds ([`Region::lease`]) at `'r`, and its output stays
+    /// here. Only [`crate::crossing::Object::lending`] makes one, and it
+    /// keeps the leases for as long as rustc lets native code hold the
+    /// output. Strings a call in it borrows are pinned once per text for
+    /// the runner's life.
+    #[cfg(feature = "rust-import")]
+    #[must_use]
+    pub(crate) fn lending() -> Self {
+        static PINS: Pins = Pins::constant();
+        Self {
+            lending: true,
+            ..Self::anchored(&PINS)
+        }
+    }
+
+    /// `lent`, a lend this region made at `'r` ([`Region::lend`]), kept in
+    /// it where it is lending, so a crate call made in it may borrow the
+    /// value at `'r` ([`Region::lent_mut`]), as the `&mut Tree` an item of
+    /// `layout.iter_mut(&mut tree.children)` gives is passed on to a
+    /// content's `overlay` (#2698).
+    #[must_use]
+    pub fn keeping(&self, lent: Lent) -> Lent {
+        if self.lending {
+            lent.kept_in(self.nonce)
+        } else {
+            lent
+        }
+    }
+
+    /// Whether this is a call's lending region ([`Region::lending`]).
+    #[must_use]
+    pub const fn lends(&self) -> bool {
+        self.lending
+    }
+
+    /// `value`, a native value the program holds, lent `&mut` at `'r` to a
+    /// crate call made in this lending region, as `self.content` of a
+    /// widget whose `overlay` gives its content's: `give_back` takes it
+    /// back once the region's owner lets the lease go, which is when native
+    /// code next reaches the owner, since rustc ends every borrow of the
+    /// output before that. [`Error::Mismatch`] in a region that isn't
+    /// lending.
+    pub fn lease<T: 'static>(
+        &self,
+        value: Box<T>,
+        give_back: impl FnOnce(Box<T>) + 'static,
+    ) -> Result<&'r mut T, Error> {
+        if !self.lending {
+            return Err(Error::Mismatch);
+        }
+        let place = Box::into_raw(value);
+        self.leases.borrow_mut().push(std::rc::Rc::new(Lease {
+            place,
+            give_back: Some(Box::new(give_back)),
+        }));
+        // SAFETY: `Box::into_raw` made the place, and only the `Lease` just
+        // kept turns it back, when it drops. The region's owner keeps the
+        // lease while native code may hold what borrows at `'r`
+        // (`Object::lending`): rustc ends the `&'r mut` borrow of the owner
+        // before native code reaches the owner again. No other reference
+        // is made from the place meanwhile.
+        Ok(unsafe { &mut *place })
+    }
+
+    /// The value the `&mut` lend `lent` lends, a `T`, borrowed `&mut` at
+    /// the region's `'r`, as `tree` of iced's `overlay<'b>(&'b mut self,
+    /// tree: &'b mut Tree, ..)` is borrowed for the elements it gives
+    /// (#2698). Only a lend kept in this lending region ([`Lent::kept_in`])
+    /// is, and once: the lend stays claimed till it ends, so the program
+    /// can't reach it again, as rustc forbids while the output lives.
+    /// [`Error::Mismatch`] for any other, or when the value is not a `T`,
+    /// [`Error::Busy`] when it is claimed, and [`Error::Expired`] once the
+    /// lend has ended.
+    pub fn lent_mut<T: 'static>(&self, lent: Lent) -> Result<&'r mut T, Error> {
+        if !self.lending || !lent.is_kept_in(self.nonce) {
+            return Err(Error::Mismatch);
+        }
+        // The lender made this accessor for a `T`'s place.
+        lent.accessor::<fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8>>(true)?;
+        let place = frame_of(lent.nonce, |frame| {
+            let frame = frame.ok_or(Error::Expired)?;
+            if !frame.writable {
+                return Err(Error::ReadOnly);
+            }
+            if frame.exclusive || frame.shared > 0 {
+                return Err(Error::Busy);
+            }
+            // Claimed for good: the frame pops when the lend ends.
+            frame.exclusive = true;
+            Ok(frame.place)
+        })?;
+        // SAFETY: the accessor proves the place a `T`'s, lent `&mut`, and
+        // the claim just made is exclusive till the lend ends, so no other
+        // reference is made from it. Native code lent it as a `&'r mut` its
+        // call's result keeps (`Lent::kept_in`), which this lending region
+        // gives it at `'r`, and the lender uses its own borrow no more.
+        Ok(unsafe { &mut *place.cast::<T>() })
+    }
+
+    /// The value `scoped` names, of the family `F`, held in a region that
+    /// encloses this lending one, lent `&mut` at `'r` to `call`, a crate
+    /// call made here whose output keeps it borrowed, as `self.content`
+    /// of a widget whose `overlay` gives its content's, where the content
+    /// is a view's widget (#2698). Its slot stays empty while the region's
+    /// owner keeps the lease ([`Region::lease`]), so its own region can't
+    /// reach it meanwhile ([`Error::Moved`]), and it goes back to its slot
+    /// when the lease drops, or leaks if that region is gone. `call` takes
+    /// it at every lifetime its type has, so its output names none of
+    /// them. [`Error::Mismatch`] in a region that isn't lending, for a
+    /// value of this region, or for another family.
+    pub fn lease_scoped<F: Regional, R>(
+        &self,
+        scoped: Scoped,
+        call: impl for<'k> FnOnce(&'r mut F::Of<'k>) -> R,
+    ) -> Result<R, Error> {
+        if !self.lending || scoped.nonce == self.nonce {
+            return Err(Error::Mismatch);
+        }
+        let taken = with::<RegionF, _>(scoped.nonce, |region| {
+            region.settle();
+            region.slot_of::<F>(scoped)?;
+            let slot = region.slots[scoped.index as usize]
+                .take()
+                .ok_or(Error::Moved)?;
+            // As in `Region::take`, the box holds a slot of `F` at that
+            // region's lifetime, which only the type names. The place is
+            // reached at `'r`, which that region outlives, as rustc makes
+            // native code end the output's borrow before the region's own
+            // borrow ends.
+            Ok(Box::into_raw(slot).cast::<Slot<'static, F>>())
+        })??;
+        self.leases
+            .borrow_mut()
+            .push(std::rc::Rc::new(SlotLease::<F> {
+                place: taken,
+                nonce: scoped.nonce,
+                index: scoped.index,
+            }));
+        // SAFETY: the slot is out of its region, so nothing else reaches
+        // the place until the lease puts it back, after native code holds
+        // what `call` gives no longer. `call` takes the value at every
+        // lifetime of its type, so it can't store a shorter borrow in it.
+        Ok(call(unsafe { &mut (*taken.cast::<Slot<'r, F>>()).0 }))
+    }
+
+    /// The leases calls in the region made ([`Region::lease`]), for the
+    /// region's owner to keep.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn take_leases(&self) -> Vec<std::rc::Rc<dyn Any>> {
+        std::mem::take(&mut *self.leases.borrow_mut())
     }
 
     /// An empty region at the lifetime `'r` of a script value native code
@@ -889,7 +1177,7 @@ impl<'r> Region<'r> {
         let Some(pins) = self.pins else {
             return;
         };
-        if self.slots.iter().all(Option::is_none) {
+        if self.holds_nothing() {
             return;
         }
         let kept = KeptRegion::new(self, site);
@@ -951,6 +1239,52 @@ impl<'r> Region<'r> {
         Ok(unsafe { *place.cast_const().cast::<&'r [T]>() })
     }
 
+    /// Lend `value`, a borrow the region's values hand out for its `'r`,
+    /// to script code for as long as the region is open, as an item `(Layout,
+    /// &'r mut Tree)` of an iterator the region holds gives its `&mut Tree`
+    /// (#2698). It is reached by [`with`] and [`with_ref`] under `F`'s key,
+    /// as [`lend`]'s value is, and its lend ends when the region's [`open`]
+    /// returns or unwinds. [`Error::Expired`] when the region isn't open.
+    pub fn lend<F: Family>(&self, value: &'r mut F::Of<'r>) -> Result<Nonce, Error> {
+        self.lend_place(TypeId::of::<F>(), std::ptr::from_mut(value).cast(), true)
+    }
+
+    /// [`Region::lend`] of a shared borrow: [`with`] on it is
+    /// [`Error::ReadOnly`].
+    pub fn lend_ref<F: Family>(&self, value: &'r F::Of<'r>) -> Result<Nonce, Error> {
+        self.lend_place(
+            TypeId::of::<F>(),
+            std::ptr::from_ref(value).cast_mut().cast(),
+            false,
+        )
+    }
+
+    /// A frame for `place` just above the region's own on this thread's
+    /// stack, so the region's [`open`] pops it, and no frame pushed after
+    /// the region's does: `place` is valid for `'r`, which outlives that
+    /// open.
+    fn lend_place(&self, key: TypeId, place: *mut (), writable: bool) -> Result<Nonce, Error> {
+        FRAMES.with_borrow_mut(|frames| {
+            let at = frames
+                .iter()
+                .rposition(|frame| frame.nonce == self.nonce)
+                .ok_or(Error::Expired)?;
+            let nonce = fresh();
+            frames.insert(
+                at + 1,
+                Frame {
+                    nonce,
+                    key,
+                    place,
+                    writable,
+                    exclusive: false,
+                    shared: 0,
+                },
+            );
+            Ok(nonce)
+        })
+    }
+
     /// Store `value` and give the handle script code holds for it.
     pub fn insert<F: Regional>(&mut self, value: F::Of<'r>) -> Scoped {
         self.slots.push(Some(Box::new(Slot::<'r, F>(value))));
@@ -963,11 +1297,36 @@ impl<'r> Region<'r> {
 
     fn slot(&self, index: u32) -> Result<&(dyn Erased<'r> + 'r), Error> {
         self.unhold(index, None);
-        self.slots
-            .get(index as usize)
-            .ok_or(Error::Mismatch)?
-            .as_deref()
-            .ok_or(Error::Moved)
+        let slot = self.slots.get(index as usize).ok_or(Error::Mismatch)?;
+        if let Some(slot) = slot.as_deref() {
+            return Ok(slot);
+        }
+        let returned = self.returned.borrow();
+        let slot = returned
+            .iter()
+            .find(|(at, _)| *at == index)
+            .map(|(_, slot)| std::ptr::from_ref::<dyn Erased<'r> + 'r>(&**slot))
+            .ok_or(Error::Moved)?;
+        // SAFETY: the box stays where it is till `settle` moves it into its
+        // slot, which takes `&mut self`, so not while the reference, which
+        // lives no longer than `&self`, does. A push onto the list moves
+        // the box's pointer, not what it points to.
+        Ok(unsafe { &*slot })
+    }
+
+    /// Put each slot given back while the region was claimed shared
+    /// ([`Region::returned`]) in its place.
+    fn settle(&mut self) {
+        for (index, slot) in self.returned.get_mut().drain(..) {
+            if let Some(empty) = self.slots.get_mut(index as usize) {
+                *empty = Some(slot);
+            }
+        }
+    }
+
+    /// Whether the region holds no value, in its slots or given back.
+    fn holds_nothing(&self) -> bool {
+        self.slots.iter().all(Option::is_none) && self.returned.borrow().is_empty()
     }
 
     fn slot_of<F: Regional>(&self, handle: Scoped) -> Result<&(dyn Erased<'r> + 'r), Error> {
@@ -993,6 +1352,7 @@ impl<'r> Region<'r> {
 
     /// The value `handle` names, mutably, as the family `F`.
     pub fn get_mut<F: Regional>(&mut self, handle: Scoped) -> Result<&mut F::Of<'r>, Error> {
+        self.settle();
         self.slot_of::<F>(handle)?;
         let slot = self.slots[handle.index as usize]
             .as_deref_mut()
@@ -1010,6 +1370,7 @@ impl<'r> Region<'r> {
         if handle.nonce != self.nonce {
             return self.take_enclosing::<F>(handle);
         }
+        self.settle();
         self.slot_of::<F>(handle)?;
         let slot = self.slots[handle.index as usize]
             .take()
@@ -1055,6 +1416,7 @@ impl<'r> Region<'r> {
         if handle.nonce != self.nonce {
             return Err(Error::Mismatch);
         }
+        self.settle();
         self.slot(handle.index)?;
         let slot = self.slots[handle.index as usize]
             .take()
@@ -1662,6 +2024,12 @@ struct Pinned {
     slices: std::collections::BTreeSet<&'static [&'static str]>,
     /// What was leaked for good, which nothing lets go.
     leaked: Leaked,
+    /// A lending call's region, and what its output borrows
+    /// (`Region::lease`), kept while native code may hold the output
+    /// ([`Pins::lease`]). The regions first, as their values borrow the
+    /// leases.
+    leased_regions: Vec<KeptRegion>,
+    leases: Vec<Kept>,
 }
 
 impl Pinned {
@@ -1672,6 +2040,8 @@ impl Pinned {
             values: std::collections::BTreeMap::new(),
             slices: std::collections::BTreeSet::new(),
             leaked: Leaked::new(),
+            leased_regions: Vec::new(),
+            leases: Vec::new(),
         }
     }
 }
@@ -1865,6 +2235,53 @@ impl Pins {
         }
     }
 
+    /// What a lending call's output borrows, `leases`, and the call's
+    /// `region` when it holds anything, kept while native code may hold
+    /// the output (#2698): [`Pins::end_leases`] lets them go where native
+    /// code next reaches the value these pins belong to, as rustc ends
+    /// the output's `&mut` borrow of it first. What was kept before is let
+    /// go first.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn lease(&self, leases: Vec<std::rc::Rc<dyn Any>>, region: Region<'_>) {
+        static SITE: Site = Site::new();
+        self.end_leases();
+        let thread = std::thread::current().id();
+        let region = (!region.holds_nothing()).then(|| KeptRegion::new(region, &SITE));
+        let mut held = self.held();
+        held.leased_regions.extend(region);
+        held.leases.extend(leases.into_iter().map(|lease| Kept {
+            thread,
+            value: std::mem::ManuallyDrop::new(lease),
+        }));
+    }
+
+    /// `value`, kept with what [`Pins::lease`] keeps, and its place, valid
+    /// till [`Pins::end_leases`] lets it go.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn keep_leased<T: 'static>(&self, value: T) -> *mut T {
+        let place = Box::into_raw(Box::new(value));
+        let lease = std::rc::Rc::new(Lease {
+            place,
+            give_back: None,
+        });
+        self.held().leases.push(Kept {
+            thread: std::thread::current().id(),
+            value: std::mem::ManuallyDrop::new(lease),
+        });
+        place
+    }
+
+    /// Let go what [`Pins::lease`] kept, its regions first.
+    pub fn end_leases(&self) {
+        let mut held = self.held();
+        let regions = std::mem::take(&mut held.leased_regions);
+        let leases = std::mem::take(&mut held.leases);
+        // Their drops may reach these pins again.
+        drop(held);
+        drop(regions);
+        drop(leases);
+    }
+
     /// `texts`, each pinned ([`Pins::pin`]), as one `&'static [&'static
     /// str]` a crate takes: serde's `deserialize_struct(name, FIELDS,
     /// visitor)` takes the field names so. Only pins that live as long as
@@ -2008,6 +2425,7 @@ impl Pins {
 
     /// Let everything pinned go.
     pub fn clear(&mut self) {
+        self.end_leases();
         let held = self
             .held
             .get_mut()
@@ -2437,6 +2855,77 @@ mod tests {
 
     fn depth() -> usize {
         super::FRAMES.with(|frames| frames.borrow().len())
+    }
+
+    struct CountRefF;
+
+    impl Family for CountRefF {
+        type Of<'x> = &'x mut usize;
+    }
+
+    impl super::Regional for CountRefF {
+        fn name() -> &'static str {
+            "&mut usize"
+        }
+    }
+
+    /// A region lends a borrow its value gives for as long as it is open,
+    /// as an item's `&mut Tree` of `layout.iter_mut(..)` (#2698): past a
+    /// lend that starts and ends inside it, and no longer.
+    #[test]
+    fn a_regions_lend_lasts_while_the_region_is_open() {
+        let mut count = 1_usize;
+        let mut region = super::Region::new();
+        let handle = region.insert::<CountRefF>(&mut count);
+        let nonce = region.nonce();
+        let lent = super::open(&mut region, || {
+            let lent = super::with::<super::RegionF, _>(nonce, |region| {
+                let value = region.take::<CountRefF>(handle).unwrap();
+                region.lend::<CountF>(value).unwrap()
+            })
+            .unwrap();
+            let mut other = 0_usize;
+            super::lend::<CountF, _>(&mut other, |_| ());
+            super::with::<CountF, _>(lent, |count| *count += 1).unwrap();
+            lent
+        });
+        assert_eq!(super::with::<CountF, _>(lent, |_| ()), Err(Error::Expired));
+        assert_eq!(depth(), 0);
+        drop(region);
+        assert_eq!(count, 2);
+    }
+
+    /// A view's value a lending region leased goes back where it was when
+    /// the lease ends while a crate call holds the view's region shared,
+    /// as iced asks a program's container for its mouse interaction while
+    /// its `Column` holds the view (#2698): a shared reach finds it there,
+    /// and the region's next `&mut` reach puts it in its slot.
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_leased_slot_goes_back_while_its_region_is_claimed_shared() {
+        let mut count = 1_usize;
+        let mut view = super::Region::new();
+        let handle = view.insert::<CountRefF>(&mut count);
+        let nonce = view.nonce();
+        super::open(&mut view, || {
+            let lending = super::Region::lending();
+            lending
+                .lease_scoped::<CountRefF, _>(handle, |value| **value += 1)
+                .unwrap();
+            let leases = lending.take_leases();
+            let read = super::with_ref::<super::RegionF, _>(nonce, |region| {
+                assert_eq!(region.get::<CountRefF>(handle).err(), Some(Error::Moved));
+                drop(leases);
+                region.get::<CountRefF>(handle).map(|value| **value)
+            });
+            assert_eq!(read, Ok(Ok(2)));
+            super::with::<super::RegionF, _>(nonce, |region| {
+                **region.get_mut::<CountRefF>(handle).unwrap() += 1;
+            })
+            .unwrap();
+        });
+        drop(view);
+        assert_eq!(count, 3);
     }
 
     fn next_owned(nonce: Nonce) -> Result<Option<String>, Error> {

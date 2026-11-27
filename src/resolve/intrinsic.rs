@@ -32,6 +32,12 @@ pub(super) struct Proof {
     /// How many `&mut` arrays and strings a host call copies in and
     /// gives back after its value, as `[value, copies..]` (D558 slice 2).
     copies: u8,
+    /// Whether the call opens a scope frame (D558 tier 1): a field a
+    /// pattern borrows that it takes is reached when the frame opens, as
+    /// `layout.iter(&tree.children)`'s frame reaches the children for the
+    /// rest of the scope, not lent to the call alone.
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    opens: bool,
     /// Where the program makes the call, which the location a crate's
     /// `#[track_caller]` function sees from the adapter's call stands for,
     /// in a location it gives and in a panic it raises
@@ -75,6 +81,7 @@ impl Proof {
                 Some(host::item::Guard::Mutable | host::item::Guard::OptionMutable)
             ),
             copies: 0,
+            opens: item.opens(),
             caller: None,
         }
     }
@@ -266,12 +273,18 @@ impl Proof {
             }
         }
 
-        // A field a pattern borrows is lent to the call alone.
-        let result = crate::scope::opened(args, &mut |args| {
+        // A field a pattern borrows is lent to the call alone, or to the
+        // scope frame the call opens, which reaches it itself.
+        let mut call = |args: &mut [&mut Dynamic]| {
             crate::std_facade::panic::calling(self.caller.as_deref(), || {
                 runtime.invoke(requirement, args, invocation, equal, engine)
             })
-        });
+        };
+        let result = if self.opens {
+            call(args)
+        } else {
+            crate::scope::opened(args, &mut call)
+        };
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             let observable =

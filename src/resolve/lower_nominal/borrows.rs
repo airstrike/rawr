@@ -1047,6 +1047,73 @@ impl Parser<'_> {
         signature::summary(&signature, &|target| self.declared_lifetimes(target))
     }
 
+    /// A crate call whose output keeps its `&mut` receiver and a `&mut`
+    /// input with it, beside an input it borrows for the call alone, as
+    /// iced's `overlay(tree, layout, renderer, ..)` is, refused where no
+    /// stand-in's lending region can hold it (#2698): Rawr runs such a
+    /// call only in the body of a crate trait impl's method that the call
+    /// is the same trait's method of, where native code lends the stand-in
+    /// what the output keeps.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn refuse_unlent_call(
+        &mut self,
+        item: &crate::host::item::Definition,
+        span: Span,
+    ) -> Result<(), Error> {
+        if !lends_only(item) || self.collecting_instances {
+            return Ok(());
+        }
+        if self.in_lending_method(item) {
+            // Only native code may call this body: a program's own call of
+            // it is refused once every body is read (`refuse_lending_calls`).
+            self.instance_uses
+                .lending
+                .get_or_insert_with(|| item.path().into());
+            return Ok(());
+        }
+        Err(Error::InvalidHostOperation {
+            item: item.path().into(),
+            reason: "its output keeps its `&mut` receiver and a `&mut` input borrowed, which \
+                     Rawr lends only where native code calls a program's method of this shape, \
+                     as iced asks a widget for its `overlay`: calling it anywhere else isn't \
+                     supported yet"
+                .into(),
+            operation: span,
+        })
+    }
+
+    /// Whether this body is the method of a crate trait's impl that the
+    /// call `item` is the same trait's method of, as `self.content.overlay(
+    /// ..)` in a program's `Widget::overlay` is: native code calls it in a
+    /// lending region, which lends the call what it keeps.
+    #[cfg(feature = "rust-import")]
+    fn in_lending_method(&self, item: &crate::host::item::Definition) -> bool {
+        let Some(owner) = item
+            .trait_of()
+            .and_then(|identity| self.models.host.trait_name(identity))
+        else {
+            return false;
+        };
+        self.in_method_of(&owner, &item.path())
+    }
+
+    /// Whether this body is a method of an impl of the trait `trait_path`
+    /// whose name is the last segment of `member`'s path, each trait named
+    /// by its last segment.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn in_method_of(&self, trait_path: &str, member: &str) -> bool {
+        let (Some(trait_name), Some(callable)) = (&self.impl_trait, &self.callable) else {
+            return false;
+        };
+        let method = callable
+            .name()
+            .rsplit("::")
+            .next()
+            .and_then(|name| name.split('#').next())
+            .unwrap_or_default();
+        last_segment(member) == method && last_segment(trait_path) == last_segment(trait_name)
+    }
+
     /// What a call of the facade or imported item `item` keeps of its
     /// inputs: the importer's lifetimes (D572.4). It admits a call whose
     /// value borrows only as a borrow guard, a lent `&str`, or a scope frame
@@ -2690,4 +2757,35 @@ fn builtin_summary(receiver: &Ty, member: &str) -> Option<Summary> {
 /// one, or the receiver `self`, which is a local when it is owned.
 fn is_place(value: &ParsedExpr) -> bool {
     value.lvalue.is_some() || value.source.as_str() == "self"
+}
+
+/// The last segment of `path`, its generic arguments left out:
+/// `Widget` of `iced::advanced::Widget<M, T, R>`.
+#[cfg(feature = "rust-import")]
+fn last_segment(path: &str) -> &str {
+    let path = path.split('<').next().unwrap_or_default();
+    path.rsplit("::").next().unwrap_or_default().trim()
+}
+
+/// Whether a call of `item` runs only in a stand-in's lending region: its
+/// output keeps its `&mut` receiver and a `&mut` input it lends, and it
+/// borrows another input for the call alone, as iced's `overlay(&'b mut
+/// self, tree: &'b mut Tree, .., renderer: &Renderer, ..)` does, which a
+/// frame that runs the rest of the scope can't hold (#2698).
+#[cfg(feature = "rust-import")]
+fn lends_only(item: &crate::host::item::Definition) -> bool {
+    use crate::host::type_ref::Shape;
+    if item.frame() != Some(crate::host::item::Frame::Receiver)
+        || item.receiver() != Some(receiver::Mode::Mutable)
+    {
+        return false;
+    }
+    let parameters = item.signature().parameters();
+    let reference = |index: usize, exclusive: bool| {
+        parameters.get(index).is_some_and(
+            |ty| matches!(ty.shape(), Shape::Reference { mutable, .. } if *mutable || !exclusive),
+        )
+    };
+    (0..parameters.len()).any(|index| item.lends(index) && reference(index, true))
+        && (0..parameters.len()).any(|index| !item.lends(index) && reference(index, false))
 }

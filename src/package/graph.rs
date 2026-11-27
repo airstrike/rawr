@@ -70,6 +70,63 @@ pub struct Package {
     /// items, which Rust lets a child module see of its ancestors': the
     /// shadow crate stands those items too.
     below: super::island::Below,
+    /// The files of crate modules whose generic items the package holds
+    /// (`crate_source`), each with its whole text: native inputs, whose
+    /// sources hold only those items.
+    crate_sources: Vec<(PathBuf, String)>,
+    /// Each program module of a crate module's generic items, with the
+    /// program's path to the root module of the crate that defines it and
+    /// the module's path from that root, which its `crate::` and
+    /// `super::` go through.
+    crate_source_roots: Vec<CrateSourceRoot>,
+}
+
+/// The file of a crate module a program names (`crate_source`).
+struct CrateModule {
+    file: PathBuf,
+    /// The program's path to the root module of the crate that defines it.
+    root: Box<[ImmutableString]>,
+    /// The module's path from that root.
+    module: Box<[ImmutableString]>,
+    /// The features Cargo resolved for that crate, or `None` for a path
+    /// dependency's, which the program's stand for.
+    features: Option<Vec<String>>,
+    /// The program's hidden dependency on that crate, which `root` names,
+    /// when the program names it by no dependency of its own.
+    dependency: Option<manifest::rust::Dependency>,
+    /// The derives of the types the module names from elsewhere
+    /// (`crate_source::located::imported`).
+    imported: Vec<super::crate_source::bound::Derived>,
+    /// The program's path to the module whose items the module's are
+    /// (`crate_source::located::Located::mount`).
+    mount: Option<Box<[ImmutableString]>>,
+    /// The program's path to the module when it names its crate by no
+    /// dependency of its own: through its hidden dependency, `root`.
+    hidden: Option<Box<[ImmutableString]>>,
+    /// The path the module is named by through re-exports
+    /// ([`CrateSourceRoot::spelled`]).
+    spelled: Option<Box<[ImmutableString]>>,
+}
+
+/// Where a program module of a crate module's generic items
+/// (`crate_source`) reads its `crate::` and `super::` paths from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CrateSourceRoot {
+    /// The program module ([`super::crate_source::name`]).
+    module: ImmutableString,
+    /// The program's path to the root module of the crate that defines it.
+    root: Box<[ImmutableString]>,
+    /// The crate module's path from that root.
+    path: Box<[ImmutableString]>,
+    /// Whether the program module stands for the module its crate module
+    /// is globbed into (`crate_source::located::Located::mount`), whose
+    /// other items stay native.
+    mounted: bool,
+    /// The path the crate module's opener names it by, through re-exports,
+    /// when that is another: `events::tally` of `parts`' `tally`, or
+    /// `iced_widget`'s `crate::core::widget::tree` of `iced_core`'s, which
+    /// another program module of a crate module spells so.
+    spelled: Option<Box<[ImmutableString]>>,
 }
 
 /// One `use` declaration of a marked module that a native module's path
@@ -260,6 +317,107 @@ impl Package {
     #[must_use]
     pub fn rust_modules(&self) -> &[RustModule] {
         &self.rust_modules
+    }
+
+    /// The files of crate modules whose generic items the package holds
+    /// (`crate_source`), each with its whole text.
+    #[must_use]
+    pub fn crate_sources(&self) -> &[(PathBuf, String)] {
+        &self.crate_sources
+    }
+
+    /// The program's path that a program module of a crate module's
+    /// generic items (`crate_source`) names by `crate`, or by `super`
+    /// `supers` times, with `rest` after it.
+    pub(crate) fn crate_source_path(
+        &self,
+        module: &str,
+        supers: usize,
+        rest: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let found = self
+            .crate_source_roots
+            .iter()
+            .find(|root| root.module.as_str() == module)?;
+        let kept = if supers == 0 {
+            0
+        } else {
+            found.path.len().checked_sub(supers)?
+        };
+        let path: Vec<ImmutableString> = found
+            .root
+            .iter()
+            .chain(&found.path[..kept])
+            .chain(rest)
+            .cloned()
+            .collect();
+        Some(path)
+    }
+
+    /// The program's path to `rest`, an item the crate module whose program
+    /// module is `module` declares, and what follows it: `Style::from` of
+    /// `container`'s own `Style`.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    pub(crate) fn crate_source_own(
+        &self,
+        module: &str,
+        rest: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let found = self
+            .crate_source_roots
+            .iter()
+            .find(|root| root.module.as_str() == module)?;
+        Some(
+            found
+                .root
+                .iter()
+                .chain(&found.path)
+                .chain(rest)
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// Whether the program module `module` stands for the module its crate
+    /// module is globbed into, whose other items stay native.
+    pub(crate) fn crate_source_mounted(&self, module: &str) -> bool {
+        self.crate_source_roots
+            .iter()
+            .any(|root| root.module.as_str() == module && root.mounted)
+    }
+
+    /// The path from the package's root through the program module of a
+    /// crate module's generic items that `spelled`, a program's path into
+    /// a crate ([`Package::crate_source_path`]), goes through, when it
+    /// goes through such a module: `crate::container::Container` in
+    /// `iced_widget`'s `helpers` is the program's `Container` when
+    /// `container` is opened too.
+    pub(crate) fn crate_source_module(
+        &self,
+        spelled: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        // By the crate's own path to it, or the one its opener names it by.
+        let (found, taken) = self
+            .crate_source_roots
+            .iter()
+            .filter_map(|root| {
+                let own = spelled.len() >= root.root.len() + root.path.len()
+                    && spelled.starts_with(&root.root)
+                    && spelled[root.root.len()..].starts_with(&root.path);
+                if own {
+                    return Some((root, root.root.len() + root.path.len()));
+                }
+                let named = root.spelled.as_deref()?;
+                spelled.starts_with(named).then_some((root, named.len()))
+            })
+            .max_by_key(|(root, _)| root.path.len())?;
+        let rest = &spelled[taken..];
+        Some(
+            [ImmutableString::from("crate"), found.module.clone()]
+                .into_iter()
+                .chain(rest.iter().cloned())
+                .collect(),
+        )
     }
 
     /// The marked modules' `use` declarations native paths go through.
@@ -791,6 +949,14 @@ impl Graph {
         )
     }
 
+    /// Whether the crate root is native Rust whose marked modules rawr
+    /// interprets (D501): only then does rawr's copy of the crate declare a
+    /// stand-in for a marked type native code holds as a trait object.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn native_root(&self) -> bool {
+        self.entry_package().native_root().is_some()
+    }
+
     /// The marked types the runner holds as their mirrors in rawr's copy
     /// of the crate where a crate's generic takes one (`island::mirrors`,
     /// #1249); none when the shadow crate stands no trampolines.
@@ -1011,6 +1177,7 @@ impl<'a> Builder<'a> {
             },
         };
         let entry_package = self.load_package(request)?;
+        self.load_crate_sources(entry_package)?;
         let entry_source = self.packages[entry_package.0].source;
         Ok(Graph {
             packages: self.packages.into_boxed_slice(),
@@ -1043,6 +1210,7 @@ impl<'a> Builder<'a> {
             package: None,
         };
         let entry_package = self.load_package(request)?;
+        self.load_crate_sources(entry_package)?;
         let entry_source = self.packages[entry_package.0].source;
         Ok(Graph {
             packages: self.packages.into_boxed_slice(),
@@ -1193,6 +1361,8 @@ impl<'a> Builder<'a> {
             re_exports: Vec::new(),
             marked_uses: false,
             below: super::island::Below::new(),
+            crate_sources: Vec::new(),
+            crate_source_roots: Vec::new(),
         });
 
         let module_root = request
@@ -1330,6 +1500,226 @@ impl<'a> Builder<'a> {
         }
         self.find_marked_uses(package);
         Ok(package)
+    }
+
+    /// Each crate module whose generic items rawr reads from the crate's
+    /// source (`crate_source`), as a module of `package`'s: the crate's file
+    /// with only those items, at their places. A module of a crate that is
+    /// no path dependency of the package, or whose file is missing, is left
+    /// to the crate's native build.
+    fn load_crate_sources(&mut self, package: Id) -> Result<(), Error> {
+        let mut opened = Vec::new();
+        let finding = std::time::Instant::now();
+        for path in super::crate_source::modules() {
+            let Some(found) = self.crate_module_file(package, &path) else {
+                continue;
+            };
+            let Ok(text) = self.read_to_string(&found.file) else {
+                continue;
+            };
+            if let (Some(dependency), Some(config)) = (
+                found.dependency.clone(),
+                self.packages[package.0].rust.as_mut(),
+            ) && !config
+                .dependencies
+                .iter()
+                .any(|known| known.alias == dependency.alias)
+            {
+                let mut dependencies = std::mem::take(&mut config.dependencies).into_vec();
+                dependencies.push(dependency);
+                config.dependencies = dependencies.into_boxed_slice();
+            }
+            // The crate's items as its own features select them. The file
+            // stays a reload input with its text on disk.
+            let selected = match &found.features {
+                Some(features) => super::polyglot::cfg_resolved(
+                    &text,
+                    &crate::project::cargo::features::Enabled::of_names(
+                        features.iter().map(String::as_str),
+                    ),
+                ),
+                None => text.clone(),
+            };
+            opened.push((path, found, text, selected));
+        }
+        if !opened.is_empty()
+            && std::env::var_os("RAWR_VERBOSE").is_some_and(|verbose| verbose == "1")
+        {
+            eprintln!(
+                "rawr: the opened modules were found in {:.1} s",
+                finding.elapsed().as_secs_f64()
+            );
+        }
+        if opened.is_empty() {
+            return Ok(());
+        }
+        // The generic items the program's own modules reach, through each
+        // other across the opened modules.
+        let (name, root) = {
+            let package = &self.packages[package.0];
+            (package.name.clone(), package.root.clone())
+        };
+        let program = self
+            .sources
+            .iter()
+            .filter(|source| source.package() == name.as_str())
+            .map(source::Source::text)
+            .collect::<Vec<_>>();
+        let modules = opened
+            .iter()
+            .map(|(_, _, _, selected)| selected.as_str())
+            .collect::<Vec<_>>();
+        let reached = super::polyglot::reached_names(&program, &modules);
+        let reached = |name: &str| reached.contains(name);
+        for (path, found, text, selected) in opened {
+            let file = found.file;
+            let bindings = if self.snapshot.is_some() {
+                super::crate_source::generic::Bindings::Left
+            } else {
+                super::crate_source::generic::Bindings::Written
+            };
+            // A module whose items the program names at its parent's path
+            // stands for that path.
+            let mounted = found.mount.is_some();
+            let path = found.mount.or(found.hidden).unwrap_or(path);
+            let generic = super::crate_source::generic::text(
+                &selected,
+                &path,
+                bindings,
+                &found.imported,
+                &reached,
+            );
+            self.packages[package.0]
+                .crate_sources
+                .push((file.clone(), text));
+            self.packages[package.0]
+                .crate_source_roots
+                .push(CrateSourceRoot {
+                    module: super::crate_source::name(&path),
+                    root: found.root,
+                    path: found.module,
+                    mounted,
+                    spelled: found.spelled,
+                });
+            let module_root = file.parent().unwrap_or(&root).to_path_buf();
+            self.load_module_text(
+                package,
+                &name,
+                &root,
+                &module_root,
+                Box::new([super::crate_source::name(&path)]),
+                file.clone(),
+                file,
+                generic,
+                None,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The file of the module at `path` of a crate `package` names, the
+    /// crate's name first, and the package's path to the root module of
+    /// the crate that defines it: `src/a/b.rs` or `src/a/b/mod.rs` under a
+    /// path dependency's directory, or the module Cargo's package graph
+    /// and the crates' re-exports reach (`crate_source::located`), whose
+    /// crate the package reaches by a hidden dependency.
+    fn crate_module_file(&self, package: Id, path: &[ImmutableString]) -> Option<CrateModule> {
+        let (alias, modules) = path.split_first()?;
+        let config = self.packages[package.0].rust.as_ref()?;
+        let directory =
+            config
+                .dependencies
+                .iter()
+                .find_map(|dependency| match &dependency.source {
+                    manifest::rust::Source::Path(directory) if dependency.alias == *alias => {
+                        Some(directory.clone())
+                    }
+                    _ => None,
+                });
+        let Some(directory) = directory else {
+            return self.located_module(package, path);
+        };
+        let mut file = directory.join("src");
+        file.extend(modules.iter().map(ImmutableString::as_str));
+        #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+        let imported = self.packages[package.0]
+            .cargo
+            .as_ref()
+            .map(|cargo| super::crate_source::located::imported(&cargo.path, path))
+            .unwrap_or_default();
+        #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
+        let imported = Vec::new();
+        #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+        let mount = self.packages[package.0]
+            .cargo
+            .as_ref()
+            .and_then(|cargo| super::crate_source::located::locate(&cargo.path, path))
+            .and_then(|located| located.mount);
+        #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
+        let mount = None;
+        let found = |file| CrateModule {
+            file,
+            root: Box::new([alias.clone()]),
+            module: modules.into(),
+            features: None,
+            dependency: None,
+            imported: imported.clone(),
+            mount: mount.clone(),
+            hidden: None,
+            spelled: None,
+        };
+        let flat = file.with_extension("rs");
+        if self.is_file(&flat) {
+            return Some(found(flat));
+        }
+        let nested = file.join("mod.rs");
+        // A module the dependency re-exports from a crate of its own, as
+        // the fixture's `events::tally` is `parts`' (`located`).
+        self.is_file(&nested)
+            .then(|| found(nested))
+            .or_else(|| self.located_module(package, path))
+    }
+
+    /// The module at `path` of a crate `package` names, as Cargo's package
+    /// graph and the crates' re-exports reach it (`crate_source::located`),
+    /// whose crate the package reaches by a hidden dependency when it has
+    /// none of its own.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    fn located_module(&self, package: Id, path: &[ImmutableString]) -> Option<CrateModule> {
+        let manifest = self.packages[package.0].cargo.as_ref()?.path.clone();
+        let located = super::crate_source::located::locate(&manifest, path)?;
+        let alias = located.alias()?;
+        let hidden = (!located.named).then(|| {
+            std::iter::once(alias.clone())
+                .chain(located.module.iter().cloned())
+                .collect()
+        });
+        // As the crate `path` starts at names it, which is the program's
+        // dependency on it, or its hidden one.
+        let (first, rest) = path.split_first()?;
+        let first = if located.named {
+            first.clone()
+        } else {
+            super::crate_source::located::hidden_name(first)
+        };
+        let spelled = Some(std::iter::once(first).chain(rest.iter().cloned()).collect());
+        Some(CrateModule {
+            dependency: located.dependency(),
+            file: located.file,
+            root: Box::new([alias]),
+            module: located.module,
+            features: Some(located.features),
+            imported: super::crate_source::located::imported(&manifest, path),
+            mount: located.mount,
+            hidden,
+            spelled,
+        })
+    }
+
+    #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
+    #[allow(clippy::unused_self)]
+    fn located_module(&self, _package: Id, _path: &[ImmutableString]) -> Option<CrateModule> {
+        None
     }
 
     /// A binary whose tree is marked runs, so a marked module in the tree

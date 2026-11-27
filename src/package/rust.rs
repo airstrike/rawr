@@ -28,8 +28,20 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment, &mut Copies::default())?;
-        request(entry, config, environment, None, app, &[], limits).map(Some)
+        let mut copies = Copies::default();
+        let (config, patches) = opened_crates(entry, config, &environment, &mut copies)?;
+        let app = app_crate(self, &environment, &mut copies)?;
+        request(
+            entry,
+            &config,
+            &patches,
+            environment,
+            None,
+            app,
+            &[],
+            limits,
+        )
+        .map(Some)
     }
 
     /// The Rust imports, resolved in `universe` (the importer's plain one).
@@ -57,10 +69,12 @@ impl Graph {
             (None, None) => return Ok(None),
         };
         script_project(entry)?;
+        let (config, patches) = opened_crates(entry, &config, &environment, copies)?;
         let app = app_crate(self, &environment, copies)?;
         request(
             entry,
             &config,
+            &patches,
             environment,
             Some(universe),
             app,
@@ -87,8 +101,9 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
+        let (config, patches) = opened_crates(entry, config, &environment, copies)?;
         let app = app_crate(self, &environment, copies)?;
-        request_inventory(entry, config, environment, app, closure, limits).map(Some)
+        request_inventory(entry, &config, &patches, environment, app, closure, limits).map(Some)
     }
 
     /// The Rust edition of the entry crate's source, `2015` when its Cargo
@@ -139,7 +154,39 @@ impl Graph {
         let declared = |path: &[&str]| path.len() >= 2 && self.rust_declares(path[0]);
         let mut paths = Vec::new();
         for source in self.sources() {
+            // A crate module's program module names its own crate by
+            // `crate` and `super`, which are the defining crate's paths
+            // (`crate_source`), so they are demanded with the program's.
+            let opened = source
+                .modules()
+                .first()
+                .filter(|module| super::crate_source::is_name(module));
             for path in seed::paths(source.text()) {
+                if let Some(module) = opened {
+                    let own = path
+                        .first()
+                        .filter(|first| path.len() >= 2 && declares(source.text(), first));
+                    let segments = match own {
+                        Some(_) => entry.crate_source_own(
+                            module,
+                            &path
+                                .iter()
+                                .map(|segment| crate::ImmutableString::from(segment.as_str()))
+                                .collect::<Vec<_>>(),
+                        ),
+                        None => crate_source_seed(entry, module, &path),
+                    };
+                    if let Some(segments) = segments {
+                        let segments = segments
+                            .iter()
+                            .map(|segment| segment.as_str())
+                            .collect::<Vec<_>>();
+                        if declared(&segments) {
+                            paths.push(segments.join("::"));
+                        }
+                        continue;
+                    }
+                }
                 let segments = match app {
                     Some(app) if source.package() == entry.name() => {
                         app_crate_path(entry, app, source.modules(), &path)
@@ -221,6 +268,47 @@ fn crate_paths(ty: &str) -> impl Iterator<Item = String> + '_ {
     .filter_map(|path| path.strip_prefix("crate::"))
     .filter(|path| !path.is_empty())
     .map(str::to_owned)
+}
+
+/// Whether `text` declares a type or trait named `name` at any depth, as
+/// a crate module's program module declares its own (`struct Style`).
+fn declares(text: &str, name: &str) -> bool {
+    ["struct", "enum", "trait", "type", "union"]
+        .iter()
+        .any(|keyword| {
+            text.match_indices(&format!("{keyword} {name}"))
+                .any(|(at, matched)| {
+                    let before = text[..at].chars().next_back();
+                    let after = text[at + matched.len()..].chars().next();
+                    !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                        && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                })
+        })
+}
+
+/// The program's path that `path`, written in the program module `module`
+/// of a crate module's generic items, names by `crate` or `super`
+/// (`Package::crate_source_path`). `None` for a path that starts
+/// otherwise.
+fn crate_source_seed(
+    entry: &super::graph::Package,
+    module: &str,
+    path: &[String],
+) -> Option<Vec<crate::ImmutableString>> {
+    let supers = path
+        .iter()
+        .take_while(|segment| *segment == "super")
+        .count();
+    let rest = match path.first()?.as_str() {
+        "crate" => &path[1..],
+        _ if supers > 0 => &path[supers..],
+        _ => return None,
+    };
+    let rest = rest
+        .iter()
+        .map(|segment| crate::ImmutableString::from(segment.as_str()))
+        .collect::<Vec<_>>();
+    entry.crate_source_path(module, supers, &rest)
 }
 
 /// A script path (`crate::model::Thing`, `super::model::Thing`, or
@@ -361,6 +449,157 @@ impl Copies {
             }
         }
     }
+}
+
+/// `config` with each path dependency whose modules rawr reads generic code
+/// from (`crate_source`) named through the runner's copy of it, written
+/// beside the runner as `opened-<name>` in the project's Rawr directory:
+/// the crate with those modules' items and fields public
+/// (`crate_source::opened`), which their generic items, run as the
+/// program's, reach as rustc lets them. Both the runner and the bindings
+/// read that copy, so the program's own `cargo build` keeps the crate as
+/// written.
+fn opened_crates(
+    entry: &super::graph::Package,
+    config: &Config,
+    environment: &Environment,
+    copies: &mut Copies,
+) -> rawr_import::Result<(Config, Vec<Patch>)> {
+    let crates = super::crate_source::crates();
+    let modules = super::crate_source::modules();
+    let mut config = config.clone();
+    let mut patches = Vec::new();
+    if crates.is_empty() {
+        return Ok((config, patches));
+    }
+    let rawr = copies.rawr_directory(entry.root(), environment);
+    let mut dependencies = config.dependencies.into_vec();
+    for dependency in &mut dependencies {
+        let Source::Path(crate_directory) = &dependency.source else {
+            continue;
+        };
+        if !crates.contains(&dependency.alias) {
+            continue;
+        }
+        let directory = rawr.join(format!("opened-{}", dependency.alias));
+        let paths = modules
+            .iter()
+            .filter(|path| path.first() == Some(&dependency.alias))
+            .map(|path| &path[1..])
+            .collect::<Vec<_>>();
+        let files = super::crate_source::opened::files(crate_directory, &directory, &paths)
+            .map_err(|source| rawr_import::Error::Io {
+                operation: "read crate",
+                path: crate_directory.clone(),
+                source,
+            })?;
+        write_changed(files, &mut copies.written)?;
+        dependency.source = Source::Path(directory);
+    }
+    // A module of a crate no path dependency is, as a registry or git
+    // crate, or one reached through another crate's re-exports: a linked
+    // copy of its source tree, one per tree with each of its modules
+    // opened, patched in for every crate that uses it.
+    let mut trees: Vec<Tree> = Vec::new();
+    for path in &modules {
+        let direct = dependencies.iter().any(|dependency| {
+            matches!(dependency.source, Source::Path(_)) && path.first() == Some(&dependency.alias)
+        });
+        if direct {
+            continue;
+        }
+        let Some(located) = super::crate_source::located::locate(&config.cargo_authority, path)
+        else {
+            continue;
+        };
+        let Some(source) = located.package.patch_source() else {
+            continue;
+        };
+        let root = located.package.copy_root();
+        match trees.iter_mut().find(|tree| tree.root == root) {
+            Some(tree) => tree.opened.push(located.file),
+            None => trees.push(Tree {
+                root,
+                source,
+                opened: vec![located.file],
+                packages: located.siblings,
+            }),
+        }
+    }
+    for Tree {
+        root,
+        source,
+        opened,
+        packages,
+    } in trees
+    {
+        let destination = opened_tree(&root, &opened);
+        let io = |error| rawr_import::Error::Io {
+            operation: "link crate",
+            path: root.clone(),
+            source: error,
+        };
+        super::crate_source::opened::linked(&root, &destination, &opened).map_err(io)?;
+        // Every package of the tree comes from the copy, so a sibling its
+        // manifest names by a workspace path is the one its other
+        // dependents use.
+        for package in packages {
+            let Ok(relative) = package.directory.strip_prefix(&root) else {
+                continue;
+            };
+            patches.push(Patch {
+                source: source.clone(),
+                name: package.name.clone(),
+                directory: destination.join(relative),
+            });
+        }
+    }
+    config.dependencies = dependencies.into_boxed_slice();
+    Ok((config, patches))
+}
+
+/// Where the linked copy of the source tree at `root` that opens `opened`
+/// lives: in rawr's home, outside every project, since the tree is a
+/// workspace of its own, as a git checkout's is, which the runner names by
+/// its path as Cargo names any package outside the project's workspace.
+/// Projects that open the same files of one tree share it.
+fn opened_tree(root: &Path, opened: &[std::path::PathBuf]) -> std::path::PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut files = opened.to_vec();
+    files.sort();
+    let mut hasher = std::hash::DefaultHasher::new();
+    files.hash(&mut hasher);
+    let name: Vec<_> = root
+        .iter()
+        .rev()
+        .take(2)
+        .map(|component| component.to_string_lossy())
+        .collect();
+    super::manifest::script::home().join("opened").join(format!(
+        "{}-{:016x}",
+        name.join("-"),
+        hasher.finish()
+    ))
+}
+
+/// A source tree whose linked copy opens some of its crates' modules.
+struct Tree {
+    /// The tree: a git checkout's root, or a registry package.
+    root: std::path::PathBuf,
+    /// Its `[patch]` source.
+    source: String,
+    /// The files of the modules it opens.
+    opened: Vec<std::path::PathBuf>,
+    /// The packages of the program's graph it holds.
+    packages: Vec<super::crate_source::located::Package>,
+}
+
+/// A package the runner's `[patch]` names its opened copy for.
+struct Patch {
+    /// The `[patch]` source: `crates-io`, or a git URL.
+    source: String,
+    name: String,
+    directory: std::path::PathBuf,
 }
 
 /// The digest [`Copies`] keeps of a copy's text.
@@ -1419,6 +1658,13 @@ mod seed {
                 _ => index += 1,
             }
         }
+        // `<Style as From<Color>>::from`: the member of the type, which a
+        // demand of `Style::from` brings from each trait it implements.
+        for (ty, member) in qualified_members(text) {
+            let mut segments = ty;
+            segments.push(member);
+            qualified.push((segments, false));
+        }
         // A `use` path starts at any name in scope, as rustc resolves it:
         // `use keyboard::key;` beside `use iced::keyboard;`, at module level
         // or in a block, names `iced::keyboard::key`.
@@ -1456,6 +1702,55 @@ mod seed {
             }
         }
         paths
+    }
+
+    /// Each `<T as Trait>::m` of `text`, as `T`'s path and `m`: the member
+    /// a qualified call names of the type.
+    fn qualified_members(text: &str) -> Vec<(Vec<&str>, &str)> {
+        let bytes = text.as_bytes();
+        let word = |at: usize| {
+            let end = bytes[at..]
+                .iter()
+                .position(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
+                .map_or(bytes.len(), |length| at + length);
+            (&text[at..end], end)
+        };
+        let mut found = Vec::new();
+        for (open, _) in text.match_indices('<') {
+            let mut at = open + 1;
+            let mut ty = Vec::new();
+            while at < bytes.len() && (bytes[at].is_ascii_alphabetic() || bytes[at] == b'_') {
+                let (segment, end) = word(at);
+                ty.push(segment);
+                at = end;
+                if text[at..].starts_with("::") {
+                    at += 2;
+                } else {
+                    break;
+                }
+            }
+            if ty.is_empty() || !text[at..].starts_with(" as ") {
+                continue;
+            }
+            let mut depth = 1_usize;
+            while at < bytes.len() && depth > 0 {
+                match bytes[at] {
+                    b'<' => depth += 1,
+                    b'>' if bytes[at - 1] != b'-' => depth -= 1,
+                    _ => {}
+                }
+                at += 1;
+            }
+            if depth == 0
+                && text[at..].starts_with("::")
+                && bytes
+                    .get(at + 2)
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            {
+                found.push((ty, word(at + 2).0));
+            }
+        }
+        found
     }
 
     /// What one `use` item binds and demands, as its tree is walked.
@@ -1696,6 +1991,24 @@ mod seed {
             );
         }
 
+        /// The seed names the member a qualified call `<T as Trait>::m`
+        /// calls, through `T`'s binding, as a demand of `T::m` brings it.
+        #[test]
+        fn seed_names_a_qualified_calls_member_of_its_type() {
+            let text = "use iced::core::Color;\n\
+                fn bind(a: Color) -> Style { <Style as From<Color>>::from(a) }\n\
+                fn deref(a: &Color) { let _ = <Color as std::ops::Deref>::deref(a); }\n";
+            let joined = joined(text);
+            assert!(
+                joined.iter().any(|path| path == "Style::from"),
+                "{joined:?}"
+            );
+            assert!(
+                joined.iter().any(|path| path == "iced::core::Color::deref"),
+                "{joined:?}"
+            );
+        }
+
         /// iced's gallery: `match ::image::load_from_memory(..)`, a global
         /// path after a keyword, which no path continues through (#1935).
         #[test]
@@ -1718,6 +2031,7 @@ mod seed {
 fn request_inventory(
     entry: &super::graph::Package,
     config: &Config,
+    patches: &[Patch],
     environment: Environment,
     app: App,
     closure: &[Dependency],
@@ -1731,6 +2045,9 @@ fn request_inventory(
     .environment(environment)
     .profile(&config.profile);
     builder = builder.cargo_authority(&config.cargo_authority);
+    for patch in patches {
+        builder = builder.patch(&patch.source, &patch.name, &patch.directory);
+    }
     // The probe declares what the program does; the inventory declares
     // its whole library closure, each crate by its own name.
     if closure.is_empty() {
@@ -1796,6 +2113,7 @@ fn dependencies(config: &Config) -> rawr_import::Result<Vec<Dependency>> {
 fn request(
     entry: &super::graph::Package,
     config: &Config,
+    patches: &[Patch],
     environment: Environment,
     universe: Option<rawr_import::cargo::universe::Catalog>,
     app: App,
@@ -1810,6 +2128,9 @@ fn request(
     .environment(environment)
     .profile(&config.profile);
     builder = builder.cargo_authority(&config.cargo_authority);
+    for patch in patches {
+        builder = builder.patch(&patch.source, &patch.name, &patch.directory);
+    }
     for dependency in dependencies(config)? {
         builder = builder.dependency(dependency);
     }

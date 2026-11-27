@@ -1695,17 +1695,72 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     pub(super) fn spliced_trait_call(
         &mut self,
-        mut value: ParsedExpr,
+        value: ParsedExpr,
         member: &str,
         member_span: Span,
     ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
         let Some(path) = self.spliced_trait_member(member, member_span) else {
             return Ok(Err(value));
         };
-        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+        self.self_member_call(value, &path)
+    }
+
+    /// `value.method(..)` of a program type with no method of the name,
+    /// whose program impl of a crate trait in scope leaves the trait's
+    /// provided `method` to it, as a widget's `_boxed` or a cell's
+    /// `held`: the trait's method over its `Self` (`surface::member`), as
+    /// rustc finds the trait's method. `Err(value)` back when no such
+    /// trait has one, or more than one does.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn provided_member_call(
+        &mut self,
+        value: ParsedExpr,
+        owner: crate::type_def::Id,
+        member: &str,
+    ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
+        let suffix = format!("::__rawr_self::{member}");
+        let implemented = |path: &str| {
+            let Some(trait_path) = path.strip_suffix(&suffix) else {
+                return false;
+            };
+            let known = self.trait_known_as(trait_path);
+            self.models.script_impls.iter().any(|candidate| {
+                matches!(&candidate.owner, crate::resolve::type_ref::Type::Path(
+                    crate::resolve::type_ref::Path {
+                        target: crate::resolve::type_ref::Target::Script { definition, .. },
+                        ..
+                    }
+                ) if *definition == owner)
+                    && (candidate.path.as_str() == trait_path
+                        || known.as_ref().is_some_and(|known| {
+                            self.trait_known_as(&candidate.path)
+                                .is_some_and(|written| written == *known)
+                        }))
+            })
+        };
+        let paths = self
+            .scoped_trait_members(member)
+            .into_iter()
+            .filter(|path| implemented(path))
+            .collect::<Vec<_>>();
+        let [path] = paths.as_slice() else {
             return Ok(Err(value));
         };
-        let owner = self.models.item_owner(&path).cloned();
+        self.self_member_call(value, path)
+    }
+
+    /// `value.method(..)` through the trait's method over its `Self` at
+    /// `path` (`surface::member`), its arguments read next.
+    #[cfg(feature = "rust-import")]
+    fn self_member_call(
+        &mut self,
+        mut value: ParsedExpr,
+        path: &str,
+    ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
+        let Some(items) = self.models.host_items(path).map(<[_]>::to_vec) else {
+            return Ok(Err(value));
+        };
+        let owner = self.models.item_owner(path).cloned();
         let start = value.span.start();
         let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
         let mut inputs = Vec::with_capacity(arguments.len() + 1);
@@ -1750,7 +1805,7 @@ impl<'a> Parser<'a> {
     /// autoref borrows its receiver: a place where it is, else the
     /// temporary, as `&` of an operand does (`parse_operand`).
     #[cfg(feature = "rust-import")]
-    fn borrow_receiver(&mut self, value: &mut ParsedExpr, mutable: bool) {
+    pub(super) fn borrow_receiver(&mut self, value: &mut ParsedExpr, mutable: bool) {
         let ty = self.inference.resolve(&value.ty);
         if value.lvalue.is_some() || self.flow().is_place(value.span) {
             let inner = self.may_hold_borrow(&ty);
@@ -1775,6 +1830,29 @@ impl<'a> Parser<'a> {
         value.lvalue = None;
     }
 
+    /// The crate trait among the crate-trait bounds of the generic
+    /// parameter `bounded` (`Generic::crate_bounds`) that has the method
+    /// `member` over its `Self` (`surface::member`), when one does: rustc
+    /// resolves `x.member()` of an `x: W` through `W`'s bounds alone.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn crate_bound_trait(&self, bounded: &Ty, member: &str) -> Option<ImmutableString> {
+        let Ty::Param(name, super::ty::Parameter::Declared) = bounded else {
+            return None;
+        };
+        let mut found = self
+            .generic_crate_bounds
+            .get(name)?
+            .iter()
+            .filter_map(type_ref::Type::opaque_trait)
+            .filter(|trait_path| {
+                self.models
+                    .host_items(&rawr_import::surface::member::path(trait_path, member))
+                    .is_some()
+            });
+        let trait_path = found.next()?;
+        found.next().is_none().then(|| trait_path.into())
+    }
+
     /// The path of the trait's method over its `Self` (`surface::member`)
     /// for `Trait::method(value, ..)` spliced as `value.method(..)` at
     /// `member_span`, when the trait has it.
@@ -1783,6 +1861,45 @@ impl<'a> Parser<'a> {
         let trait_path = self.spliced_traits.get(&member_span.start())?;
         let path = rawr_import::surface::member::path(trait_path, member);
         self.models.host_items(&path).is_some().then_some(path)
+    }
+
+    /// Whether the type `ty`'s own member `member` leaves a type
+    /// parameter open that none of its inputs or its output names, as `M`
+    /// of a crate's `impl<M> Diffed<M> for Mark` leaves `label`'s, where a
+    /// generic body's bound selected the trait's method at `member_span`
+    /// (`seed_selections`): the trait's method over its `Self` takes the
+    /// parameter from the body's bound, as rustc's generic body calls
+    /// through it.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn spliced_unfixed(&self, ty: &Ty, member: &str, member_span: Span) -> bool {
+        if self.spliced_trait_member(member, member_span).is_none() {
+            return false;
+        }
+        let resolved = match self.inference.resolve(ty) {
+            Ty::Reference { target, .. } => self.inference.resolve(&target),
+            ty => ty,
+        };
+        let Some(own) = resolved
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(&resolved, member))
+            .and_then(|definition| {
+                self.models
+                    .host_items(&format!("{}::{member}", definition.path()))
+            })
+        else {
+            return false;
+        };
+        own.iter().all(|item| {
+            let signature = item.signature();
+            signature.type_parameters().any(|(name, _)| {
+                !signature
+                    .parameters()
+                    .iter()
+                    .chain(std::iter::once(signature.output()))
+                    .any(|ty| ty.mentions_parameter(&name))
+            })
+        })
     }
 
     /// Whether the member `member` of the type `ty` is only a namesake of

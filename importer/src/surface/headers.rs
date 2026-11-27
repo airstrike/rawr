@@ -31,6 +31,9 @@ pub struct TraitHeader {
     pub parameters: Box<[signature::Parameter]>,
     pub defaults: Box<[Option<convert::Type>]>,
     pub call: Option<(Box<[convert::Type]>, convert::Type)>,
+    /// The names of its associated types, as `Class` of iced's
+    /// `container::Catalog`.
+    pub associated: Box<[Box<str>]>,
 }
 
 /// One impl of a trait, as `impl<W, M, T, R> Widget<M, T, R> for Column<W>
@@ -44,6 +47,14 @@ pub struct ImplHeader {
     pub self_type: convert::Type,
     pub bounds: Box<[ImplBound]>,
     pub projections: Box<[ImplProjection]>,
+    /// Each associated type the impl gives, by name, at its own
+    /// parameters with its lifetimes erased: `Class` of iced's `impl
+    /// Catalog for Theme` is `StyleFn<'a, Self>`, a boxed callable.
+    pub associated: Box<[(Box<str>, convert::Type)]>,
+    /// The names of the trait's provided methods the impl leaves to the
+    /// trait, as iced's `impl Widget for Text` leaves `overlay`: rustc
+    /// selects the trait's own body for each.
+    pub defaulted: Box<[Box<str>]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type,
@@ -335,6 +346,21 @@ impl<'g, P: api::Phase> Headers<'g, '_, P> {
                 convert::Type::Builtin(convert::Builtin::primitive(name)?)
             }
             model::Type::Parameter { index, .. } => convert::Type::Parameter(*index),
+            // A shared `&str`, as iced's `impl Widget<..> for &str` is for:
+            // Rawr's string, whose trait members the impl gives
+            // (`surface::text`). One for `&'static str` alone is for a
+            // string that lives for the program.
+            model::Type::Reference {
+                lifetime,
+                mutability: model::Mutability::Shared,
+                ty,
+            } if matches!(&**ty, model::Type::Primitive(name) if &**name == "str") => {
+                convert::Type::Builtin(if *lifetime == model::Lifetime::Static {
+                    convert::Builtin::StaticStr
+                } else {
+                    convert::Builtin::Str
+                })
+            }
             model::Type::Definition { id, arguments } => {
                 let definition = identity(id);
                 // A std type Rawr holds as its own, as iced's `impl<T>
@@ -522,6 +548,113 @@ impl<'g, P: api::Phase> Headers<'g, '_, P> {
             parameters: parameters.into_boxed_slice(),
             defaults: defaults.into_boxed_slice(),
             call,
+            associated: self.associated_names(definition.kind()),
+        })
+    }
+
+    /// The names of the associated types a trait of `kind` declares.
+    fn associated_names(&self, kind: &model::Kind) -> Box<[Box<str>]> {
+        let model::Kind::Trait { associated, .. } = kind else {
+            return Box::default();
+        };
+        associated
+            .iter()
+            .filter_map(|associated| {
+                let definition = self.model(&identity(associated))?;
+                matches!(definition.kind(), model::Kind::AssociatedType { .. })
+                    .then(|| definition.display_path().last().map(Into::into))
+                    .flatten()
+            })
+            .collect()
+    }
+
+    /// The associated types `implementation` gives, each by name at the
+    /// impl's parameters, as the facade can write them.
+    fn associated_values(
+        &self,
+        implementation: &model::Implementation,
+    ) -> Box<[(Box<str>, convert::Type)]> {
+        implementation
+            .associated()
+            .filter_map(|associated| {
+                let definition = self.model(&identity(associated))?;
+                let model::Kind::AssociatedType {
+                    default: model::Default::Present(value),
+                    ..
+                } = definition.kind()
+                else {
+                    return None;
+                };
+                let name = definition.display_path().last()?;
+                Some((name.into(), self.value_ty(value)?))
+            })
+            .collect()
+    }
+
+    /// `ty` as [`Self::ty`] writes it, or a boxed closure `Box<dyn Fn(A..)
+    /// -> B>`, as iced's `StyleFn<'a, Theme>` is, as the callable the
+    /// bridge boxes a program's closure as (T417), each input `&T` a
+    /// borrow.
+    fn value_ty(&self, ty: &model::Type) -> Option<convert::Type> {
+        if let Some(converted) = self.ty(ty) {
+            return Some(converted);
+        }
+        let model::Type::Definition { id, arguments } = ty else {
+            return None;
+        };
+        let boxed = self.model(&identity(id)).is_some_and(|definition| {
+            matches!(
+                crate::classify::std_binding::of(definition),
+                Some(crate::classify::std_binding::Std::Box)
+            )
+        });
+        // `Box<T, A>`: its allocator is the global one.
+        let Some(model::Type::TraitObject { bounds, .. }) =
+            crate::classify::std_binding::type_argument(arguments, 0)
+        else {
+            return None;
+        };
+        if !boxed {
+            return None;
+        }
+        let mut inputs = None;
+        let mut output = None;
+        for bound in bounds.iter() {
+            match bound {
+                model::ObjectBound::Trait(model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    ..
+                }) if self
+                    .model(&identity(trait_id))
+                    .and_then(|definition| definition.display_path().last())
+                    .is_some_and(|name| matches!(name, "Fn" | "FnMut" | "FnOnce")) =>
+                {
+                    let Some(model::Argument::Type(model::Type::Tuple(members))) = arguments.last()
+                    else {
+                        return None;
+                    };
+                    inputs = Some(members);
+                }
+                model::ObjectBound::ProjectionEquality { ty, .. } => output = Some(ty),
+                model::ObjectBound::Trait(_) => {}
+            }
+        }
+        let input = |ty: &model::Type| match ty {
+            model::Type::Reference { mutability, ty, .. } => Some(convert::Type::Borrowed {
+                mutable: *mutability == model::Mutability::Mutable,
+                ty: Box::new(self.ty(ty)?),
+            }),
+            ty => self.ty(ty),
+        };
+        let arguments = inputs?
+            .iter()
+            .map(input)
+            .chain([output.map_or(Some(convert::Type::Unit), |output| self.ty(output))])
+            .collect::<Option<Box<[_]>>>()?;
+        Some(convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::callable(),
+            arguments,
         })
     }
 
@@ -626,6 +759,8 @@ impl<'g, P: api::Phase> Headers<'g, '_, P> {
                     self_type: self_type.clone(),
                     bounds: Box::default(),
                     projections: Box::default(),
+                    associated: Box::default(),
+                    defaulted: Box::default(),
                 });
             }
         }
@@ -772,7 +907,32 @@ impl<'g, P: api::Phase> Headers<'g, '_, P> {
             self_type,
             bounds,
             projections,
+            associated: self.associated_values(implementation),
+            defaulted: self.defaulted(implementation, id),
         })
+    }
+
+    /// The names of the methods of `implementation`, an impl of the trait
+    /// `trait_id`, that the trait declares rather than the impl: its
+    /// provided methods the impl doesn't override.
+    fn defaulted(
+        &self,
+        implementation: &model::Implementation,
+        trait_id: &api::identity::Definition,
+    ) -> Box<[Box<str>]> {
+        implementation
+            .associated()
+            .filter_map(|associated| {
+                let definition = self.model(&identity(associated))?;
+                let model::Owner::Definition(owner) = definition.owner() else {
+                    return None;
+                };
+                if owner != trait_id || !matches!(definition.kind(), model::Kind::Function { .. }) {
+                    return None;
+                }
+                definition.display_path().last().map(Into::into)
+            })
+            .collect()
     }
 
     /// The where-clause bound `<this as Trait>::Name == value`, with a case

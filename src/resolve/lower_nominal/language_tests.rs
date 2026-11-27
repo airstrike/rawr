@@ -3071,6 +3071,27 @@ fn language_operators_lex_as_rust() {
     assert_eq!(value, (3 + 7 + 5 + 3 + 7 + 3) + 2 + 1);
 }
 
+/// A generic associated type's lifetimes, as iced's `Catalog` declares
+/// `type Class<'a>;` and its impls give `type Class<'a> = ..;`, are erased
+/// as every lifetime is.
+#[test]
+fn language_associated_type_lifetimes() {
+    let value = run(r#"
+        trait Catalog {
+            type Class<'a>;
+            fn class<'a>(&self) -> Self::Class<'a>;
+        }
+        struct Theme;
+        impl Catalog for Theme {
+            type Class<'a> = i64;
+            fn class<'a>(&self) -> i64 { 7 }
+        }
+        pub fn run() -> i64 { Theme.class() }
+        run()
+    "#);
+    assert_eq!(value, 7);
+}
+
 #[test]
 fn language_associated_types() {
     let shapes = r#"
@@ -4105,13 +4126,16 @@ fn language_default_trait_parameters_and_repeated_generic_bounds() {
         run()
     "#);
     assert_eq!(value, 5 + 200 + 9000 + 1000000);
-    // Without a default, the argument is required (E0107); defaults are
-    // only on a trait's own parameters.
+    // Without a default, the argument is required (E0107).
     rejected(
         "trait Convert<T> { fn convert(&self) -> T; } struct C { n: i64 } \
          impl Convert for C { fn convert(&self) -> i64 { 1 } } pub fn run() -> i64 { 0 } run()",
     );
-    rejected("struct P<T = i64> { v: T } pub fn run() -> i64 { 0 } run()");
+    // A type's parameter may have a default, as rustc allows.
+    assert_eq!(
+        run("struct P<T = i64> { v: T } pub fn run() -> i64 { 0 } run()"),
+        0
+    );
     // Both bounds hold for the type.
     rejected(
         "trait Convert<T> { fn convert(&self) -> T; } struct C { n: i64 } \

@@ -117,6 +117,50 @@ impl<'a> Parser<'a> {
         block
     }
 
+    /// The statement `parse` reads. In a template's generic read
+    /// (`selecting`), a statement it can't lower is dropped and the read
+    /// goes on at the next statement of its block, so the native uses
+    /// after it are still found (#2698): the read is the runner's demand,
+    /// never the program's check, and what it can't lower adds nothing.
+    /// Any other read fails with the statement.
+    pub(super) fn tolerant(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        if !self.selecting {
+            return parse(self);
+        }
+        let input = self.input.clone();
+        let split_angle = self.split_angle;
+        let closures = self.closures.len();
+        let loops = self.loops.len();
+        let checkpoint = self.inference.checkpoint();
+        if parse(self).is_ok() {
+            self.inference.commit(checkpoint);
+            return Ok(());
+        }
+        // What the statement inferred goes with it.
+        self.inference.unwind(checkpoint);
+        self.input = input;
+        self.split_angle = split_angle;
+        self.closures.truncate(closures);
+        self.loops.truncate(loops);
+        self.dropped = true;
+        // A statement with no end leaves nothing more to read.
+        let _ = self.skip_statement();
+        Ok(())
+    }
+
+    /// The end of a body's statements: a generic read that dropped one
+    /// (`tolerant`) ends here, with the uses it found, since the passes
+    /// that settle a body read it whole.
+    pub(super) fn read_whole(&mut self) -> Result<(), Error> {
+        if self.dropped {
+            return Err(self.unsupported("a generic read past a statement it dropped"));
+        }
+        Ok(())
+    }
+
     pub(super) fn parse_statement(&mut self) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let start = self.output.len();

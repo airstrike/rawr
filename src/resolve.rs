@@ -139,6 +139,11 @@ pub struct Program {
     /// crate's name (#1249).
     #[cfg(feature = "rust-import")]
     mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    /// Whether the crate root is native Rust whose marked modules rawr
+    /// interprets (D501), whose copy declares a stand-in for each marked
+    /// type native code holds as a trait object (#1264).
+    #[cfg(feature = "rust-import")]
+    native_root: bool,
     /// The roots of the facades of the program's own crate and its
     /// binary's: the crate rawr builds from the program's marked sources,
     /// whose facade a save that changes what native code sees changes.
@@ -180,6 +185,10 @@ pub struct Program {
 /// takes, in order, and the instance's item key.
 pub(crate) type Instance = (Box<[ImmutableString]>, crate::item::Key);
 
+/// A template's generic read: the crate trait each call on one of its
+/// parameters selects, by the method's position (`Instances::selections`).
+pub(crate) type Selections = Box<[(crate::Position, ImmutableString)]>;
+
 /// The generic functions that touch a crate's types, each compiled once per
 /// instantiation its checked callers use, as Rust monomorphises it (D629).
 /// A template's own body is never lowered; each call binds to its instance.
@@ -191,6 +200,23 @@ pub(crate) struct Instances {
     /// Each instance's generic parameters by name, as the types its body
     /// reads them as.
     pub(crate) types: BTreeMap<crate::item::Key, Box<[(ImmutableString, type_ref::Type)]>>,
+    /// Each instance's param-env: the crate-trait bounds its template's
+    /// parameters are declared with, at the instance's types, each the
+    /// bounded type and its `impl Trait<..>` bound. A call in the body
+    /// takes a trait argument its impls leave open from these, as rustc
+    /// selects a where-clause before an impl (`Text: Widget<Message, ..>`
+    /// fixes `Message` of the impl generic in it).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) bounds: BTreeMap<crate::item::Key, Box<[(type_ref::Type, type_ref::Type)]>>,
+    /// Each template's generic read: the crate trait each call on one of
+    /// its parameters selects through the parameter's bound, by the
+    /// method's position in the template's body. Each instance calls that
+    /// trait's method there whatever inherent method its type has, as
+    /// rustc resolves the call in the generic body (`self.content.size()`
+    /// of `W: Widget<..>` at `W = Text`, whose builder `size(self, ..)`
+    /// the generic body never sees).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) selections: BTreeMap<crate::item::Key, Selections>,
     /// Each instance's parameters whose template writes them as a generic
     /// parameter bounded by `Into<U>`, each with its `U` at the instance:
     /// rustc reads the generic body's `path.into()` as a `U`.
@@ -216,7 +242,25 @@ pub(crate) struct Instances {
     /// key its trampoline calls it by.
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) natives: Vec<record::Native>,
+    /// The native uses each template's generic read reaches at types that
+    /// name none of its parameters, which every instance of it makes: the
+    /// runner binds them up front, so a program that reaches a template
+    /// later needs no new runner for them, as iced's `Container::new`
+    /// names `Length::Fit` at every instance (decision 4).
+    #[cfg(feature = "rust-import")]
+    pub(crate) ahead: Vec<crate::resolve::lower_nominal::ImportedUse>,
+    /// The opened templates read for demand at the runner's fixed
+    /// arguments (decision 3), each by its key and the name of the type
+    /// each fixed parameter takes: each is read once.
+    #[cfg(feature = "rust-import")]
+    pub(crate) demanded: Demanded,
 }
+
+/// The opened templates read for demand (`Instances::demanded`): each by
+/// its key and, for each fixed parameter, its name and its type's.
+#[cfg(feature = "rust-import")]
+pub(crate) type Demanded =
+    std::collections::BTreeSet<(crate::item::Key, Box<[(ImmutableString, ImmutableString)]>)>;
 
 /// An instance of a script impl of a crate's trait (`Instances::impls`).
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
@@ -827,6 +871,8 @@ fn resolve_with_evidence_and_namespace(
         entry_crate: None,
         #[cfg(feature = "rust-import")]
         mirrors: BTreeMap::new(),
+        #[cfg(feature = "rust-import")]
+        native_root: false,
         #[cfg(feature = "rust-import")]
         own: Box::new([]),
         crates: None,
@@ -2758,6 +2804,7 @@ fn resolve_item(
             let types = scope.as_ref().unwrap_or(types);
             for generic in generics.iter_mut() {
                 if let Some(bounds) = crate_bounded.get(&generic.name.text) {
+                    generic.native_traits = native_traits(bounds, host);
                     generic.crate_bounds = bounds
                         .iter()
                         .map(|bound| {
@@ -3183,6 +3230,7 @@ fn resolve_function(
     let mut generics = generics;
     for generic in &mut generics {
         if let Some(bounds) = crate_bounded.get(&generic.name.text) {
+            generic.native_traits = native_traits(bounds, host);
             generic.crate_bounds = bounds
                 .iter()
                 .map(|bound| {
@@ -3683,7 +3731,7 @@ fn resolve_methods(
     let impls = std_trait::impls(&mut std_traits, items, items.len(), host);
     items.extend(impls);
     let items = items.as_mut_slice();
-    resolve_projections(items, &std_traits)?;
+    resolve_projections(items, &std_traits, host)?;
     let traits = trait_table(items, std_traits)?;
     fill_trait_defaults(items, &traits);
     check_generic_arity(items, &traits)?;
@@ -3785,10 +3833,12 @@ fn resolve_methods(
             // A facade type (`impl From<Shade> for iced::Color`) owns impls
             // under the same rule.
             let outside = builtin_owner(referent)
-                .map(|(code, name)| (Some(code), name))
-                .or_else(|| foreign_owner(referent).map(|path| (None, path)));
+                .map(|(code, name)| (Outside::Builtin(code), name))
+                .or_else(|| {
+                    foreign_owner(referent).map(|(defined, path)| (Outside::Foreign(defined), path))
+                });
             let builtin = outside
-                .map(|(code, owner_name)| {
+                .map(|(outside, owner_name)| {
                     if declared.name.span == Span::NONE && !local_argument && item.std.is_none() {
                         return Err(Error::InvalidImplOwner {
                             owner: format!(
@@ -3799,14 +3849,15 @@ fn resolve_methods(
                             reference: type_span(&item.owner),
                         });
                     }
-                    Ok(match code {
-                        Some(code) => type_def::Definition::builtin(
+                    Ok(match outside {
+                        Outside::Builtin(code) => type_def::Definition::builtin(
                             code,
                             &owner_name,
                             shell.id,
                             type_span(&item.owner),
                         ),
-                        None => type_def::Definition::foreign(
+                        Outside::Foreign(defined) => type_def::Definition::foreign(
+                            &defined,
                             &owner_name,
                             shell.id,
                             type_span(&item.owner),
@@ -4010,6 +4061,64 @@ fn resolve_methods(
             }
             continue;
         }
+        // `impl<M> Diffed<M> for Label` in a crate's module the program
+        // opens: a crate trait's generic impl for a crate type, which the
+        // program runs from source at its own arguments (#2698). Its
+        // functions number with the impls for builtin types, as members
+        // `Diffed<M>::label` of the crate type.
+        #[cfg(feature = "rust-import")]
+        if let Some(item::TraitImpl::Native {
+            name, arguments, ..
+        }) = &item.trait_
+            && let Some((defined, path)) = foreign_owner(&item.owner)
+        {
+            let owner =
+                type_def::Definition::foreign(&defined, &path, shell.id, type_span(&item.owner));
+            let instance = trait_instance(&name.text, arguments);
+            for function in &mut item.functions {
+                validate_method_signature(Some(owner.name()), function, true)
+                    .map_err(|error| LocatedError::primary(shell.source, error))?;
+                let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
+                if let Err((previous_source, previous_declaration)) = declarations.declare(
+                    owner.id(),
+                    member.clone(),
+                    &item.owner,
+                    shell.source,
+                    function.name.span,
+                ) {
+                    return Err(LocatedError::related(
+                        shell.source,
+                        previous_source,
+                        Error::DuplicateMethod {
+                            owner: path.clone(),
+                            method: member,
+                            declaration: function.name.span,
+                            previous_declaration,
+                        },
+                    ));
+                }
+                let id = method::Id::from_index(BUILTIN_METHOD_IDS + builtin_methods.len());
+                let kind = if function.receiver.is_some() {
+                    crate::item::Kind::Method
+                } else {
+                    crate::item::Kind::AssociatedFunction
+                };
+                let key = crate::item::Key::associated(owner.key(), member, kind);
+                let definition = method::Definition::new(id, key, &owner, function, shell.source)
+                    .in_generic_impl(
+                        &item.generics,
+                        owner_arguments(&item.owner),
+                        item.owner.span(),
+                    )
+                    .with_trait(name.text.clone())
+                    .with_trait_arguments(arguments.clone())
+                    .for_builtin(item.owner.clone());
+                function.body.lowering = item::Lowering::NominalMethod(id);
+                builtin_methods.push(definition);
+                builtin_self_types.push(item.owner.clone());
+            }
+            continue;
+        }
         let (owner_id, owner_name) =
             impl_owner(&item.owner).map_err(|error| LocatedError::primary(shell.source, error))?;
         let owner = definitions
@@ -4026,20 +4135,7 @@ fn resolve_methods(
             name, arguments, ..
         }) = &item.trait_
         {
-            let instance: ImmutableString = if arguments.is_empty() {
-                name.text.clone()
-            } else {
-                format!(
-                    "{}<{}>",
-                    name.text,
-                    arguments
-                        .iter()
-                        .map(full_type_name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                .into()
-            };
+            let instance = trait_instance(&name.text, arguments);
             for function in &mut item.functions {
                 validate_method_signature(Some(owner.name()), function, true)
                     .map_err(|error| LocatedError::primary(shell.source, error))?;
@@ -4153,14 +4249,38 @@ const BUILTIN_METHOD_IDS: usize = 1 << 30;
 const CHECKED_METHOD_IDS: usize = 1 << 29;
 
 /// A facade type as a trait impl owner: its path.
-fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
+/// The trait at its impl's `arguments`, which names the impl's members:
+/// `Convert<i64>` beside `Convert<String>`, and a trait with none itself.
+fn trait_instance(name: &ImmutableString, arguments: &[type_ref::Type]) -> ImmutableString {
+    if arguments.is_empty() {
+        return name.clone();
+    }
+    let arguments = arguments
+        .iter()
+        .map(full_type_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}<{arguments}>").into()
+}
+
+fn foreign_owner(ty: &type_ref::Type) -> Option<(host::defined::Defined, ImmutableString)> {
     match ty {
         type_ref::Type::Path(path) => match &path.target {
-            type_ref::Target::Host { definition, .. } => Some(definition.path().into()),
+            type_ref::Target::Host { definition, owner } => Some((
+                host::defined::Defined::of_type(definition, owner.as_ref()),
+                definition.path().into(),
+            )),
             _ => None,
         },
         _ => None,
     }
+}
+
+/// The type outside the crate an impl is for: a builtin type, by its
+/// witness code, or a facade type.
+enum Outside {
+    Builtin(i64),
+    Foreign(host::defined::Defined),
 }
 
 /// The witness code of a blanket impl's owner (`impl<T: Bound> Trait for
@@ -4810,10 +4930,14 @@ fn check_trait_bounds(
     items: &[item::Shell],
     traits: &BTreeMap<ImmutableString, (program::source::Id, item::Trait)>,
 ) -> Result<(), LocatedError> {
-    let check = |generics: &[item::Generic]| -> Result<(), Error> {
+    // A type's parameter may have a default, as iced's `Container<'a, W,
+    // Theme = crate::Theme>` has; a function's or an impl's may not.
+    let check_with = |generics: &[item::Generic], defaults: bool| -> Result<(), Error> {
         for generic in generics {
             // Defaults are for a trait's own parameters here.
-            if let Some(default) = &generic.default {
+            if let Some(default) = &generic.default
+                && !defaults
+            {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "a default type parameter outside a trait declaration".into(),
                     source: type_span(default),
@@ -4849,10 +4973,11 @@ fn check_trait_bounds(
         }
         Ok(())
     };
+    let check = |generics: &[item::Generic]| check_with(generics, false);
     for shell in items {
         let checked = match &shell.kind {
-            item::Kind::Struct(item) => check(&item.generics),
-            item::Kind::Enum(item) => check(&item.generics),
+            item::Kind::Struct(item) => check_with(&item.generics, true),
+            item::Kind::Enum(item) => check_with(&item.generics, true),
             item::Kind::Impl(item) => check(&item.generics).and_then(|()| {
                 item.functions
                     .iter()
@@ -4932,6 +5057,7 @@ fn is_self(ty: &type_ref::Type) -> bool {
 fn resolve_projections(
     items: &mut [item::Shell],
     std_traits: &BTreeMap<ImmutableString, item::Trait>,
+    host: &host::Registry,
 ) -> Result<(), LocatedError> {
     let associated = |declared: &item::Trait| -> Box<[ImmutableString]> {
         declared
@@ -5026,10 +5152,14 @@ fn resolve_projections(
                         source: path.span,
                     });
                 };
+                // A crate trait declares the associated types its header
+                // names, as iced's `container::Catalog` declares `Class`.
                 let declares = |trait_name: &ImmutableString| {
                     declared
                         .get(trait_name)
                         .is_some_and(|names| names.contains(&path.name))
+                        || crate_trait_associated(host, trait_name)
+                            .is_some_and(|associated| associated.contains(&path.name))
                 };
                 let candidates: Vec<ImmutableString> = match &base_path.target {
                     // A trait's own associated types, then its supertraits'.
@@ -5042,8 +5172,13 @@ fn resolve_projections(
                     type_ref::Target::Parameter => generics
                         .iter()
                         .filter(|generic| generic.name.text == base_path.name)
-                        .flat_map(|generic| generic.traits.iter())
-                        .map(|name| name.text.clone())
+                        .flat_map(|generic| {
+                            generic
+                                .traits
+                                .iter()
+                                .map(|name| name.text.clone())
+                                .chain(generic.native_traits.iter().cloned())
+                        })
                         .filter(declares)
                         .collect(),
                     type_ref::Target::Script { definition, .. } => implemented
@@ -5052,8 +5187,16 @@ fn resolve_projections(
                         .unwrap_or_default(),
                     _ => Vec::new(),
                 };
+                // A crate trait written by any of its paths is the bound's.
+                let named = written.as_ref().and_then(|written| {
+                    let identity = crate_trait_identity(host, written)?;
+                    candidates
+                        .iter()
+                        .find(|candidate| crate_trait_identity(host, candidate) == Some(identity))
+                });
                 match (written, &candidates[..]) {
                     (Some(written), _) if candidates.contains(written) => Ok(written.clone()),
+                    (Some(_), _) if let Some(named) = named => Ok(named.clone()),
                     (None, [found]) => Ok(found.clone()),
                     (None, [first, second, ..]) => Err(Error::InvalidMethodSignature {
                         owner: base_path.name.clone(),
@@ -5681,6 +5824,60 @@ fn bounded_scope(
     ))
 }
 
+/// The path of each crate trait of `bounds`, written from the crate's
+/// root (`item::Generic::native_traits`).
+fn native_traits(
+    bounds: &[crate::item::type_ref::Path],
+    host: &host::Registry,
+) -> Box<[ImmutableString]> {
+    bounds
+        .iter()
+        .filter(|bound| bound.segments.len() > 1)
+        .map(|bound| {
+            bound
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+        .filter(|path| crate_trait_associated(host, path).is_some())
+        .map(ImmutableString::from)
+        .collect()
+}
+
+/// The identity of the crate trait at `path`, when a facade has its header.
+pub(crate) fn crate_trait_identity(host: &host::Registry, path: &str) -> Option<[u8; 32]> {
+    #[cfg(feature = "rust-import")]
+    {
+        let parsed = host::path::Path::parse(path).ok()?;
+        Some(host.trait_header(&parsed)?.identity)
+    }
+    #[cfg(not(feature = "rust-import"))]
+    {
+        let _ = (host, path);
+        None
+    }
+}
+
+/// The names of the associated types of the crate trait at `path`, when a
+/// facade has its header.
+pub(crate) fn crate_trait_associated(
+    host: &host::Registry,
+    path: &str,
+) -> Option<Box<[ImmutableString]>> {
+    #[cfg(feature = "rust-import")]
+    {
+        let parsed = host::path::Path::parse(path).ok()?;
+        Some(host.trait_header(&parsed)?.associated.clone())
+    }
+    #[cfg(not(feature = "rust-import"))]
+    {
+        let _ = (host, path);
+        None
+    }
+}
+
 fn generic_scope(
     generics: Box<[crate::item::GenericParam]>,
     types: &BTreeMap<ImmutableString, type_ref::Target>,
@@ -5711,7 +5908,36 @@ fn generic_scope(
                 previous_declaration,
             });
         }
-        let (bounds, traits, trait_arguments) = resolve_bounds_with_arguments(&parameter.bounds)?;
+        let (bounds, mut traits, mut trait_arguments) =
+            resolve_bounds_with_arguments(&parameter.bounds)?;
+        // A crate trait's bound, as a type's `Theme: Catalog` is, is
+        // rustc's to prove (D629): the parameter keeps its path alone.
+        let native_traits = native_traits(&parameter.bounds, host);
+        let native_spans = parameter
+            .bounds
+            .iter()
+            .filter(|bound| {
+                let path = bound
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                native_traits.iter().any(|native| native.as_str() == path)
+            })
+            .filter_map(|bound| bound.segments.last().map(|last| last.name.span))
+            .collect::<Vec<_>>();
+        let crate_named = traits
+            .iter()
+            .filter(|name| native_spans.contains(&name.span))
+            .map(|name| name.text.clone())
+            .collect::<Vec<_>>();
+        traits = traits
+            .into_vec()
+            .into_iter()
+            .filter(|name| !native_spans.contains(&name.span))
+            .collect();
+        trait_arguments.retain(|(trait_name, _)| !crate_named.contains(&trait_name.text));
         let written = parameter
             .bounds
             .iter()
@@ -5749,6 +5975,7 @@ fn generic_scope(
             })
             .transpose()?;
         resolved.push(item::Generic {
+            native_traits,
             constant,
             name: parameter.name,
             bounds,

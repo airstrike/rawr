@@ -635,10 +635,16 @@ impl Parser<'_> {
         };
         // A path through a crate's hidden segment, in the call's path or
         // its input, is rustc's to name from that crate's root (#2290).
+        // Its literals are as the program writes them, as rustc's expansion
+        // reads them: a macro may stringify one.
+        let key = self.models.sources.key(self.models.context.index());
+        let written = self.models.sources.resolve(key).ok();
+        let written = written.as_ref().map(|source| source.text());
+        let input = token_text_in(&tokens, written);
         let call = call::Call {
             path: path.to_owned(),
             delimiter,
-            input: token_text(&tokens),
+            input,
             place: match place {
                 Place::Expression => call::Place::Expression,
                 Place::Statement => call::Place::Statements,
@@ -670,10 +676,14 @@ impl Parser<'_> {
             }
             return Ok(Some(span(name_span.start(), end)));
         };
+        let origins = super::location_origins(
+            &tokens,
+            written,
+            &call::locations(&text).unwrap_or_default(),
+        );
         // The read names the source in the lowerings the lowering is kept
         // in, as each reuse of the lowering does (`kept::Outside::name`).
         self.read(super::kept::Read::expansion(source.clone(), &text));
-        let origins = super::location_origins(&tokens, &call::locations(&text).unwrap_or_default());
         let text = call::kept(&text).unwrap_or_default();
         let remaining = self.nest_expansion(path, span(name_span.start(), text_end(end, " ")))?;
         let at = name_span.start();
@@ -684,9 +694,12 @@ impl Parser<'_> {
         let expansion = match self.models.laid_out(at) {
             Some(laid_out) => laid_out.to_vec(),
             None => {
-                let mut expansion = lex_rust(&crate::Engine::new_raw(), text)
+                let lexed = lex_rust(&crate::Engine::new_raw(), text)
                     .into_iter()
                     .filter(|(token, _)| *token != Token::EOF)
+                    .collect();
+                let mut expansion = super::tokens::stringified(text, lexed)
+                    .into_iter()
                     .map(|(token, _)| (token, at))
                     .collect::<Vec<_>>();
                 let calls = super::location_calls(&expansion).collect::<Vec<_>>();

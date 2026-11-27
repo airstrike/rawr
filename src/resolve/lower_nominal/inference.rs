@@ -40,6 +40,12 @@ pub(super) struct Inference {
     /// once a later use fixes `ty`. A rollback drops those it made.
     #[cfg(feature = "rust-import")]
     pub(super) projections: Vec<ImplProjection>,
+    /// The associated types the crate's impls of its traits give the
+    /// crate's types, by trait and name, each with the type it is for:
+    /// `<iced::Theme as container::Catalog>::Class` is the boxed callable
+    /// iced's `impl Catalog for Theme` gives (`Models::native_projected`).
+    #[cfg(feature = "rust-import")]
+    pub(super) native: BTreeMap<(ImmutableString, ImmutableString), Vec<(Ty, Ty)>>,
 }
 
 /// The associated types of `impl Trait for Owner` blocks.
@@ -158,6 +164,13 @@ impl Inference {
         self.diverging.truncate(checkpoint.diverging);
         #[cfg(feature = "rust-import")]
         self.projections.truncate(checkpoint.projections);
+    }
+
+    /// [`Inference::rollback`] to `checkpoint` after a read that failed
+    /// between checkpoints of its own and their ends: those end with it.
+    pub(super) fn unwind(&mut self, checkpoint: Checkpoint) {
+        self.depth = checkpoint.depth + 1;
+        self.rollback(checkpoint);
     }
 
     pub(super) fn commit(&mut self, checkpoint: Checkpoint) {
@@ -656,6 +669,17 @@ impl Inference {
             }
             _ => {}
         }
+        // A crate's impl of its trait for a crate type gives the type.
+        #[cfg(feature = "rust-import")]
+        #[cfg(feature = "rust-import")]
+        #[cfg(feature = "rust-import")]
+        if let Some((_, value)) = self
+            .native
+            .get(&(trait_name.clone(), name.clone()))
+            .and_then(|cases| cases.iter().find(|(this, _)| same_crate_type(this, &base)))
+        {
+            return value.clone();
+        }
         // `T::Fore` of `type Fore: Iterator<Item = T::For>;` is Rawr's
         // iterator of `T::For`, as a parameter `I: Iterator<Item = U>` is
         // (`erase_fn_bounds`).
@@ -743,5 +767,32 @@ impl Inference {
             }
         }
         self.bindings.insert(id, ty);
+    }
+}
+
+/// Whether `left` and `right` are one type, a crate type by its
+/// definition's identity and its arguments, whichever facade's proof each
+/// holds (`Inference::native`).
+#[cfg(feature = "rust-import")]
+fn same_crate_type(left: &Ty, right: &Ty) -> bool {
+    match (left, right) {
+        (
+            Ty::Host {
+                proof: left,
+                arguments: left_arguments,
+            },
+            Ty::Host {
+                proof: right,
+                arguments: right_arguments,
+            },
+        ) => {
+            left.definition.identity() == right.definition.identity()
+                && left_arguments.len() == right_arguments.len()
+                && left_arguments
+                    .iter()
+                    .zip(right_arguments.iter())
+                    .all(|(left, right)| same_crate_type(left, right))
+        }
+        _ => left == right,
     }
 }

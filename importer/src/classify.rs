@@ -37,7 +37,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 278;
+const CLASSIFIER_VERSION: u32 = 330;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -86,6 +86,10 @@ pub(crate) struct OutcomeRecord {
     /// `into` of `Degrees` that core's blanket `Into` gives through a
     /// crate's `From<Degrees>` is `Into::into`, whatever its selector.
     member: Option<crate::surface::identity::Definition>,
+    /// The trait a trait impl's member belongs to, the impl's own or the
+    /// trait's: iced's `Catalog::default` of `impl Catalog for Theme`.
+    /// A path call through a bound keeps only the bound trait's (#2698).
+    trait_of: Option<crate::surface::identity::Definition>,
     /// A trait's methods' opaque outputs, with how a value behind a box of
     /// the runner's implements their traits (#2013).
     outputs: Option<Box<representability::signature::Outputs>>,
@@ -279,6 +283,8 @@ struct StoredOutcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     member: Option<crate::surface::identity::Definition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    trait_of: Option<crate::surface::identity::Definition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     outputs: Option<Box<representability::signature::Outputs>>,
 }
 
@@ -343,6 +349,11 @@ struct Context<'graph> {
     /// its output's late-bound lifetimes are the frame's, as its early
     /// ones are `'static`, and are written by neither.
     scope_lifetimes: Cell<bool>,
+    /// The signature being converted gives a value that keeps slices of
+    /// crate values borrowed, which the program lends from places
+    /// (`lends_slices`): its `&mut [T]` inputs and the borrows its value's
+    /// items carry are read as lent.
+    lent_slices: Cell<bool>,
     /// A trait's method over its `Self` (`surface::member`) is being
     /// classified: its first input is the method's `&self` or `&mut self`,
     /// which the call borrows as the method's receiver.
@@ -813,6 +824,48 @@ fn type_names_static(ty: &model::Type) -> bool {
     }
 }
 
+/// Whether `ty` names the `Self` of the trait `trait_id`, at any depth: a
+/// raw pointer, function pointer or opaque type is taken to, as no vtable
+/// method's signature the runner writes holds one that does. An object,
+/// as `&mut dyn Operation` of iced's `Widget::operate`, does where one of
+/// its bounds' arguments does.
+fn names_trait_self(ty: &model::Type, trait_id: &api::identity::Definition) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => names_trait_self(ty, trait_id),
+        _ => false,
+    };
+    if let model::Type::TraitObject { bounds, .. } = ty {
+        return bounds.iter().any(|bound| match bound {
+            model::ObjectBound::Trait(model::Bound::Trait { arguments, .. }) => {
+                arguments.iter().any(argument)
+            }
+            model::ObjectBound::Trait(model::Bound::MaybeSized) => false,
+            model::ObjectBound::ProjectionEquality { arguments, ty, .. } => {
+                arguments.iter().any(argument) || names_trait_self(ty, trait_id)
+            }
+        });
+    }
+    match ty {
+        model::Type::SelfType(_) => true,
+        model::Type::Parameter { owner, index } => owner == trait_id && *index == 0,
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
+            arguments.iter().any(argument)
+        }
+        model::Type::Tuple(members) => members
+            .iter()
+            .any(|member| names_trait_self(member, trait_id)),
+        model::Type::Slice(element) | model::Type::Array { element, .. } => {
+            names_trait_self(element, trait_id)
+        }
+        model::Type::Reference { ty, .. } => names_trait_self(ty, trait_id),
+        model::Type::RawPointer { .. }
+        | model::Type::FunctionPointer(_)
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. } => true,
+        model::Type::Primitive(_) | model::Type::Never => false,
+    }
+}
+
 /// `ty` with each late-bound lifetime as `'static`: the type a callable's
 /// output names, whose borrow the slot that makes it gives its own
 /// lifetime (D594).
@@ -962,6 +1015,7 @@ impl<'graph> Context<'graph> {
             scratch_bytes: Cell::new(0),
             trait_self: Cell::new(None),
             scope_lifetimes: Cell::new(false),
+            lent_slices: Cell::new(false),
             self_receiver: Cell::new(false),
             type_argument: Cell::new(false),
             regional: std::cell::RefCell::new(Box::default()),
@@ -1180,6 +1234,7 @@ impl<'graph> Context<'graph> {
     fn start_item(&self) {
         self.trait_self.set(None);
         self.scope_lifetimes.set(false);
+        self.lent_slices.set(false);
         self.self_receiver.set(false);
         self.type_argument.set(false);
         *self.regional.borrow_mut() = Box::default();
@@ -3556,10 +3611,15 @@ impl<'graph> Context<'graph> {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                if !cases.is_empty() {
-                    self.retain_array::<Case>(cases.len())?;
-                    relations.push(Relation::new(*index, Box::default(), cases.into()));
-                }
+                // With no case, the bound still names its trait, whose one
+                // stand-in a program's value fills it with (#2698).
+                self.retain_array::<Case>(cases.len())?;
+                let relation = Relation::new(*index, Box::default(), cases.into());
+                relations.push(if relation.cases().is_empty() {
+                    relation.of_trait(*self.graph.surface_definition(trait_id).as_bytes())
+                } else {
+                    relation
+                });
                 continue;
             }
             // A slice, as `[Span<'a, L>]` of iced's `rich_text(impl
@@ -4054,6 +4114,13 @@ impl<'contract> Outcome<'contract> {
     #[must_use]
     pub const fn member(&self) -> Option<crate::surface::identity::Definition> {
         self.record.member
+    }
+
+    /// The trait whose impl this member is of, when it is a trait impl's:
+    /// the identity its `ImplHeader` names the trait by.
+    #[must_use]
+    pub const fn trait_of(&self) -> Option<crate::surface::identity::Definition> {
+        self.record.trait_of
     }
 
     /// A trait's methods' opaque outputs (`signature::Outputs`), when it
@@ -4656,7 +4723,7 @@ impl Serialize for Laid<'_, OutcomeRecord> {
         S: Serializer,
     {
         let record = self.records;
-        let mut state = serializer.serialize_struct("Outcome", 10)?;
+        let mut state = serializer.serialize_struct("Outcome", 11)?;
         state.serialize_field("export", &record.export)?;
         state.serialize_field("identity", &record.identity)?;
         state.serialize_field("name", &record.name)?;
@@ -4689,6 +4756,10 @@ impl Serialize for Laid<'_, OutcomeRecord> {
         match &record.member {
             Some(member) => state.serialize_field("member", member)?,
             None => state.skip_field("member")?,
+        }
+        match &record.trait_of {
+            Some(trait_of) => state.serialize_field("trait_of", trait_of)?,
+            None => state.skip_field("trait_of")?,
         }
         match &record.outputs {
             Some(outputs) => state.serialize_field("outputs", outputs)?,
@@ -5252,6 +5323,7 @@ impl StoredOutcome {
             implementations: implementations.into_boxed_slice(),
             variant: self.variant,
             member: self.member,
+            trait_of: self.trait_of,
             outputs: self.outputs,
         })
     }
@@ -5917,6 +5989,9 @@ fn enforce_outcome_nameability(
 /// cycle assumed nameable), which keeps it out of the settled table.
 type Verdict = (bool, bool);
 
+/// Each parameter, by its owner and index, at the type it takes.
+type Substitutions = [((api::identity::Definition, u32), model::Type)];
+
 fn all_nameable<'t>(
     types: impl IntoIterator<Item = &'t representability::convert::Type>,
     root: &str,
@@ -5988,8 +6063,10 @@ fn type_nameable(
                 return (false, assumed);
             }
             // Rawr declares a future, a duration, an instant and the like
-            // itself; no Rust definition names them.
+            // itself; no Rust definition names them. A boxed closure is
+            // `Box<dyn Fn(A..) -> B>` of its arguments.
             if crate::surface::identity::Definition::is_projected(definition.as_bytes())
+                || *definition == crate::surface::identity::Definition::callable()
                 || names.opaque.contains(definition.as_bytes())
             {
                 return (true, assumed);
@@ -6185,6 +6262,7 @@ impl<'graph> Context<'graph> {
                     implementations: Box::default(),
                     variant: None,
                     member: None,
+                    trait_of: None,
                     outputs: None,
                 })
             }
@@ -6207,6 +6285,7 @@ impl<'graph> Context<'graph> {
                     implementations: Box::default(),
                     variant: None,
                     member: None,
+                    trait_of: None,
                     outputs: None,
                 })
             }
@@ -6300,6 +6379,7 @@ impl<'graph> Context<'graph> {
                     implementations,
                     variant,
                     member: None,
+                    trait_of: None,
                     outputs: self.trait_outputs(definition)?.map(Box::new),
                 })
             }
@@ -6614,6 +6694,10 @@ impl<'graph> Context<'graph> {
                     variant: None,
                     member: trait_member(implementation, definition)
                         .then(|| self.graph.surface_definition(definition.id())),
+                    trait_of: match implementation.trait_ref() {
+                        model::Trait::Trait { id, .. } => Some(self.graph.surface_definition(id)),
+                        _ => None,
+                    },
                     outputs: None,
                 });
             }
@@ -6950,6 +7034,7 @@ impl<'graph> Context<'graph> {
                         implementations: Box::default(),
                         variant: None,
                         member: None,
+                        trait_of: None,
                         outputs: None,
                     });
                 }
@@ -7131,6 +7216,7 @@ impl<'graph> Context<'graph> {
                 implementations,
                 variant: None,
                 member: None,
+                trait_of: None,
                 outputs: None,
             });
         }
@@ -7153,12 +7239,16 @@ impl<'graph> Context<'graph> {
         }])
     }
 
-    /// The `&self` methods the trait `definition` declares, each a
-    /// function of the trait's object `&dyn Trait` (`surface::object`), as
-    /// marked code calls `held.0.area()` on a crate's `&'static dyn Shape`
-    /// (#1593). A trait with type parameters, a method generic over a
-    /// type, and one whose signature names `Self` beyond its receiver are
-    /// not called on an object here.
+    /// The `&self` and `&mut self` methods the trait `definition`
+    /// declares, each a function of the trait's object `&dyn Trait` or
+    /// `&mut dyn Trait` (`surface::object`), as marked code calls
+    /// `held.0.area()` on a crate's `&'static dyn Shape` (#1593) and a
+    /// widget's `operate` calls `operation.container(..)` on the `&mut dyn
+    /// Operation` native code lends it. A trait's type parameters take
+    /// their defaults, as `dyn Operation` is `dyn Operation<()>`; a trait
+    /// with a parameter that has none, a method generic over a type, and
+    /// one whose signature names `Self` beyond its receiver are not called
+    /// on an object here.
     fn object_member_implementations(
         &self,
         export: &ledger::Export,
@@ -7177,10 +7267,26 @@ impl<'graph> Context<'graph> {
                 .parameters()
                 .any(|parameter| parameter.name() != "Self" && !is_lifetime_parameter(parameter))
         };
-        if typed(generics) {
-            return Ok(Vec::new());
-        }
         let trait_id = definition.id();
+        // Each type parameter of the trait at its default, by its index.
+        let mut defaults = Vec::new();
+        for parameter in generics.parameters() {
+            if parameter.name() == "Self" || is_lifetime_parameter(parameter) {
+                continue;
+            }
+            let model::ParameterKind::Type {
+                default: model::Default::Present(default),
+                ..
+            } = parameter.kind()
+            else {
+                return Ok(Vec::new());
+            };
+            defaults.push(((trait_id.clone(), parameter.index()), default.clone()));
+        }
+        let arguments = defaults
+            .iter()
+            .map(|(_, default)| model::Argument::Type(default.clone()))
+            .collect::<Box<[_]>>();
         let mut outcomes = Vec::new();
         for method_id in associated.iter() {
             let Some(method) = self
@@ -7199,12 +7305,13 @@ impl<'graph> Context<'graph> {
             };
             let model::Receiver::Reference {
                 lifetime,
-                mutability: model::Mutability::Shared,
+                mutability,
                 ty: model::Type::SelfType(owner),
             } = signature.receiver()
             else {
                 continue;
             };
+            let signature = &substituted_signature(signature, &defaults);
             // `Self` beyond the receiver, or a `where Self: Sized` method,
             // which no object has.
             let names_self = |ty: &model::Type| self_as_parameter(ty, trait_id) != *ty;
@@ -7227,7 +7334,7 @@ impl<'graph> Context<'graph> {
             let object = model::Type::TraitObject {
                 bounds: Box::new([model::ObjectBound::Trait(model::Bound::Trait {
                     trait_id: trait_id.clone(),
-                    arguments: Box::default(),
+                    arguments: arguments.clone(),
                     polarity: model::Polarity::Positive,
                     binders: Box::default(),
                 })]),
@@ -7235,7 +7342,7 @@ impl<'graph> Context<'graph> {
             };
             let receiver = model::Type::Reference {
                 lifetime: lifetime.clone(),
-                mutability: model::Mutability::Shared,
+                mutability: *mutability,
                 ty: Box::new(object),
             };
             let free = model::Signature::new(
@@ -7262,7 +7369,17 @@ impl<'graph> Context<'graph> {
             self.retain_span(method.span())?;
             let origin =
                 representability::origin::Set::new(export.span().clone(), method.span().clone());
-            let evidence = self.classify_object_member(trait_id, &free, method_generics, method)?;
+            let pointer = match mutability {
+                model::Mutability::Shared => representability::object::Pointer::Shared,
+                model::Mutability::Mutable => representability::object::Pointer::Mutable,
+            };
+            let evidence = self.classify_object_member(
+                (trait_id, &defaults),
+                pointer,
+                &free,
+                method_generics,
+                method,
+            )?;
             outcomes.push(OutcomeRecord {
                 export: export.key().clone(),
                 identity,
@@ -7272,6 +7389,7 @@ impl<'graph> Context<'graph> {
                 implementations: Box::default(),
                 variant: None,
                 member: None,
+                trait_of: None,
                 outputs: None,
             });
         }
@@ -7298,7 +7416,8 @@ impl<'graph> Context<'graph> {
     /// through the trait at the object (`surface::object`).
     fn classify_object_member(
         &self,
-        trait_id: &api::identity::Definition,
+        (trait_id, defaults): (&api::identity::Definition, &Substitutions),
+        pointer: representability::object::Pointer,
         free: &model::Signature,
         generics: &model::Generics,
         method: &model::Definition,
@@ -7311,15 +7430,19 @@ impl<'graph> Context<'graph> {
             let Representability::FunctionItem(item) = self.function(free, generics)? else {
                 return Err(reject::Kind::TraitObject.into());
             };
+            let arguments = defaults
+                .iter()
+                .map(|(_, default)| self.convert(default))
+                .collect::<Result<Box<[_]>, _>>()?;
             let object = representability::convert::Type::Object(Box::new(object::Object::new(
-                object::Pointer::Shared,
+                pointer,
                 self.graph.surface_definition(trait_id),
-                Box::default(),
+                arguments.clone(),
                 Vec::new(),
             )));
             let through = representability::convert::Type::Nominal {
                 definition: self.graph.surface_definition(trait_id),
-                arguments: Box::default(),
+                arguments,
             };
             Ok(Representability::FunctionItem(
                 item.with_instance(object).with_through(Some(through)),
@@ -7522,6 +7645,7 @@ impl<'graph> Context<'graph> {
             implementations,
             variant: None,
             member: None,
+            trait_of: None,
             outputs: None,
         }))
     }
@@ -7532,6 +7656,34 @@ impl<'graph> Context<'graph> {
     /// trait declares the associated type, with the trait's `Self` the
     /// opaque type, as serde's `S::SerializeStruct` is a `SerializeStruct<
     /// Ok = S::Ok, ..>` (#593).
+    /// The type the bounds of the opaque type a member of which is being
+    /// classified bind `Self::Name` to, when `ty` is that projection, as
+    /// `impl Iterator<Item = (Layout, &mut Tree)>` binds `Self::Item`.
+    fn opaque_self_binding(&self, ty: &model::Type) -> Option<model::Type> {
+        let model::Type::Projection {
+            associated,
+            arguments,
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        if !matches!(
+            arguments.first(),
+            Some(model::Argument::Type(model::Type::SelfType(_)))
+        ) {
+            return None;
+        }
+        let opaque = self.opaque_self.borrow().clone();
+        let Some(model::Type::ImplTrait { bounds, .. }) = opaque else {
+            return None;
+        };
+        self.bound_associated(&bounds)
+            .into_iter()
+            .find(|(_, item, _)| item == associated)
+            .map(|(_, _, ty)| ty)
+    }
+
     fn opaque_projection(
         &self,
         opaque: &model::Type,
@@ -7955,6 +8107,7 @@ impl<'graph> Context<'graph> {
         let inherited =
             model::Generics::inherited(container, &own).map_err(|_| Error::Allocation)?;
         let outer = self.opaque_self.replace(Some(opaque.clone()));
+        let outer_slices = self.lent_slices.replace(self.opaque_lends_items());
         let classified = self.function(&signature, &inherited).and_then(|plan| {
             let instance = self.convert(&model::Type::SelfType(trait_id.clone()))?;
             match plan {
@@ -7989,6 +8142,7 @@ impl<'graph> Context<'graph> {
                 _ => Err(Failure::from(reject::Kind::GenericImplementation)),
             }
         });
+        self.lent_slices.set(outer_slices);
         *self.opaque_self.borrow_mut() = outer;
         match classified {
             Ok(plan) => {
@@ -8418,22 +8572,41 @@ impl<'graph> Context<'graph> {
             else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            // Only a method that takes the string by value: `&self` would
-            // borrow a `&&str`. A method the impl defines reads its `self`,
-            // the impl's own `&str`, as a borrow of `str`.
-            let by_value = match signature.receiver() {
-                model::Receiver::Value { .. } => true,
+            // A method that takes the string by value, or borrows the
+            // `&str` itself, as iced's `tag(&self)` and `layout(&mut self,
+            // ..)` of `impl Widget<..> for &str` do: the runner lends its
+            // own `&str` of Rawr's string for the call, and the output may
+            // keep no borrow of it. A method the impl defines reads its
+            // `self`, the impl's own `&str`, as a borrow of `str`.
+            let borrows_text =
+                |ty: &model::Type| is_str_reference(ty) || matches!(ty, model::Type::SelfType(_));
+            let receiver = match signature.receiver() {
+                model::Receiver::Value { .. } => Some(representability::ownership::Receiver::Owned),
                 model::Receiver::Reference {
                     mutability: model::Mutability::Shared,
                     ty: model::Type::Primitive(name),
                     ..
-                } => &**name == "str",
-                _ => false,
+                } if &**name == "str" => Some(representability::ownership::Receiver::Owned),
+                model::Receiver::Reference { mutability, ty, .. }
+                    if borrows_text(ty)
+                        && !names_late_lifetime(signature.output())
+                        && !names_early_lifetime(signature.output()) =>
+                {
+                    Some(match mutability {
+                        model::Mutability::Shared => representability::ownership::Receiver::Shared,
+                        model::Mutability::Mutable => {
+                            representability::ownership::Receiver::Mutable
+                        }
+                    })
+                }
+                _ => None,
             };
-            if !by_value
-                || generics
-                    .parameters()
-                    .any(|parameter| parameter.owner() != definition.id())
+            let Some(receiver) = receiver else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            if generics
+                .parameters()
+                .any(|parameter| parameter.owner() != definition.id())
             {
                 return Err(reject::Kind::GenericImplementation.into());
             }
@@ -8461,7 +8634,16 @@ impl<'graph> Context<'graph> {
             let inherited = model::Generics::inherited(implementation.generics(), generics)
                 .map_err(|_| Error::Allocation)?;
             // A `self` the impl defines is its own `&str` taken by value,
-            // as a provided method's `self` is.
+            // as a provided method's `self` is. The borrow of a `&str` the
+            // method takes is the runner's own, so its lifetime binds
+            // nothing of the call.
+            let lent = match signature.receiver() {
+                model::Receiver::Reference {
+                    lifetime: model::Lifetime::Late { binder, .. },
+                    ..
+                } if receiver != representability::ownership::Receiver::Owned => Some(binder),
+                _ => None,
+            };
             let owned;
             let signature = if matches!(signature.receiver(), model::Receiver::Reference { .. }) {
                 owned = model::Signature::new(
@@ -8470,7 +8652,11 @@ impl<'graph> Context<'graph> {
                     signature.async_function(),
                     signature.abi().into(),
                     signature.variadic(),
-                    signature.binders().cloned().collect(),
+                    signature
+                        .binders()
+                        .filter(|binder| lent != Some(*binder))
+                        .cloned()
+                        .collect(),
                     model::Receiver::Value {
                         ty: implementation.self_type().clone(),
                     },
@@ -8486,13 +8672,18 @@ impl<'graph> Context<'graph> {
             // `impl Label for &str`, classifies as a plain method of the
             // string, which takes it by value all the same.
             let item = match self.function(signature, &inherited)? {
-                Representability::FunctionItem(item) => item,
+                Representability::FunctionItem(item)
+                    if receiver == representability::ownership::Receiver::Owned =>
+                {
+                    item
+                }
+                Representability::FunctionItem(item) => item.with_receiver(receiver),
                 Representability::Method(plan)
                     if plan.receiver() == representability::ownership::Receiver::Owned =>
                 {
                     callable::Item::new(
                         plan.signature().clone(),
-                        Some(plan.receiver()),
+                        Some(receiver),
                         None,
                         Box::default(),
                         Box::default(),
@@ -8951,7 +9142,9 @@ impl<'graph> Context<'graph> {
             model::Kind::Function {
                 signature,
                 generics,
-            } => self.function(signature, generics),
+            } => self
+                .function(signature, generics)
+                .map(|representability| self.through_implemented(definition, representability)),
             model::Kind::Module => Err(Failure::Reject(reject::Kind::Module)),
             model::Kind::Union { .. } => Err(Failure::Reject(reject::Kind::Union)),
             model::Kind::Static {
@@ -8980,6 +9173,66 @@ impl<'graph> Context<'graph> {
                 )))
             }
             Err(Failure::Operational(error)) => Err(error),
+        }
+    }
+
+    /// An associated function or method a trait's impl gives, called
+    /// through the trait at the impl's arguments, as rustc selects the
+    /// impl: iced's `Theme` implements a `Catalog` for each widget, and
+    /// each gives `default` and `style`, so `Theme::default()` and
+    /// `theme.style(class)` are E0034 and `<Theme as Catalog>::default()`
+    /// and `<_ as Catalog>::style(theme, class)` are the ones. Only a plan that is the function's
+    /// own (`classified_alone`) and has no trait yet; anything else, or an
+    /// argument Rawr can't write, is unchanged.
+    fn through_implemented(
+        &self,
+        definition: &model::Definition,
+        representability: representability::Representability,
+    ) -> representability::Representability {
+        use representability::{function, method, Representability};
+        let signature = match &representability {
+            Representability::Function(plan) => plan.signature(),
+            Representability::Method(plan) => plan.signature(),
+            _ => return representability,
+        };
+        if signature.through().is_some() || signature.instance().is_some() {
+            return representability;
+        }
+        let model::Owner::Implementation(owner) = definition.owner() else {
+            return representability;
+        };
+        let Some(implementation) = self
+            .graph
+            .implementation_index(owner)
+            .and_then(|index| self.graph.implementation_at(index))
+            .filter(|implementation| lifetime_only(implementation.generics()))
+        else {
+            return representability;
+        };
+        let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+            return representability;
+        };
+        let Some(arguments) = arguments
+            .iter()
+            .skip(1)
+            .filter_map(|argument| match argument {
+                model::Argument::Type(ty) => Some(self.convert(ty).ok()),
+                _ => None,
+            })
+            .collect::<Option<Box<[_]>>>()
+        else {
+            return representability;
+        };
+        let through = representability::convert::Type::Nominal {
+            definition: self.graph.surface_definition(id),
+            arguments,
+        };
+        let signature = signature.clone().with_through(Some(through));
+        match representability {
+            Representability::Method(plan) => {
+                Representability::Method(method::Plan::new(plan.receiver(), signature))
+            }
+            _ => Representability::Function(function::Plan::new(signature)),
         }
     }
 
@@ -9142,10 +9395,13 @@ impl<'graph> Context<'graph> {
         // A crate trait's object native code lends for the call, as iced's
         // `window::run(id, impl FnOnce(&dyn Window) -> T)` lends the window
         // (#28): the closure reaches it while the call runs.
-        if !mutable && let model::Type::TraitObject { bounds, .. } = ty.as_ref() {
-            return self
-                .convert_object(representability::object::Pointer::Shared, bounds)
-                .ok();
+        if let model::Type::TraitObject { bounds, .. } = ty.as_ref() {
+            let pointer = if mutable {
+                representability::object::Pointer::Mutable
+            } else {
+                representability::object::Pointer::Shared
+            };
+            return self.convert_object(pointer, bounds).ok();
         }
         // A lent value whose own lifetimes are the bound's, as ratatui's
         // `draw(f: impl FnOnce(&mut Frame))` lends a `Frame<'_>` (#1457):
@@ -9308,6 +9564,108 @@ impl<'graph> Context<'graph> {
                 .inputs()
                 .filter(|input| borrows_at_early_lifetime(input))
                 .all(place)
+    }
+
+    /// Whether a function, or a method that takes its receiver by value,
+    /// gives an opaque type that keeps borrowed slices of crate values it
+    /// takes, and keeps one exclusively or gives items that borrow them, as
+    /// iced's `Layout::iter_mut(self, &mut [Tree]) -> impl Iterator<Item =
+    /// (Self, &mut Tree)>` and `Layout::iter(self, &[Tree])` do. The
+    /// program lends each slice from a place, as `&mut tree.children`, and
+    /// the call opens a scope frame that holds those lends and the value
+    /// for the rest of the scope, as rustc's borrows last (D558 tier 1).
+    fn lends_slices(&self, signature: &model::Signature, generics: &model::Generics) -> bool {
+        let early = output_binders_early(signature, generics);
+        let signature = early.as_ref().unwrap_or(signature);
+        let model::Type::ImplTrait {
+            bounds, captures, ..
+        } = signature.output()
+        else {
+            return false;
+        };
+        if !matches!(
+            signature.receiver(),
+            model::Receiver::None | model::Receiver::Value { .. }
+        ) || !captures.iter().any(|argument| {
+            matches!(
+                argument,
+                model::Argument::Lifetime(model::Lifetime::Early { .. })
+            )
+        }) {
+            return false;
+        }
+        let slice = |input: &model::Type| {
+            matches!(input, model::Type::Reference {
+                lifetime: model::Lifetime::Early { .. },
+                ty,
+                ..
+            } if matches!(&**ty, model::Type::Slice(element) if self.borrows_nothing(element)))
+        };
+        let mut borrowing = signature
+            .inputs()
+            .filter(|input| borrows_at_early_lifetime(input))
+            .peekable();
+        borrowing.peek().is_some()
+            && signature
+                .inputs()
+                .filter(|input| borrows_at_early_lifetime(input))
+                .all(slice)
+            && (signature.inputs().any(borrows_mutably_at_early_lifetime)
+                || self
+                    .bound_associated(bounds)
+                    .iter()
+                    .any(|(_, _, ty)| names_early_lifetime(ty)))
+    }
+
+    /// Whether the opaque type a member of which is being classified gives
+    /// items that borrow crate values at a lifetime it captures, as the
+    /// `impl Iterator<Item = (Layout, &mut Tree)>` of iced's
+    /// `Layout::iter_mut` does: its members read those borrows as lent from
+    /// the frame's region that holds it (`lends_slices`).
+    fn opaque_lends_items(&self) -> bool {
+        let opaque = self.opaque_self.borrow().clone();
+        let Some(model::Type::ImplTrait { bounds, .. }) = opaque else {
+            return false;
+        };
+        self.bound_associated(&bounds)
+            .iter()
+            .any(|(_, _, ty)| self.lends_element(ty))
+    }
+
+    /// Whether `ty` holds a borrow of a crate value at an early lifetime,
+    /// alone or in a tuple.
+    fn lends_element(&self, ty: &model::Type) -> bool {
+        match ty {
+            model::Type::Reference {
+                lifetime: model::Lifetime::Early { .. },
+                ty,
+                ..
+            } => self.borrows_nothing(ty),
+            model::Type::Tuple(members) => members.iter().any(|member| self.lends_element(member)),
+            _ => false,
+        }
+    }
+
+    /// Whether `ty` is a crate struct or enum that declares no lifetime,
+    /// at arguments that borrow nothing at an early lifetime.
+    fn borrows_nothing(&self, ty: &model::Type) -> bool {
+        let model::Type::Definition { id, arguments } = ty else {
+            return false;
+        };
+        let declares = self
+            .graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definition_at(index))
+            .and_then(|definition| match definition.kind() {
+                model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
+                    Some(lifetime_parameters(generics))
+                }
+                _ => None,
+            });
+        declares == Some(0)
+            && !arguments.iter().any(|argument| {
+                matches!(argument, model::Argument::Type(ty) if borrows_at_early_lifetime(ty))
+            })
     }
 
     /// Whether a function with no receiver gives a struct or enum that
@@ -9545,7 +9903,8 @@ impl<'graph> Context<'graph> {
                 ),
             ));
         }
-        if methods.is_empty() {
+        let object = self.object_methods(definition, &by_position);
+        if methods.is_empty() && object.is_none() {
             return Ok(None);
         }
         let defaults = positions
@@ -9560,10 +9919,13 @@ impl<'graph> Context<'graph> {
                 _ => None,
             })
             .collect();
-        Ok(Some(representability::signature::Outputs::new(
-            defaults,
-            methods.into_boxed_slice(),
-        )))
+        let (object, supertraits) = object.map_or((None, Vec::new()), |(object, supertraits)| {
+            (Some(object), supertraits)
+        });
+        Ok(Some(
+            representability::signature::Outputs::new(defaults, methods.into_boxed_slice())
+                .with_object(object, supertraits.into_boxed_slice()),
+        ))
     }
 
     /// How a value held through the proxy of an opaque type's one trait
@@ -10242,6 +10604,20 @@ impl<'graph> Context<'graph> {
                     length: None,
                 })
             }
+            // `Option<Self::Item>` of an opaque iterator's `next` whose item
+            // is a tuple, as `(Layout, &mut Tree)` of iced's
+            // `Layout::iter_mut`: Rawr's `Option` of its tuple.
+            model::Type::Definition { id, arguments }
+                if let Some(tuple) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definition_at(index))
+                    .and_then(|definition| option_element(definition, arguments))
+                    .and_then(|element| self.opaque_self_binding(element))
+                    && matches!(&tuple, model::Type::Tuple(members) if members.len() >= 2) =>
+            {
+                Ok(Type::Option(Box::new(self.convert_value(&tuple)?)))
+            }
             // An `Option` of a tuple, as iced's pane_grid `State::split` gives
             // `Option<(Pane, Split)>`: Rawr's `Option` of its tuple.
             model::Type::Definition { id, arguments }
@@ -10374,6 +10750,12 @@ impl<'graph> Context<'graph> {
             .map_or((signature, generics), |(signature, generics)| {
                 (signature, generics)
             });
+        let borrowed = self.borrowed_callables(signature, generics);
+        let (signature, generics) = borrowed
+            .as_ref()
+            .map_or((signature, generics), |(signature, generics)| {
+                (signature, generics)
+            });
         let objects = object_inputs(signature, generics, |trait_id, arguments| {
             blanket_call(self.graph, trait_id, arguments).is_some()
         });
@@ -10392,7 +10774,11 @@ impl<'graph> Context<'graph> {
         let outer_scope = self
             .scope_lifetimes
             .replace(opens_copies || borrows_receiver);
+        let outer_slices = self
+            .lent_slices
+            .replace(self.lends_slices(signature, generics) || self.opaque_lends_items());
         let classified = self.function_with(signature, generics, opens_copies, borrows_receiver);
+        self.lent_slices.set(outer_slices);
         self.scope_lifetimes.set(outer_scope);
         *self.regional.borrow_mut() = regional;
         // A plan's signature names only the type parameters it declares, so
@@ -10480,6 +10866,170 @@ impl<'graph> Context<'graph> {
             },
             other => other.clone(),
         }
+    }
+
+    /// `signature` and `generics` with each input that borrows a callable's
+    /// object, `&mut dyn FnMut(A..) -> B` or `&dyn Fn(A..) -> B`, as iced's
+    /// `Operation::traverse(&mut self, operate: &mut dyn FnMut(&mut dyn
+    /// Operation<T>))` takes, read as a borrow of a parameter `impl FnMut(A..)
+    /// -> B` of its own, with no `'static` bound: the call borrows it for
+    /// itself alone, and the bridge's borrow of the closure it makes coerces
+    /// to the object, as rustc coerces `&mut |..| ..`. `None` when there is
+    /// none.
+    fn borrowed_callables<'g>(
+        &self,
+        signature: &'g model::Signature,
+        generics: &model::Generics,
+    ) -> Option<(model::Signature, model::Generics)> {
+        // The object's callable trait, its inputs' tuple, the bound's
+        // binders and its output.
+        let callable = |ty: &'g model::Type| -> Option<BorrowedCallable<'g>> {
+            let model::Type::Reference {
+                lifetime,
+                mutability,
+                ty,
+            } = ty
+            else {
+                return None;
+            };
+            let model::Type::TraitObject { bounds, .. } = ty.as_ref() else {
+                return None;
+            };
+            let mut called = None;
+            let mut output = None;
+            for bound in bounds.iter() {
+                match bound {
+                    model::ObjectBound::Trait(model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        binders,
+                    }) if called.is_none() => {
+                        let name = match mutability {
+                            model::Mutability::Mutable => "FnMut",
+                            model::Mutability::Shared => "Fn",
+                        };
+                        if !self.is_core_trait(trait_id, name) {
+                            return None;
+                        }
+                        let [model::Argument::Type(inputs @ model::Type::Tuple(_))] =
+                            arguments.as_ref()
+                        else {
+                            return None;
+                        };
+                        called = Some((trait_id, inputs, binders));
+                    }
+                    model::ObjectBound::ProjectionEquality { associated, ty, .. }
+                        if output.is_none() =>
+                    {
+                        output = Some((associated, ty));
+                    }
+                    _ => return None,
+                }
+            }
+            let (trait_id, inputs, binders) = called?;
+            let (associated, output) = output?;
+            Some((
+                lifetime,
+                *mutability,
+                trait_id,
+                inputs,
+                &binders[..],
+                (associated, output.clone()),
+            ))
+        };
+        let (.., (associated, _)) = signature.inputs().find_map(callable)?;
+        // `FnOnce::Output`, which the object binds, and its trait: the graph
+        // holds them where the crate names `FnMut` alone.
+        let once = match self
+            .graph
+            .definition_index(associated)
+            .and_then(|index| self.graph.definition_at(index))
+            .map(model::Definition::owner)
+        {
+            Some(model::Owner::Definition(owner)) => owner.clone(),
+            _ => self.callable_traits()?.1,
+        };
+        let output_id = associated.clone();
+        let mut next = generics
+            .parameters()
+            .map(model::Parameter::index)
+            .filter(|index| *index & representability::signature::FUTURE_OUTPUT == 0)
+            .max()
+            .map_or(0, |index| index + 1);
+        let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
+        let mut predicates = generics.predicates().cloned().collect::<Vec<_>>();
+        let mut inputs = Vec::new();
+        for input in signature.inputs() {
+            let Some((lifetime, mutability, trait_id, arguments, binders, (_, output))) =
+                callable(input)
+            else {
+                inputs.push(input.clone());
+                continue;
+            };
+            // A parameter is read by its index alone, so one an item with
+            // no parameters of its own declares is owned by the trait.
+            let owner = generics
+                .parameters()
+                .next()
+                .map_or_else(|| trait_id.clone(), |parameter| parameter.owner().clone());
+            let index = next;
+            next += 1;
+            let parameter = model::Type::Parameter {
+                owner: owner.clone(),
+                index,
+            };
+            parameters.push(model::Parameter::new(
+                owner,
+                index,
+                format!("impl FnMut#{index}").into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            ));
+            predicates.push(model::Predicate::Bound {
+                ty: parameter.clone(),
+                bound: model::Bound::Trait {
+                    trait_id: trait_id.clone(),
+                    arguments: Box::from([model::Argument::Type(arguments.clone())]),
+                    polarity: model::Polarity::Positive,
+                    binders: binders.into(),
+                },
+            });
+            predicates.push(model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection {
+                    trait_id: once.clone(),
+                    associated: output_id.clone(),
+                    arguments: Box::from([
+                        model::Argument::Type(parameter.clone()),
+                        model::Argument::Type(arguments.clone()),
+                    ]),
+                },
+                ty: output,
+            });
+            inputs.push(model::Type::Reference {
+                lifetime: lifetime.clone(),
+                mutability,
+                ty: Box::new(parameter),
+            });
+        }
+        let rewritten = model::Signature::new(
+            signature.safety(),
+            signature.const_function(),
+            signature.async_function(),
+            signature.abi().into(),
+            signature.variadic(),
+            signature.binders().cloned().collect(),
+            signature.receiver().clone(),
+            inputs.into_boxed_slice(),
+            signature.output().clone(),
+        )
+        .with_guard(signature.guard().cloned());
+        Some((
+            rewritten,
+            model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice()),
+        ))
     }
 
     /// `signature` and `generics` with each input that is a safe Rust
@@ -10692,7 +11242,9 @@ impl<'graph> Context<'graph> {
         {
             signature
         } else if let Some(early) = output_binders_early(signature, generics)
-            && (receiver_binder_is_exact(&early) || late_binders_lend_inputs(&early))
+            && (receiver_binder_is_exact(&early)
+                || late_binders_lend_inputs(&early)
+                || self.lent_slices.get())
         {
             // A lifetime of the function's own that its output names, as
             // iced's `markdown::view<'a>(items: &'a [Item], ..) -> impl
@@ -10728,6 +11280,7 @@ impl<'graph> Context<'graph> {
                     .enumerate()
                     .filter(|(_, input)| {
                         shares_at(input, lifetime)
+                            || exclusive_at(input, lifetime)
                             || text_at(input, lifetime)
                             || objects_at(input, lifetime, |id| self.is_option(id))
                     })
@@ -10737,6 +11290,14 @@ impl<'graph> Context<'graph> {
             Some(representability::signature::Scope::Borrows)
         } else if opens_copies {
             Some(representability::signature::Scope::Opens)
+        } else if signature.inputs().any(borrows_at_early_lifetime) && self.lent_slices.get() {
+            lends = signature
+                .inputs()
+                .enumerate()
+                .filter(|(_, input)| borrows_at_early_lifetime(input))
+                .filter_map(|(index, _)| u32::try_from(index).ok())
+                .collect();
+            Some(representability::signature::Scope::Lends)
         } else if signature.inputs().any(borrows_at_early_lifetime) {
             // So does a method that borrows its receiver for the call alone
             // and whose output borrows a `&F` the call fills with a `&str`
@@ -11120,7 +11681,8 @@ impl<'graph> Context<'graph> {
         // `VirtualScrollView<D, B>::auto_hide_scrollbars(self, bool) -> Self`
         // names it in its receiver and output.
         // A closure Rawr makes may also come as an `Option` of one, as
-        // iced's `on_toggle_maybe(Option<F>)` takes it.
+        // iced's `on_toggle_maybe(Option<F>)` takes it, or as a borrow of
+        // one, as a borrowed callable's object is read (`borrowed_callables`).
         let made = call.as_ref().map(|(callable, ..)| *callable);
         for callable in made
             .iter()
@@ -11133,7 +11695,9 @@ impl<'graph> Context<'graph> {
                 .filter(|input| {
                     **input != closure
                         && !(made == Some(callable)
-                            && matches!(input, representability::convert::Type::Option(inner)
+                            && matches!(input,
+                                representability::convert::Type::Option(inner)
+                                | representability::convert::Type::Borrowed { ty: inner, .. }
                                 if **inner == closure))
                 })
                 .chain([&output])
@@ -11453,6 +12017,268 @@ impl<'graph> Context<'graph> {
             )
             .with_call(call),
         )))
+    }
+
+    /// `Box<dyn Fn(A..) -> B>` of the object `bounds`, with no bound beside
+    /// core's `Fn` and its `Output`: a `Box` of core's callable at its
+    /// inputs, as a closure takes them, and its output, which the runner
+    /// spells as the box it is (#2698). `None` for any other object, or one
+    /// whose inputs or output rawr can't give.
+    fn boxed_callable(
+        &self,
+        bounds: &[model::ObjectBound],
+    ) -> Option<representability::convert::Type> {
+        let mut inputs = None;
+        let mut output = None;
+        for bound in bounds {
+            match bound {
+                model::ObjectBound::Trait(model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    polarity: model::Polarity::Positive,
+                    ..
+                }) if self.is_core_trait(trait_id, "Fn") && inputs.is_none() => {
+                    let [model::Argument::Type(model::Type::Tuple(written))] = arguments.as_ref()
+                    else {
+                        return None;
+                    };
+                    inputs = Some(written.clone());
+                }
+                model::ObjectBound::ProjectionEquality { ty, .. } if output.is_none() => {
+                    output = Some(ty.clone());
+                }
+                _ => return None,
+            }
+        }
+        let converted = inputs?
+            .iter()
+            .map(|input| self.convert_closure_input(input))
+            .collect::<Option<Vec<_>>>()?;
+        let output = match output {
+            Some(output) => self.convert_value(&output).ok()?,
+            None => representability::convert::Type::Unit,
+        };
+        Some(representability::convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::boxed(),
+            arguments: Box::new([representability::convert::Type::Nominal {
+                definition: crate::surface::identity::Definition::callable(),
+                arguments: converted.into_iter().chain([output]).collect(),
+            }]),
+        })
+    }
+
+    /// The methods of the trait `definition`'s vtable, each trait parameter
+    /// other than `Self` by its position (`by_position`), as the runner's
+    /// one stand-in for the trait implements them by calling a program's
+    /// impl at an object's arguments (#2698), and each supertrait's, as
+    /// iced's `Widget` has `widget::Meta`'s. `None` when the trait is not
+    /// object safe, has a supertrait with type arguments or an associated
+    /// type, or a method names a type the runner can't give or take, where
+    /// a program's value can't become its object.
+    fn object_methods(
+        &self,
+        definition: &model::Definition,
+        by_position: &BTreeMap<u32, model::Type>,
+    ) -> Option<(
+        Box<[representability::object::Method]>,
+        Vec<representability::object::Supertrait>,
+    )> {
+        use crate::surface::instance::ImplReceiver;
+        let trait_id = definition.id();
+        let model::Kind::Trait {
+            supertraits,
+            associated,
+            provided,
+            ..
+        } = definition.kind()
+        else {
+            return None;
+        };
+        let marker = |predicate: &model::Predicate| match predicate {
+            model::Predicate::Bound {
+                bound: model::Bound::Trait { trait_id, .. },
+                ..
+            } => {
+                ["Sized", "MetaSized", "PointeeSized"]
+                    .into_iter()
+                    .any(|name| self.is_core_trait(trait_id, name))
+                    || self.auto_trait(trait_id)
+            }
+            model::Predicate::Bound { .. } | model::Predicate::TypeOutlives { .. } => true,
+            _ => false,
+        };
+        // Each supertrait that names no type but `Self`, with its own
+        // supertraits after it, once.
+        let mut above = Vec::<representability::object::Supertrait>::new();
+        for predicate in supertraits.iter() {
+            if marker(predicate) {
+                continue;
+            }
+            let model::Predicate::Bound {
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+                ..
+            } = predicate
+            else {
+                return None;
+            };
+            if !arguments
+                .iter()
+                .all(|argument| matches!(argument, model::Argument::Lifetime(_)))
+            {
+                return None;
+            }
+            let supertrait = self
+                .graph
+                .definition_index(trait_id)
+                .and_then(|index| self.graph.definition_at(index))?;
+            let (methods, higher) = self.object_methods(supertrait, &BTreeMap::new())?;
+            let identity = *self.graph.surface_definition(trait_id).as_bytes();
+            let unit = trait_id.unit();
+            let display = supertrait
+                .display_path()
+                .skip_while(|segment| *segment == unit.crate_name());
+            let path = std::iter::once(format!(
+                "::{}{}_{}",
+                crate::api::ledger::CRATE_SEGMENT,
+                unit.crate_name(),
+                unit.stable_crate_id()
+            ))
+            .chain(display.map(str::to_owned))
+            .collect::<Vec<_>>()
+            .join("::");
+            for found in std::iter::once(representability::object::Supertrait::new(
+                identity,
+                path.into(),
+                methods,
+            ))
+            .chain(higher)
+            {
+                if !above
+                    .iter()
+                    .any(|known| known.identity() == found.identity())
+                {
+                    above.push(found);
+                }
+            }
+        }
+        let at = |ty: &model::Type| Some(substitute_bindings(ty, by_position));
+        let names_self = |ty: &model::Type| names_trait_self(ty, trait_id);
+        let mut methods = Vec::new();
+        for id in associated.iter() {
+            let item = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definition_at(index))?;
+            let model::Kind::Function {
+                signature,
+                generics,
+            } = item.kind()
+            else {
+                return None;
+            };
+            // A method bounded `where Self: Sized` is no vtable's.
+            let sized = generics.predicates().any(|predicate| {
+                matches!(predicate, model::Predicate::Bound {
+                    ty,
+                    bound: model::Bound::Trait { trait_id: bound, .. },
+                } if self.is_core_trait(bound, "Sized") && names_self(ty))
+            });
+            if sized {
+                continue;
+            }
+            if generics.parameters().any(|parameter| {
+                parameter.owner() == item.id()
+                    && !matches!(parameter.kind(), model::ParameterKind::Lifetime { .. })
+            }) {
+                return None;
+            }
+            // Each input borrowed at the receiver's lifetime where the
+            // output names it, as iced's `overlay<'b>(&'b mut self, tree:
+            // &'b mut Tree, ..)` takes its tree.
+            let kept = match signature.receiver() {
+                model::Receiver::Reference { lifetime, .. }
+                    if names_lifetime(signature.output(), lifetime) =>
+                {
+                    signature
+                        .inputs()
+                        .enumerate()
+                        .filter(|(_, input)| {
+                            matches!(input, model::Type::Reference { lifetime: named, .. } if named == lifetime)
+                        })
+                        .filter_map(|(position, _)| u32::try_from(position).ok())
+                        .collect()
+                }
+                _ => Box::default(),
+            };
+            let mut inputs = signature.inputs();
+            let receiver = match signature.receiver() {
+                model::Receiver::Reference { mutability, .. } => match mutability {
+                    model::Mutability::Shared => ImplReceiver::Shared,
+                    model::Mutability::Mutable => ImplReceiver::Mutable,
+                },
+                model::Receiver::None => match inputs.next() {
+                    Some(model::Type::Reference { mutability, ty, .. }) if names_self(ty) => {
+                        match mutability {
+                            model::Mutability::Shared => ImplReceiver::Shared,
+                            model::Mutability::Mutable => ImplReceiver::Mutable,
+                        }
+                    }
+                    _ => return None,
+                },
+                model::Receiver::Value { .. } | model::Receiver::Explicit { .. } => return None,
+            };
+            let inputs = inputs
+                .map(|input| {
+                    if names_self(input) {
+                        return None;
+                    }
+                    let input = at(input)?;
+                    // A `&mut` of a trait parameter, as `draw(&self,
+                    // renderer: &mut Renderer, ..)` takes: the stand-in's
+                    // impl writes it at the object's arguments, a crate
+                    // value it lends the program's method for the call.
+                    if let model::Type::Reference {
+                        mutability: model::Mutability::Mutable,
+                        ty,
+                        ..
+                    } = &input
+                        && let Ok(parameter @ representability::convert::Type::Parameter(_)) =
+                            self.convert_value(ty)
+                    {
+                        return Some(representability::convert::Type::Borrowed {
+                            mutable: true,
+                            ty: Box::new(parameter),
+                        });
+                    }
+                    self.convert_closure_input(&input)
+                })
+                .collect::<Option<Box<[_]>>>()?;
+            if names_self(signature.output()) {
+                return None;
+            }
+            let output = self
+                .convert_value(&late_as_static(&at(signature.output())?))
+                .ok()?;
+            // A method with the trait's body, which an impl may leave out.
+            let provided = provided.contains(id);
+            methods.push(
+                representability::object::Method::new(
+                    item.display_path().last()?.into(),
+                    receiver,
+                    inputs,
+                    output,
+                    provided,
+                )
+                .with_kept(kept),
+            );
+        }
+        Some((methods.into_boxed_slice(), above))
     }
 
     /// Whether `id` is core's `Option`.
@@ -11814,6 +12640,17 @@ impl<'graph> Context<'graph> {
                         owned: true,
                         length: None,
                     },
+                    // A `Box<dyn Fn(A..) -> B + 'a>`, as iced's `StyleFn<'a,
+                    // Theme>` a `Catalog`'s class is: the boxed closure rawr
+                    // makes of a program's callable, or native code's own,
+                    // which the program holds and calls (#2698).
+                    Some(Std::Box)
+                        if let Some(model::Type::TraitObject { bounds, .. }) =
+                            std_binding::type_argument(arguments, 0)
+                            && let Some(callable) = self.boxed_callable(bounds) =>
+                    {
+                        callable
+                    }
                     // A `Box<dyn Trait>` of a crate's trait (D872).
                     Some(Std::Box)
                         if let Some(model::Type::TraitObject { bounds, lifetime }) =
@@ -11982,8 +12819,13 @@ impl<'graph> Context<'graph> {
             }
             model::Type::Parameter { index, .. } => Type::Parameter(*index),
             // A trait method's `Self` where it is a member of an opaque type
-            // (`opaque_implementations`).
-            model::Type::SelfType(_) if self.opaque_self.borrow().is_some() => {
+            // (`opaque_implementations`). An impl's `Self` its bounds name,
+            // as `Item = (Self, &mut Tree)` of iced's `Layout::iter_mut`, is
+            // the impl's self type.
+            model::Type::SelfType(id)
+                if self.opaque_self.borrow().is_some()
+                    && self.graph.implementation_index(id).is_none() =>
+            {
                 let opaque = self.opaque_self.borrow().clone();
                 let outer = self.opaque_output.replace(Some(Box::default()));
                 let converted = opaque.as_ref().map(|opaque| self.convert(opaque));
@@ -12031,6 +12873,18 @@ impl<'graph> Context<'graph> {
             {
                 self.convert_borrowed(target)?
             }
+            // An item of a value that keeps a lent slice borrowed, as
+            // `(Self, &'a mut Tree)` of iced's `Layout::iter_mut`: the
+            // element it borrows, lent for as long as the frame that holds
+            // the value (`lends_slices`).
+            model::Type::Reference {
+                lifetime: model::Lifetime::Early { .. },
+                mutability,
+                ty: target,
+            } if self.lent_slices.get() && self.borrows_nothing(target) => Type::Borrowed {
+                mutable: *mutability == model::Mutability::Mutable,
+                ty: Box::new(self.convert(target)?),
+            },
             model::Type::Reference { .. } => {
                 return Err(representability::reject::Kind::ReferenceType.into())
             }
@@ -13612,6 +14466,18 @@ impl<'graph> Context<'graph> {
                 ty: Box::new(string),
             });
         }
+        // `&mut dyn Operation`, as a widget's `operate` passes on the one
+        // native code lent it: lent mutably for the call.
+        if let model::Type::Reference {
+            mutability: model::Mutability::Mutable,
+            lifetime,
+            ty: target,
+        } = ty
+            && *lifetime != model::Lifetime::Static
+            && let model::Type::TraitObject { bounds, .. } = target.as_ref()
+        {
+            return self.convert_object(representability::object::Pointer::Mutable, bounds);
+        }
         // `&[T]` or `&(A, B)`, as voronator's `from_tuple(&(f64, f64),
         // &(f64, f64), &[(f64, f64)])` and image's `save_buffer(path, &[u8],
         // ..)` take: a shared borrow in script code, as rustc sees it (D568),
@@ -13774,6 +14640,28 @@ impl<'graph> Context<'graph> {
                 }
                 _ => {}
             }
+        }
+        // `&mut [T]` of crate values a value the call gives keeps borrowed,
+        // as iced's `Layout::iter_mut(self, children: &mut [Tree])` takes:
+        // the program lends it from a place, as `&mut tree.children`
+        // (`lends_slices`).
+        if let model::Type::Reference {
+            mutability: model::Mutability::Mutable,
+            ty,
+            ..
+        } = ty
+            && let model::Type::Slice(element) = &**ty
+            && self.lent_slices.get()
+            && self.borrows_nothing(element)
+        {
+            return Ok(representability::convert::Type::Borrowed {
+                mutable: true,
+                ty: Box::new(representability::convert::Type::Sequence {
+                    element: Box::new(self.convert(element)?),
+                    owned: false,
+                    length: None,
+                }),
+            });
         }
         // `&T` or `&mut T` of a value Rawr holds, leased from its slot for
         // the call (D558.5), as `render_stateful_widget`'s `&mut W::State`.
@@ -14492,7 +15380,7 @@ fn object_inputs(
         parameters.push(model::Parameter::new(
             owner,
             index,
-            format!("impl dyn#{index}").into(),
+            format!("{}{index}", representability::signature::OBJECT_INPUT).into(),
             model::ParameterKind::Type {
                 bounds: Box::default(),
                 default: model::Default::Absent,
@@ -14527,6 +15415,18 @@ fn object_inputs(
         model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice()),
     ))
 }
+
+/// A borrowed callable's object input (`Context::borrowed_callables`): its
+/// borrow's lifetime and mutability, its `Fn*` trait, its inputs' tuple,
+/// the bound's binders, and `FnOnce::Output` with the type it binds.
+type BorrowedCallable<'g> = (
+    &'g model::Lifetime,
+    model::Mutability,
+    &'g api::identity::Definition,
+    &'g model::Type,
+    &'g [model::Binder],
+    (&'g api::identity::Definition, model::Type),
+);
 
 fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
     let mut binders = signature.binders();
@@ -15378,11 +16278,13 @@ fn borrows_receiver(
 ) -> bool {
     let model::Receiver::Reference {
         lifetime: receiver @ model::Lifetime::Late { binder, .. },
+        mutability,
         ..
     } = signature.receiver()
     else {
         return false;
     };
+    let exclusive = *mutability == model::Mutability::Mutable;
     let output = signature.output();
     // A nominal output, as `QName<'_>`: a borrow guard is read through its
     // target, an async method's future holds its receiver (D513.6), and an
@@ -15392,9 +16294,12 @@ fn borrows_receiver(
     // borrows by value (#1225): the frame's lifetime, as
     // the output's is. So may a shared reference at that lifetime, as its
     // `theme: &'a Theme` is, or a `&'a str`, as `titled(&'a self, title:
-    // &'a str)` takes (#1503). Any other lifetime of the method's own is
-    // one the output doesn't name and an input borrows at for the call
-    // alone, as an elided `id: &Id`.
+    // &'a str)` takes (#1503). A `&mut self` method's output may keep a
+    // `&'b mut T` at its receiver's lifetime too, as iced's `overlay<'b>(&'b
+    // mut self, tree: &'b mut Tree, ..)` keeps the tree (#2698); a `&self`
+    // one's may not. Any other lifetime of the method's own is one the
+    // output doesn't name and an input borrows at for the call alone, as an
+    // elided `id: &Id`.
     matches!(output, model::Type::Definition { .. })
         && signature.guard().is_none()
         && !signature.async_function()
@@ -15405,6 +16310,7 @@ fn borrows_receiver(
             !names_late_lifetime(input)
                 || naming(input, receiver) == Naming::Argument
                 || shares_at(input, receiver)
+                || (exclusive && exclusive_at(input, receiver))
                 || text_at(input, receiver)
                 || objects_at(input, receiver, &is_option)
                 || (!names_lifetime(input, receiver) && lends_late_borrows(input))
@@ -15451,6 +16357,20 @@ fn text_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
         mutability: model::Mutability::Shared,
         ty,
     } if named == lifetime && matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
+}
+
+/// Whether `ty` is a `&'r mut T` at `lifetime` of a crate's type `T` that
+/// borrows nothing else, as iced's `overlay<'b>(&'b mut self, tree: &'b
+/// mut Tree, ..)` takes the widget's tree: the output keeps it borrowed
+/// exclusively for as long as it keeps the receiver (#2698).
+fn exclusive_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
+    matches!(ty, model::Type::Reference {
+        lifetime: named,
+        mutability: model::Mutability::Mutable,
+        ty,
+    } if named == lifetime
+        && matches!(**ty, model::Type::Definition { .. })
+        && !names_late_lifetime(ty))
 }
 
 /// Whether `ty` is a `&'r T` at `lifetime` of a crate's type `T` that
@@ -16674,6 +17594,38 @@ fn substitute_parameters(
             id: id.clone(),
             bounds: bounds.clone(),
             captures: captures.iter().map(argument).collect(),
+        },
+        // A trait object's arguments and bindings, as `T` of the trait's
+        // `traverse(&mut self, &mut dyn FnMut(&mut dyn Visit<T>))` at its
+        // default.
+        model::Type::TraitObject { bounds, lifetime } => model::Type::TraitObject {
+            bounds: bounds
+                .iter()
+                .map(|bound| match bound {
+                    model::ObjectBound::Trait(model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity,
+                        binders,
+                    }) => model::ObjectBound::Trait(model::Bound::Trait {
+                        trait_id: trait_id.clone(),
+                        arguments: arguments.iter().map(argument).collect(),
+                        polarity: *polarity,
+                        binders: binders.clone(),
+                    }),
+                    model::ObjectBound::ProjectionEquality {
+                        associated,
+                        arguments,
+                        ty,
+                    } => model::ObjectBound::ProjectionEquality {
+                        associated: associated.clone(),
+                        arguments: arguments.iter().map(argument).collect(),
+                        ty: substitute_parameters(ty, substitutions),
+                    },
+                    other @ model::ObjectBound::Trait(_) => other.clone(),
+                })
+                .collect(),
+            lifetime: lifetime.clone(),
         },
         other => other.clone(),
     }
@@ -18215,8 +19167,10 @@ mod tests {
     /// inboard's `Organization::user(&self, id: &Id) -> Option<&User>`,
     /// `for<'a, 'b> fn(&'a Self, &'b Id) -> Option<&'a User>`: its elided
     /// lifetimes are the call's own, not a higher-ranked binder. An output
-    /// that names the id's lifetime, or an input that holds a borrow at it,
-    /// is still refused.
+    /// that names the id's lifetime, or a `&mut` input that holds a borrow
+    /// at it, is still refused. A shared reference lends what it holds
+    /// too, as log's `&(&str, ..)` does (ea606993e), so only a `&mut` can
+    /// keep the inner borrow past the call.
     #[test]
     fn elided_lifetimes_of_a_method_lend_its_inputs_beside_its_receiver() {
         use crate::api::model;
@@ -18277,8 +19231,18 @@ mod tests {
         );
         assert!(!super::receiver_binder_lends_inputs(&named));
 
-        let held = signature(
+        let shared = signature(
             reference(late(&input), reference(late(&input), plain.clone())),
+            option(reference(late(&receiver), plain.clone())),
+        );
+        assert!(super::receiver_binder_lends_inputs(&shared));
+
+        let held = signature(
+            model::Type::Reference {
+                lifetime: late(&input),
+                mutability: model::Mutability::Mutable,
+                ty: Box::new(reference(late(&input), plain.clone())),
+            },
             option(reference(late(&receiver), plain.clone())),
         );
         assert!(!super::receiver_binder_lends_inputs(&held));
@@ -18339,6 +19303,24 @@ mod tests {
         assert!(super::borrows_receiver(&shared, |_| false));
         let mutable = signature(Box::from([reference(model::Mutability::Mutable)]));
         assert!(!super::borrows_receiver(&mutable, |_| false));
+        // A `&'a mut self` method's output may keep a `&'a mut` input, as
+        // iced's `overlay` keeps its tree (the lending region, #2698).
+        let exclusive = model::Signature::new(
+            model::Safety::Safe,
+            false,
+            false,
+            "\"Rust\"".into(),
+            false,
+            Box::from([binder.clone()]),
+            model::Receiver::Reference {
+                lifetime: lifetime.clone(),
+                mutability: model::Mutability::Mutable,
+                ty: model::Type::SelfType(id.clone()),
+            },
+            Box::from([reference(model::Mutability::Mutable)]),
+            borrowing.clone(),
+        );
+        assert!(super::borrows_receiver(&exclusive, |_| false));
     }
 
     #[test]
@@ -18386,8 +19368,8 @@ mod tests {
     }
 
     #[test]
-    fn a_future_parameter_the_output_names_is_rejected_and_its_output_is_kept() {
-        use super::representability::{reject, signature};
+    fn a_future_parameter_the_output_names_is_its_core_future_and_its_output_is_kept() {
+        use super::representability::{convert, signature};
         let contract = crate::test_fixture::future_parameter_functions()
             .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the future parameter graph classifies");
@@ -18411,17 +19393,24 @@ mod tests {
             .map(signature::Parameter::kind)
             .collect::<Vec<_>>();
         assert_eq!(kinds, [signature::Kind::Future, signature::Kind::Type]);
-        // `scope<F: Future>(f: F) -> Wrap<F>` names the script future's own
-        // type, which no facade signature can declare, as tokio's
-        // `LocalKey::scope` does.
+        // `scope<F: Future>(f: F) -> Wrap<F>`, as tokio's `LocalKey::scope`
+        // gives, names `F` where its output is the core future of `F`'s
+        // synthetic output, as its input is, so the facade declares no `F`
+        // (D1005.2, which reads tokio's `Timeout<F::IntoFuture>` so; D545
+        // refused it before).
+        let Representability::FunctionItem(scope) = outcome("scope") else {
+            panic!("`scope` is a function item: {:?}", outcome("scope"));
+        };
+        let [future] = scope.signature().inputs() else {
+            panic!("`scope` takes one input: {:?}", scope.signature());
+        };
         assert!(
             matches!(
-                outcome("scope"),
-                Representability::Rejected(reason)
-                    if reason.kind() == reject::Kind::ScriptFutureType
+                scope.signature().output(),
+                convert::Type::Nominal { arguments, .. } if arguments[..] == [future.clone()]
             ),
             "{:?}",
-            outcome("scope")
+            scope.signature()
         );
     }
 
@@ -18844,6 +19833,7 @@ mod tests {
                     auto_trait: false,
                     supertraits: Box::default(),
                     associated: Box::default(),
+                    provided: Box::default(),
                     generics: empty.clone(),
                 },
                 Kind::Trait,

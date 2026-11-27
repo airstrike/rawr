@@ -350,6 +350,7 @@ fn iced_profile_graph_with_universe(
                 auto_trait: false,
                 supertraits: Box::default(),
                 associated: Box::default(),
+                provided: Box::default(),
                 generics: generics(),
             },
             span(300, 310),
@@ -1885,6 +1886,7 @@ pub fn future_closure_functions() -> api::Graph<api::Extracted> {
                 auto_trait: false,
                 supertraits: Box::from([bound(&core, 0, &future, Box::default())]),
                 associated: Box::default(),
+                provided: Box::default(),
                 generics: model::Generics::new(
                     Box::from([model::Parameter::new(
                         core.clone(),
@@ -2333,6 +2335,7 @@ pub fn projected_implementations(
                 auto_trait: false,
                 supertraits: Box::default(),
                 associated: Box::from([out.clone()]),
+                provided: Box::default(),
                 generics: generics(),
             },
             span(0, 1),

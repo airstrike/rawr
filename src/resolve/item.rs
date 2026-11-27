@@ -250,6 +250,12 @@ pub(crate) struct Generic {
     /// function per instantiation (D629), and the trait's defaults and the
     /// crate's impls fix what a caller's type leaves open (D604).
     pub crate_bounds: Box<[type_ref::Type]>,
+    /// The path of each crate trait a bound names, as
+    /// `iced::widget::container::Catalog` of `Theme: Catalog`, whose
+    /// associated types the parameter's projections may name
+    /// (`Theme::Class<'a>`).
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    pub native_traits: Box<[crate::ImmutableString]>,
     /// An argument-position `impl Trait`, which a turbofish doesn't name.
     pub lifted: bool,
     /// A const parameter's value type: `usize` of `const N: usize`. Its

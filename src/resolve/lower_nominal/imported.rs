@@ -76,6 +76,11 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     // What each source lowered again found so far, and whether each of its
     // bodies lowered.
     let mut lowered_sources = BTreeMap::<crate::program::source::Id, (Finding, bool)>::new();
+    // Each program method whose body runs only where native code lends,
+    // and each call of a program trait method outside its trait's method
+    // (#2698).
+    let mut lending = BTreeMap::new();
+    let mut method_calls = Vec::new();
     for checked in &bodies {
         let source = checked.source;
         if reused.contains(&source) {
@@ -122,6 +127,19 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         };
         let first = lower(false, &mut allocation_failure);
         let (lowered, more) = again(first, || lower(true, &mut None));
+        // A function that binds a crate-source module's concrete item
+        // binds nothing when rawr can't hold the item: nothing calls it,
+        // and interpreted code that reaches the item fails at its call. A
+        // miss is asked for, as any body's is.
+        if let Err(error) = &lowered
+            && LoweringFailure::miss_of(error).is_none()
+            && checked.key.is_some_and(|key| {
+                crate::package::crate_source::is_binding(key.modules(), key.name())
+            })
+        {
+            uses.truncate(before);
+            continue;
+        }
         let entry = lowered_sources
             .entry(source)
             .or_insert_with(|| (Finding::default(), true));
@@ -134,6 +152,19 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
             dependencies.append(&mut found);
             continue;
         };
+        if let (Some(item), Body::Method(definition)) = (&lowered.instances.lending, &checked.body)
+        {
+            lending
+                .entry(definition.key().clone())
+                .or_insert_with(|| item.clone());
+        }
+        method_calls.extend(
+            lowered
+                .instances
+                .method_calls
+                .iter()
+                .map(|(callee, call)| (source, callee.clone(), *call)),
+        );
         for operation in &lowered.ops {
             found.extend(operation.dependencies());
         }
@@ -142,6 +173,13 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         dependencies.append(&mut found);
         offset = uses.len();
     }
+    super::entry::refuse_lending_calls(
+        &lending,
+        method_calls
+            .iter()
+            .map(|(source, callee, call)| (*source, callee, *call)),
+    )
+    .map_err(crate::resolve::ImportedFailure::Lowering)?;
     let checked = lowered_sources.len();
     if let Some(checks) = checks.as_mut() {
         for (source, (found, lowered)) in lowered_sources {
@@ -168,6 +206,10 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     if let Some(missed) = missed {
         return Err(crate::resolve::ImportedFailure::Lowering(missed));
     }
+    // What the templates' generic reads reach at the crates' own types,
+    // bound up front (`Instances::ahead`).
+    uses.extend(program.instances.ahead.iter().cloned());
+    one_spelling(&mut uses);
     uses.sort_unstable();
     uses.dedup();
     let programs = Programs::of(program);
@@ -177,6 +219,83 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         impls,
         programs,
     })
+}
+
+/// Each use of an item its selector names, spelled by the least of the
+/// paths its uses at the same types spell it by (a member of an opaque
+/// type keeps its own, `opaque_member`): one defined item at one
+/// instance is one adapter, whichever dependency, hidden segment or
+/// re-export a body reaches it through (D1118), as iced's `Widget` is one
+/// trait under `iced_core` and every crate that re-exports it.
+#[cfg(feature = "rust-import")]
+fn one_spelling(uses: &mut [ImportedUse]) {
+    type Instance<'u> = (
+        &'u rawr_import::surface::identity::Selector,
+        &'u [rawr_import::classify::representability::convert::Type],
+        &'u [rawr_import::classify::representability::convert::Constant],
+        &'u [crate::resolve::lower_nominal::surface::ImportedFunctionUse],
+        &'u [crate::resolve::lower_nominal::surface::ImportedMapperUse],
+        bool,
+        &'u [rawr_import::surface::instance::Slot],
+        Option<[u8; 32]>,
+        Option<&'u str>,
+    );
+    fn instance(using: &ImportedUse) -> Option<Instance<'_>> {
+        crate::host::defined::crate_item(&using.selector)?;
+        // A member of an opaque type, as the `next` of each iterator iced's
+        // `Layout::iter` and `Layout::iter_mut` give, is its trait's item
+        // at a `Self` only its path names.
+        if crate::host::defined::opaque_member(&using.path) {
+            return None;
+        }
+        Some((
+            &using.selector,
+            &using.types,
+            &using.constants,
+            &using.functions,
+            &using.mappers,
+            using.callable,
+            &using.slots,
+            using.application,
+            owner_name(using),
+        ))
+    }
+    // A trait's provided method an impl leaves to the trait is one item
+    // for every type whose impl does, as `Diffed::lifted` of `Label` and
+    // of `Mark` is: its `Self` is the type its path names, whose name
+    // tells the types apart, whichever path spells it.
+    fn owner_name(using: &ImportedUse) -> Option<&str> {
+        if !matches!(
+            using.selector,
+            rawr_import::surface::identity::Selector::Method { .. }
+        ) {
+            return None;
+        }
+        let (owner, _) = using.path.rsplit_once("::")?;
+        Some(owner.rsplit_once("::").map_or(owner, |(_, name)| name))
+    }
+    let mut least = BTreeMap::<Instance<'_>, ImmutableString>::new();
+    for using in uses.iter() {
+        if let Some(key) = instance(using) {
+            least
+                .entry(key)
+                .and_modify(|path| {
+                    if using.path < *path {
+                        path.clone_from(&using.path);
+                    }
+                })
+                .or_insert_with(|| using.path.clone());
+        }
+    }
+    let spelled = uses
+        .iter()
+        .map(|using| instance(using).and_then(|key| least.get(&key)).cloned())
+        .collect::<Vec<_>>();
+    for (using, path) in uses.iter_mut().zip(spelled) {
+        if let Some(path) = path {
+            using.path = path;
+        }
+    }
 }
 
 /// What the check of one source it lowered again found so far
@@ -384,7 +503,9 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                     }
                 }
                 Added::Method(index) => {
-                    if opaque(Some(program.methods[index].output())) {
+                    if index < crate::resolve::BUILTIN_METHOD_IDS
+                        && opaque(Some(program.methods[index].output()))
+                    {
                         pending.insert(0, Pending::Method(index));
                     }
                 }
@@ -783,6 +904,13 @@ pub(super) fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_re
                 span,
             })
         }
+        // A boxed closure, as iced's `Catalog::Class<'a>` of `Theme` is:
+        // `fn(A) -> B`, as the bridge boxes it (T417).
+        Ty::Callable { inputs, output, .. } | Ty::Fn { inputs, output } => {
+            let mut types = all(inputs)?;
+            types.push(named(output)?);
+            builtin(crate::item::type_ref::FN_TYPE, types)
+        }
         _ => return None,
     })
 }
@@ -796,38 +924,36 @@ pub(super) fn instanced(function: &item::Function) -> bool {
     function
         .generics
         .iter()
-        .any(|generic| generic.host || held_into(generic).is_some())
+        .any(|generic| generic.host || host_into(generic).is_some())
 }
 
-/// The std type Rawr's std holds that `generic`'s `Into` bound converts
-/// into: `PathBuf` of `impl Into<PathBuf>`. A crate's `impl From<Its> for
-/// PathBuf` is a member of `Its` (the `into` of core's blanket `Into`), so
-/// only a body that reads the parameter at the caller's type reaches it,
-/// as rustc's monomorphised body does.
+/// The native type `generic`'s `Into` bound converts into: `PathBuf` of
+/// `impl Into<PathBuf>`, a std type Rawr's std holds, or `Background` of
+/// a crate's `impl Into<Background>`. A crate's `impl From<Its> for
+/// PathBuf` is a member of `Its` (the `into` of core's blanket `Into`), as
+/// iced's `impl From<Color> for Background` is of `Color`, so only a body
+/// that reads the parameter at the caller's type reaches it, as rustc's
+/// monomorphised body does.
 #[cfg(feature = "rust-import")]
-fn held_into(generic: &item::Generic) -> Option<&type_ref::Type> {
+fn host_into(generic: &item::Generic) -> Option<&type_ref::Type> {
     generic
         .trait_arguments
         .iter()
         .find_map(|(trait_name, arguments)| match &arguments[..] {
             [target @ type_ref::Type::Path(type_ref::Path {
-                target: type_ref::Target::Host { definition, .. },
+                target: type_ref::Target::Host { .. },
                 ..
-            })] if trait_name.as_str() == "Into"
-                && !crate::std_facade::held_forms(&definition.path()).is_empty() =>
-            {
-                Some(target)
-            }
+            })] if trait_name.as_str() == "Into" => Some(target),
             _ => None,
         })
 }
 
 /// Each of `parameters` its signature writes as one of `generics` bounded
-/// by an `Into` into a held std type (`held_into`), with that type at
+/// by an `Into` into a native type (`host_into`), with that type at
 /// `substituted`, an instance's types: `path` of `fn load(path: impl
 /// Into<PathBuf>)`.
 #[cfg(feature = "rust-import")]
-fn held_conversions(
+pub(super) fn into_conversions(
     parameters: &[item::Parameter],
     generics: &[item::Generic],
     substituted: &[(ImmutableString, type_ref::Type)],
@@ -850,7 +976,7 @@ fn held_conversions(
             let generic = generics.iter().find(|generic| generic.name.text == *name)?;
             Some((
                 parameter.name.text.clone(),
-                substitute_parameters(held_into(generic)?, substituted),
+                substitute_parameters(host_into(generic)?, substituted),
             ))
         })
         .collect()
@@ -859,14 +985,28 @@ fn held_conversions(
 /// Whether rawr compiles the script method `definition` once per
 /// instantiation its callers use, as `instanced` decides for a function: a
 /// generic parameter of its impl or its own touches a crate's types (D629).
+/// A crate-source module's generic inherent method is an inherent method,
+/// though its trait holds it, which no bound names. It is crate code, which
+/// rustc compiles only at the types its callers give: any type parameter
+/// makes it a template, as iced's `State::new<T: 'static>`, whose body
+/// boxes its `T` as `dyn Any`.
 #[cfg(feature = "rust-import")]
 pub(super) fn instanced_method(definition: &method::Definition) -> bool {
-    definition.trait_name().is_none()
-        && definition.builtin_owner().is_none()
+    let inherent = match definition.trait_name() {
+        None => definition.builtin_owner().is_none(),
+        Some(name) if crate::package::crate_source::is_inherent(name) => {
+            return definition
+                .generics()
+                .iter()
+                .any(|generic| generic.constant.is_none());
+        }
+        Some(_) => false,
+    };
+    inherent
         && definition
             .generics()
             .iter()
-            .any(|generic| generic.host || held_into(generic).is_some())
+            .any(|generic| generic.host || host_into(generic).is_some())
 }
 
 /// Whether rawr compiles the `from` of a script `impl From<S>` for a
@@ -1004,7 +1144,9 @@ pub(super) fn instance_templates(program: &mut Program) -> bool {
             program
                 .builtin_methods
                 .iter()
-                .filter(|definition| instanced_crate_impl(definition))
+                .filter(|definition| {
+                    instanced_crate_impl(definition) || instanced_method(definition)
+                })
                 .map(|definition| definition.key().clone()),
         )
         .collect::<Vec<_>>();
@@ -1319,6 +1461,119 @@ fn method_at(program: &Program, index: usize) -> &method::Definition {
     }
 }
 
+/// The generic read of each of `templates` not read yet (D629): the crate
+/// trait each call on one of its parameters selects through the
+/// parameter's bound, by the method's position (`Instances::selections`).
+/// A read stops at what it can't lower generically; the calls it reached
+/// keep their selection, and the rest are their instances' own.
+#[cfg(feature = "rust-import")]
+fn select_templates(
+    engine: &Engine,
+    program: &Program,
+    models: &Models,
+    templates: &BTreeSet<crate::item::Key>,
+    allocation: &mut dyn crate::host::ImportAllocation,
+    ahead: &mut Vec<ImportedUse>,
+) -> Vec<(crate::item::Key, crate::resolve::Selections)> {
+    let mut selected = Vec::new();
+    for key in templates {
+        if program.instances.selections.contains_key(key) {
+            continue;
+        }
+        let mut uses = Vec::new();
+        let mut dependencies = BTreeSet::new();
+        let mut reads = Vec::new();
+        let mut allocation_failure = None;
+        let function = program.items.iter().find_map(|shell| match &shell.kind {
+            item::Kind::Function(definition) if shell.key.as_ref() == Some(key) => {
+                Some((shell, definition))
+            }
+            _ => None,
+        });
+        let method = program
+            .methods
+            .iter()
+            .chain(program.builtin_methods.iter())
+            .find(|definition| definition.key() == key);
+        let source = match (function, method) {
+            (Some((shell, _)), _) => shell.source,
+            (None, Some(definition)) => definition.source(),
+            (None, None) => continue,
+        };
+        let context = ImportedContext {
+            native: None,
+            allocation: &mut *allocation,
+            failure: &mut allocation_failure,
+            source,
+            uses: &mut uses,
+            dependencies: &mut dependencies,
+            reads: &mut reads,
+        };
+        let selections = match (function, method) {
+            (Some((shell, definition)), _) => {
+                let body_source = body_source(
+                    definition
+                        .body
+                        .text
+                        .as_deref()
+                        .unwrap_or_else(|| program.source.text_at(shell.source)),
+                    &definition.body,
+                );
+                let mut parser = Parser::for_function(
+                    engine,
+                    &body_source,
+                    models.for_source(shell.source),
+                    definition,
+                    key.clone(),
+                    0,
+                    0,
+                    Some(context),
+                );
+                parser.symbolic_only = true;
+                parser.collecting_instances = true;
+                parser.selecting = true;
+                let _ = parser
+                    .expect_output(definition.output.as_ref())
+                    .and_then(|()| parser.parse_function_body(definition));
+                ahead.append(&mut parser.all_native_uses());
+                std::mem::take(&mut parser.selections)
+            }
+            (None, Some(definition)) => {
+                let body_source = source_span(
+                    definition
+                        .body_text()
+                        .unwrap_or_else(|| program.source.text_at(definition.source())),
+                    definition.body(),
+                );
+                match Parser::for_method(
+                    engine,
+                    &body_source,
+                    models.for_source(definition.source()),
+                    definition,
+                    0,
+                    0,
+                    Some(context),
+                ) {
+                    Ok(mut parser) => {
+                        parser.symbolic_only = true;
+                        parser.collecting_instances = true;
+                        parser.selecting = true;
+                        let _ = parser
+                            .expect_output(Some(definition.output()))
+                            .and_then(|()| parser.parse_method_body(definition));
+                        ahead.append(&mut parser.all_native_uses());
+                        std::mem::take(&mut parser.selections)
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
+            (None, None) => continue,
+        };
+        selected.push((key.clone(), selections.into_boxed_slice()));
+    }
+    selected
+}
+
 /// The instance `id` of the method template `definition` at `types`, the
 /// types of its generic parameters, whose names are `names`: listed among
 /// the template's instances, its body reading each parameter as its type.
@@ -1361,12 +1616,40 @@ pub(super) fn method_instance(
         substitute_parameters(ty, &substituted)
     });
     let conversions =
-        held_conversions(definition.parameters(), definition.generics(), &substituted);
+        into_conversions(definition.parameters(), definition.generics(), &substituted);
     if !conversions.is_empty() {
         instances.conversions.insert(key.clone(), conversions);
     }
+    let bounds = instance_bounds(definition.generics(), &substituted);
+    if !bounds.is_empty() {
+        instances.bounds.insert(key.clone(), bounds);
+    }
     instances.types.insert(key, substituted);
     instance
+}
+
+/// The crate-trait bounds `generics` declare, at the types `substituted`
+/// gives them: an instance's param-env (`Instances::bounds`).
+#[cfg(feature = "rust-import")]
+pub(super) fn instance_bounds(
+    generics: &[item::Generic],
+    substituted: &[(ImmutableString, type_ref::Type)],
+) -> Box<[(type_ref::Type, type_ref::Type)]> {
+    generics
+        .iter()
+        .filter_map(|generic| {
+            let (_, bounded) = substituted
+                .iter()
+                .find(|(name, _)| *name == generic.name.text)?;
+            Some(
+                generic
+                    .crate_bounds
+                    .iter()
+                    .map(move |bound| (bounded.clone(), substitute_parameters(bound, substituted))),
+            )
+        })
+        .flatten()
+        .collect()
 }
 
 /// The types of `template`'s generic parameters after those `named` gives,
@@ -1541,9 +1824,15 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
         if let Some(readings) = readings.as_deref_mut() {
             readings.begin(program, &models);
         }
+        let mut ahead = Vec::new();
+        let selections =
+            select_templates(engine, program, &models, &templates, allocation, &mut ahead);
+        program.instances.selections.extend(selections);
+        program.instances.ahead.append(&mut ahead);
         // Each call, by the body that makes it: the template and its types.
         let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();
         let mut impl_uses = Vec::new();
+        let mut seeds = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Function(definition) = &shell.kind else {
                 continue;
@@ -1588,12 +1877,17 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 parser.symbolic_only = true;
                 parser.collecting_instances = true;
                 // A body that fails here fails again where it is lowered.
-                let _ = parser.parse_function_body(definition);
+                // Its output fixes what its calls leave open, as a `-> impl
+                // Widget<Message>` fixes a theme by the trait's defaults.
+                let _ = parser
+                    .expect_output(definition.output.as_ref())
+                    .and_then(|()| parser.parse_function_body(definition));
                 let found = kept::Found {
                     templates: called_templates(&parser),
                     calls: take_instance_calls(&mut parser),
                     impl_uses: take_impl_uses(&mut parser),
                     reaches: false,
+                    seeds: std::mem::take(&mut parser.demand_seeds),
                 };
                 drop(parser);
                 allocation_failure.map_or(Ok(found), Err)
@@ -1615,6 +1909,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                     .map(|(template, types, call)| (key.clone(), template, types, call)),
             );
             impl_uses.extend(read.impl_uses);
+            seeds.extend(read.seeds);
         }
         // A builtin type's methods too, as an impl for every type of a bound
         // `IntoIterator`, whose instance calls `Content::with_children`.
@@ -1654,10 +1949,13 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 if let Ok(mut parser) = parser {
                     parser.symbolic_only = true;
                     parser.collecting_instances = true;
-                    let _ = parser.parse_method_body(definition);
+                    let _ = parser
+                        .expect_output(Some(definition.output()))
+                        .and_then(|()| parser.parse_method_body(definition));
                     found.templates = called_templates(&parser);
                     found.calls = take_instance_calls(&mut parser);
                     found.impl_uses = take_impl_uses(&mut parser);
+                    found.seeds = std::mem::take(&mut parser.demand_seeds);
                 }
                 allocation_failure.map_or(Ok(found), Err)
             };
@@ -1678,7 +1976,15 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 }),
             );
             impl_uses.extend(read.impl_uses);
+            seeds.extend(read.seeds);
         }
+        // The opened bodies the runner's fixed arguments settle, read for
+        // their native uses alone (decision 3), each once per check.
+        let mut done = std::mem::take(&mut program.instances.demanded);
+        let mut demanded =
+            super::demand::read(engine, program, &models, allocation, &seeds, &mut done);
+        program.instances.demanded = done;
+        program.instances.ahead.append(&mut demanded);
         let mut added = Vec::<(crate::item::Key, Vec<ImmutableString>, Vec<Ty>)>::new();
         // Each instance native code calls a template at, named by the key
         // its trampoline calls it by, ahead of marked callers', which then
@@ -1832,6 +2138,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .any(|definition| definition.key() == key)
         });
         let mut builtin_methods = std::mem::take(&mut program.builtin_methods).into_vec();
+        let mut added_builtin_methods = Vec::with_capacity(added_builtin.len());
         for (template, names, types) in added_builtin {
             let definition = builtin_methods
                 .iter()
@@ -1840,6 +2147,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .clone();
             let id =
                 method::Id::from_index(crate::resolve::BUILTIN_METHOD_IDS + builtin_methods.len());
+            added_builtin_methods.push(Added::Method(id.index()));
             let key = keyed.get(&(template.clone(), names.clone())).cloned();
             builtin_methods.push(method_instance(
                 &mut program.instances,
@@ -1958,12 +2266,16 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .cloned()
                 .collect();
             let conversions =
-                held_conversions(&definition.parameters, &definition.generics, &substituted);
+                into_conversions(&definition.parameters, &definition.generics, &substituted);
             if !conversions.is_empty() {
                 program
                     .instances
                     .conversions
                     .insert(key.clone(), conversions);
+            }
+            let bounds = instance_bounds(&definition.generics, &substituted);
+            if !bounds.is_empty() {
+                program.instances.bounds.insert(key.clone(), bounds);
             }
             program.instances.types.insert(key.clone(), substituted);
             items.push(item::Shell {
@@ -1973,9 +2285,13 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 ..shell
             });
         }
+        // An instance of a function of an impl for a crate's type is read
+        // for its calls in the next round too, as iced's `Tree::diff` at a
+        // widget's types calls `Self::new` at them.
         let indices = (first..items.len())
             .map(Added::Function)
             .chain(added_methods)
+            .chain(added_builtin_methods)
             .collect();
         program.items = items.into_boxed_slice();
         Ok(indices)

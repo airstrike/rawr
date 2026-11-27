@@ -147,6 +147,9 @@ pub(super) struct Slice {
     pub(super) inclusive: bool,
     /// Where its `[` is, which a range out of bounds panics at.
     pub(super) open: Position,
+    /// The place that is the slice's one element (`slice::from_mut`),
+    /// which is no array: its copy is `[place]`, stored back as the place.
+    pub(super) single: Option<Box<Lvalue>>,
 }
 
 impl Lvalue {

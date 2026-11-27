@@ -3860,3 +3860,1196 @@ fn a_save_that_first_calls_a_macro_named_as_a_module_takes_effect() {
         run.seen.join("\n")
     );
 }
+
+/// A crate module's generic code runs from the crate's own source when
+/// `RAWR_CRATE_SOURCE` names the module: `shade(impl Into<Tint>)` at a
+/// native type and at the program's, `draw` at the
+/// program's `M`, and the generic method `Style::retinted` of a concrete
+/// crate type, the program's own, which runs though the runner's copy
+/// keeps the native one public for other crates' code. Their bodies call the module's private helper, build its
+/// private-field `Style` and bump its private static through the runner's
+/// copy of the crate, which opens them, and the crate's concrete `plain`
+/// bumps the same static natively. The runner holds no instance of the
+/// generic items, and every concrete one of the module, the `[u8; 3]`
+/// conversion the program never names among them. `coats(impl
+/// Into<Paint>)` at a `Tint` runs core's blanket `Into` as the `from` of
+/// `Paint`, which a module apart from `tinted` writes. The output is `cargo
+/// run`'s. An edit that adds a program type through them and gives `shade`
+/// new native inputs, a `Tint` and a `[u8; 3]`, prints `cargo run`'s output
+/// with no new runner build.
+#[test]
+fn a_crate_modules_generic_code_runs_from_its_source_with_no_instance_built() {
+    let root = lane(Some("tinted_shaded.rs"));
+    let run = |root: &std::path::Path| {
+        let output = |mut command: Command| {
+            let run = command
+                .current_dir(root)
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("RUSTFLAGS")
+                .env_remove("RAWR_VERBOSE")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+            assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+            stdout
+        };
+        let mut rawr = crate::support::rawr_import();
+        rawr.arg("run")
+            .arg(root)
+            .env("RAWR_CRATE_SOURCE", "events::tinted")
+            .env("RAWR_HOME", crate::support::runtime_home());
+        let mut cargo = Command::new("cargo");
+        cargo.args(["run", "-q"]);
+        (output(rawr), output(cargo))
+    };
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).unwrap() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    for generic in ["shade\"", "draw\"", "Style::retinted"] {
+        let item = format!("item: \"events::tinted::{generic}");
+        assert!(!bound.contains(&item), "{item} is bound:\n{bound}");
+    }
+    assert!(bound.contains("tinted::darken"), "{bound}");
+    let built = runners(&root.join("target/rawr/store"));
+
+    fs::write(
+        root.join("src/main.rs"),
+        CROSSING.read("variants/tinted_warm.rs"),
+    )
+    .unwrap();
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("warm 1 #1e0fa2 @9\nshaded 9"), "{rawr}");
+    assert_eq!(runners(&root.join("target/rawr/store")), built);
+}
+
+/// A crate's generic type at the program's arguments is the program's own
+/// type, read from the crate's source, as rustc compiles it in the
+/// program's crate: `RAWR_CRATE_SOURCE` opens `events::framed`, whose
+/// `Framed<S>` frames a crate label and the program's own `Shown` type,
+/// and whose `impl<S: Shown> Shown for Framed<S>` the crate's concrete
+/// `shown_all` calls through `Box<dyn Shown>`, beside a plain program
+/// type's box, and through its supertrait `Meta`, whose provided
+/// `is_void` the program's `Blank` writes. `shown_one` takes a frame's
+/// borrow or a `&dyn Shown`, and `events::held`'s generic `Held::new(impl
+/// Shown)` takes a frame by value. Each crosses as the runner's one
+/// stand-in for `Shown`, which holds no type of the program's, and the
+/// runner holds no instance of `Framed`. The output is `cargo run`'s. An
+/// edit that frames a frame and a new program type prints `cargo run`'s
+/// output with no new runner build.
+#[test]
+fn a_crate_generic_type_at_the_programs_arguments_crosses_as_a_trait_object() {
+    let root = lane(Some("framed_types.rs"));
+    let run = |root: &std::path::Path| {
+        let output = |mut command: Command| {
+            let run = command
+                .current_dir(root)
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("RUSTFLAGS")
+                .env_remove("RAWR_VERBOSE")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+            assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+            stdout
+        };
+        let mut rawr = crate::support::rawr_import();
+        rawr.arg("run")
+            .arg(root)
+            .env("RAWR_CRATE_SOURCE", "events::framed")
+            .env("RAWR_HOME", crate::support::runtime_home());
+        let mut cargo = Command::new("cargo");
+        cargo.args(["run", "-q"]);
+        (output(rawr), output(cargo))
+    };
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "|calm| ~plain~ |blank| #~bright~#\n<~lent~>\n<*~lent~*>\n<+~given~+>\n(|~held~|)\n"
+    );
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).unwrap() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    assert!(!bound.contains("events::framed::Framed"), "{bound}");
+    let built = runners(&root.join("target/rawr/store"));
+
+    fs::write(
+        root.join("src/main.rs"),
+        CROSSING.read("variants/framed_nested.rs"),
+    )
+    .unwrap();
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "|calm| ~plain~ |blank| #~bright~# [|deep|[ |3 items|\n<~lent~>\n<*~lent~*>\n<+~given~+>\n(|~held~|)\n(!7 items!)\n"
+    );
+    assert_eq!(runners(&root.join("target/rawr/store")), built);
+}
+
+/// A crate's generic type whose field is the associated type its
+/// parameter's crate trait gives, as iced's `Container<'a, W, Theme =
+/// crate::Theme>` holds `Theme::Class<'a>`, is the program's type:
+/// `events::framed`'s `Painted<'a, S, P = Ink>` holds `P::Class<'a>`, which
+/// the crate's `impl Palette for Ink` makes a boxed closure, so the
+/// program's closure fills it. One frame keeps the class it was made with,
+/// and two take another through a bound on the projection (`P::Class<'a>:
+/// From<EdgeFn<'a, P>>`), at `Ink`, where the projection is the crate impl's
+/// type. Each crosses as the trait's stand-in. The output is `cargo run`'s.
+#[test]
+fn a_crate_generic_types_field_of_its_traits_associated_type_is_the_programs() {
+    let root = lane(Some("framed_painted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "|calm| |*~bright~*|\n<|*~lent~*|>\n");
+}
+
+/// A crate's generic helper in a private module its root re-exports by a
+/// glob, as iced's `container(..)` is `widget::helpers`'s, runs from the
+/// crate's source when `RAWR_CRATE_SOURCE` names that module beside the
+/// module of the type it returns: `events::framed` is both the module and
+/// `made`'s generic `framed`, whose body calls the `framed` module's
+/// generic code, so a frame of the program's type is the program's
+/// `Framed`, whose `reddened` names a type through the crate it calls
+/// `core`, as iced's names iced_core, and whose `painted` names the
+/// `framed` module's generic alias, which the program imports by its name
+/// too. The output is `cargo run`'s, and an edit that frames a new
+/// program type three deep prints `cargo run`'s output with no new runner
+/// build.
+#[test]
+fn a_crate_helper_globbed_into_its_parent_runs_from_its_source() {
+    let root = lane(Some("framed_made.rs"));
+    let run = |root: &std::path::Path| {
+        let output = |mut command: Command| {
+            let run = command
+                .current_dir(root)
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("RUSTFLAGS")
+                .env_remove("RAWR_VERBOSE")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+            assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+            stdout
+        };
+        let mut rawr = crate::support::rawr_import();
+        rawr.arg("run")
+            .arg(root)
+            .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+            .env("RAWR_HOME", crate::support::runtime_home());
+        let mut cargo = Command::new("cargo");
+        cargo.args(["run", "-q"]);
+        (output(rawr), output(cargo))
+    };
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "#calm# ##~deep~##\n<*~lent~*>\n<!~red~!>\n<|~painted~|>\n"
+    );
+    let built = runners(&root.join("target/rawr/store"));
+
+    fs::write(
+        root.join("src/main.rs"),
+        CROSSING.read("variants/framed_made_nested.rs"),
+    )
+    .unwrap();
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "#calm# ##~deep~## ###3 clouds###\n<*~lent~*>\n<!~red~!>\n<|~painted~|>\n"
+    );
+    assert_eq!(runners(&root.join("target/rawr/store")), built);
+}
+
+/// A crate helper of an opened module whose `where` clause bounds a
+/// qualified projection that names its parameter's trait by the trait's
+/// path, and another opened module's generic alias by its module, as
+/// iced's `helpers::iced` writes `<Theme as container::Catalog>::Class<'a>:
+/// From<container::StyleFn<'a, Theme>>`, runs from its source. The output
+/// is `cargo run`'s.
+#[test]
+fn a_crate_helpers_qualified_projection_bound_names_its_trait_by_its_path() {
+    let root = lane(Some("framed_badged.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "<|~badged~|>\n");
+}
+
+/// A crate helper of an opened module whose `where` clause names a generic
+/// alias and a trait through a module that re-exports them from another
+/// crate by a glob, as iced's `helpers::iced` writes `<Theme as
+/// text::Catalog>::Class<'a>: From<text::StyleFn<'a, Theme>>`, where
+/// iced_widget's `text` is `pub use crate::core::widget::text::*;` and the
+/// helpers bind it by `use crate::text::{self, ..}` beside their function
+/// `text`, finds both there, as rustc does. The output is `cargo run`'s.
+#[test]
+fn a_crate_helpers_bound_names_a_generic_alias_a_glob_re_exports() {
+    let root = lane(Some("framed_marked.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "<|~marked~|>\n");
+}
+
+/// A crate helper of an opened module that returns a crate generic type
+/// no opened module holds, as iced's `button(..)` returns `Button<'a,
+/// Message, W, Theme>`, takes the types its arguments leave open from the
+/// view's later uses and its output: `on_press` gives `Message` and `impl
+/// Widget<Message>` the default `Theme`, as rustc infers them. The output
+/// is `cargo run`'s.
+#[test]
+fn a_crate_helpers_open_types_are_what_the_body_and_its_output_give() {
+    let root = lane(Some("framed_pressed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .env_remove("EVENTS_COUNT")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+            .lines()
+            .filter(|line| !line.starts_with("pid "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::made")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view [Increment]\n1 message Increment"),
+        "{rawr}"
+    );
+}
+
+/// A crate trait whose method takes `&mut` of the trait's parameter, as
+/// iced's `Widget::draw` takes `&mut Renderer`, has the runner's stand-in:
+/// the program's `Mood` and frames of it cross as it, and the crate's
+/// concrete `drawn_all` lends each the canvas it makes, which the
+/// program's `draw` marks. The output is `cargo run`'s.
+#[test]
+fn a_crate_traits_mut_parameter_input_is_lent_to_the_programs_impl() {
+    let root = lane(Some("framed_drawn.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "|calm| ~plain~ ||~deep~|| \n");
+}
+
+/// A crate trait's provided method on the program's type, as iced's
+/// `Widget::_boxed(self) where Self: Sized` that `column!` calls on a
+/// program's widget, takes the value as the trait's runner stand-in: the
+/// program's `Mood` and frames of it call `Shown::held`, by method and by
+/// path, and `is_void(&self)` of the supertrait `Meta` lends the value as
+/// its object. The output is `cargo run`'s, and an edit that holds a new
+/// program type in a new nesting prints `cargo run`'s output with no new
+/// runner build.
+#[test]
+fn a_crate_traits_provided_method_takes_the_programs_value_as_its_stand_in() {
+    let root = lane(Some("framed_held.rs"));
+    let run = |root: &std::path::Path| {
+        let output = |mut command: Command| {
+            let run = command
+                .current_dir(root)
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("RUSTFLAGS")
+                .env_remove("RAWR_VERBOSE")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+            assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+            stdout
+        };
+        let mut rawr = crate::support::rawr_import();
+        rawr.arg("run")
+            .arg(root)
+            .env("RAWR_CRATE_SOURCE", "events::framed")
+            .env("RAWR_HOME", crate::support::runtime_home());
+        let mut cargo = Command::new("cargo");
+        cargo.args(["run", "-q"]);
+        (output(rawr), output(cargo))
+    };
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "(calm)\n(~plain~)\n(|~deep~|)\n(!|two|!)\nfalse true\n"
+    );
+    let built = runners(&root.join("target/rawr/store"));
+
+    fs::write(
+        root.join("src/main.rs"),
+        CROSSING.read("variants/framed_held_more.rs"),
+    )
+    .unwrap();
+    let (rawr, cargo) = run(&root);
+    assert_eq!(rawr, cargo);
+    assert!(rawr.ends_with("(|#3 items#|)\nfalse\n"), "{rawr}");
+    assert_eq!(runners(&root.join("target/rawr/store")), built);
+}
+
+/// A crate trait's provided method on the program's frame of a crate
+/// value whose type parameter only the frame's impl fixes, as iced's
+/// `Widget::_boxed(container(text(..)))` gives the text the container's
+/// `Theme` through `impl Widget for Container<'_, W, Theme> where W:
+/// Widget<Message, Theme, Renderer>`: the frame's `impl<S: Drawn<Canvas>>
+/// Drawn<Canvas>` fixes the swatch's canvas by the crate's impl for
+/// `Swatch<Canvas>`, as rustc infers it. The output is `cargo run`'s.
+#[test]
+fn a_program_impls_bound_fixes_what_a_crate_value_in_it_leaves_open() {
+    let root = lane(Some("framed_drawn_boxed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "|%teal| #|%rust|# ~calm \n");
+}
+
+/// `rawr-import run` with `events::framed` opened, and `cargo run`, on the
+/// project at `root`: each one's stdout, once each has succeeded.
+fn framed_and_cargo(root: &std::path::Path) -> (String, String) {
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(root)
+        .env("RAWR_CRATE_SOURCE", "events::framed")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    (output(rawr), output(cargo))
+}
+
+/// A crate generic type's field of its palette's class, a crate's
+/// `Box<dyn Fn(&P) -> char + 'a>`, as iced's `Container` holds its
+/// `StyleFn`: `P::default()` through the crate-bounded parameter at the
+/// crate's `Ink` is the crate's item, as iced's `Theme::default()` is, and
+/// of the two impls' `default`s of `Ink` (`Palette`'s and `Marking`'s) the
+/// one of the trait `P: Palette` names, as rustc selects it; the
+/// box native code makes crosses back to native code's `paint(&self,
+/// &EdgeFn)` as itself, and so does the program's closure, boxed by the
+/// runner, which lends the closure the crate's `&Ink`. A crate function
+/// given as the class, as iced's `.style(container::rounded_box)`, takes
+/// the `&Ink` as its own type though the box the program made carries no
+/// witness of it. The output is `cargo run`'s.
+#[test]
+fn a_crate_boxed_closure_crosses_from_native_code_and_from_the_program() {
+    let root = lane(Some("framed_classed.rs"));
+    let (rawr, cargo) = framed_and_cargo(&root);
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "+\n#\n=\n");
+}
+
+/// A crate module's generic code that calls another crate's generic code
+/// through its crate's re-export, as iced_widget's `Container::diff` calls
+/// iced_core's `Tree::diff_children` through `crate::core::widget::tree`:
+/// `RAWR_CRATE_SOURCE` opens `events::tally`, which is `parts`' module, so
+/// `framed`'s `crate::tally::tallied` is that module's program module and
+/// runs from `parts`' source. The runner holds no instance of `tallied`.
+/// The output is `cargo run`'s.
+#[test]
+fn a_crate_module_reexported_from_another_crate_runs_from_its_source() {
+    let root = lane(Some("framed_tallied.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::framed,events::tally")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "0:3 1:5 2:8\n0:calm 1:deep\n");
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).unwrap() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    assert!(!bound.contains("tally::tallied"), "{bound}");
+}
+
+/// A crate type's generic method run from the crate's source whose bound
+/// names a crate trait by the single name the module's `use` binds
+/// (`use crate::framed::Shown;` then `&impl Shown`), as iced's
+/// `Tree::new(widget: &impl Widget<..>)` does, takes a crate label and the
+/// program's own `Shown` type. The output is `cargo run`'s.
+#[test]
+fn a_crate_trait_a_source_module_imports_by_name_bounds_its_generic_method() {
+    let root = lane(Some("tinted_labelled.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "1:calm\n1:BRIGHT\n");
+}
+
+/// A crate generic type run from the crate's source gives its field to a
+/// crate type's generic method as `std::slice::from_mut(&mut self.item)`,
+/// and that method, run from source over the crate's native value, lends
+/// the value's own field `&mut self.labels` to a generic function, as
+/// iced's `Container::diff` calls `Tree::diff_children`, which hands
+/// `&mut self.children` on. A program call lends a local array to the
+/// method too. The runner holds no instance of the generic items. The
+/// output is `cargo run`'s.
+#[test]
+fn a_crate_generic_method_takes_a_field_as_a_slice_and_lends_a_native_field() {
+    let root = lane(Some("tinted_tallied.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[\"calm\"]\n[\"BRIGHT\"]\n[\"NEW\"]\n");
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).unwrap() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    for generic in ["diff_children", "Tallied"] {
+        assert!(!bound.contains(generic), "{generic} is bound:\n{bound}");
+    }
+}
+
+/// A call in an instance of a generic function takes a parameter its
+/// impl leaves open from the function's own bound, as rustc selects the
+/// where-clause: `item.label()` under `impl Diffed<Note>` at
+/// `Tallied<Tallied<Note>>` diffs at `Note`, as iced's `Container` diffs
+/// its content at the `Message` of its `W: Widget<Message, ..>`.
+#[test]
+fn a_call_in_an_instance_takes_an_open_parameter_from_the_callers_bound() {
+    let root = lane(Some("tinted_noted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[note]\n[[note]]\n");
+}
+
+/// A program's value boxed as a crate trait's object the runner has no
+/// stand-in for, as iced's `Widget` while its `operate(&mut dyn
+/// Operation)` can't cross, is refused at check, rustc-style at the value,
+/// where it once panicked in the runner.
+#[test]
+fn a_program_value_boxed_as_a_crate_object_with_no_stand_in_fails_at_check() {
+    let root = lane(Some("framed_walked.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: coercing `Mood` to the native trait object `dyn events::held::Walked` is not \
+             supported yet"
+        ) && stderr.contains("--> src/main.rs:"),
+        "{stderr}"
+    );
+}
+
+/// A crate's generic impl of its trait for a concrete crate type, `impl<M>
+/// Diffed<M> for Label` in a module the program opens, runs from source at
+/// the program's `Note` over native labels, as cargo runs it, and the
+/// runner binds no instance of it: iced's `impl<Message, ..> Widget<..>
+/// for Text` at the program's message is the same.
+#[test]
+fn a_crate_generic_impl_for_a_crate_type_runs_from_source_at_the_programs_arguments() {
+    let root = lane(Some("tinted_marked.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[\"calm\", \"deep\"]\n[\"note\"]\n[calm]\n[[deep]]\n");
+    let adapters = root.join("target/rawr/runner/rawr-crates/adapters-events/src");
+    let mut bound = String::new();
+    for entry in fs::read_dir(&adapters).into_iter().flatten() {
+        bound.push_str(&fs::read_to_string(entry.unwrap().path()).unwrap());
+    }
+    assert!(!bound.contains("Diffed"), "Diffed is bound:\n{bound}");
+}
+
+/// A crate impl's generic body calls its parameter's bound method,
+/// `self.item.width()` of `S: Diffed<M>`, and the instance's type `Label`
+/// has an inherent builder `width(self, usize)` too: rustc resolves the
+/// call in the generic body, through the bound, so each instance calls
+/// `Diffed::width`, as iced's `Container::diff` calls `Widget::size` of a
+/// `Text`. The program's own `Label(..).width(3)` is the inherent one.
+#[test]
+fn a_call_through_a_generic_bodys_bound_keeps_the_trait_method_at_each_instance() {
+    let root = lane(Some("tinted_widths.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "6\n8\n6\n[x  ]\n");
+}
+
+/// A crate's generic code runs from source at the program's `Note` over a
+/// native `Mark`, whose impl is at any `M`, as iced's `Tree::diff` runs
+/// over a native `Text` at the program's `Message`. `Self::of(item)` in the
+/// opened `impl Tally` is its generic `of` from source at the instance's
+/// types, as iced's `Self::new(new)` is, and so is `Tally::of(item)`
+/// written in a generic function. The instance of `rediff` a call of the
+/// program's makes is read for its own calls. A native `Mark`'s `seen`
+/// takes the program's `Note` from the generic body's bound. The output
+/// is `cargo run`'s.
+#[test]
+fn a_crate_generic_methods_self_call_runs_from_source_at_the_programs_types() {
+    let root = lane(Some("tinted_rediffed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"leaf\"]\n[\"note\"]\n[\"note\"]\n\
+         [\"0:tallied@0\", \"tallied\", \"[leaf!01]\"]\n"
+    );
+}
+
+/// A crate's generic code run from source reads a native `Vec<Node>` it
+/// borrows of a native node as the native vector it is, as iced's
+/// `diff_children_custom` reads `&mut self.children` of a `Tree`: its
+/// `len`, `truncate` and `extend` are the vector's own, and `iter_mut`
+/// lends each node where it is. The output is `cargo run`'s.
+#[test]
+fn a_crate_generic_body_reads_a_lent_native_vector_as_its_own() {
+    let root = lane(Some("tinted_regrown.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"1:a\", \"1:b\"]\n[\"1:a\", \"1:c\", \"1:b\", \"1:d\", \"1:e\", \"1:f\"]\n"
+    );
+}
+
+/// Native code lends a program's impl a crate trait's object, `&mut dyn
+/// Visit`, through the trait's stand-in, as iced's `UserInterface` lends
+/// a widget's `operate` its `&mut dyn Operation<()>`: the program calls
+/// the object's `&mut self` method, which native code dispatches by the
+/// object's vtable, and its `traverse(&mut |visit| ..)` with a closure
+/// that passes the object native code lends it on to the item's impl, as
+/// iced's `Container::operate` does. The closure's parameter takes the
+/// method's `&mut dyn Visit` (`dyn Visit<()>`, its default), as rustc
+/// reads it. The object the closure was lent goes on to a crate item's
+/// native `operate` as the native object it is, beside the item's own
+/// `&mut self`, as a native `Text`'s `operate` takes the operation iced's
+/// `Container` passes on. So does a `&mut Sink<'_>` native code lends, a
+/// type that carries a lifetime, as a native `Text`'s `update` takes the
+/// `&mut Shell<'_, Message>` iced's `Container` passes on. The output is
+/// `cargo run`'s.
+#[test]
+fn a_crate_traits_object_lent_mutably_takes_the_programs_calls() {
+    let root = lane(Some("tinted_visited.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"tallied\", \"-calm\"]\n[\"tallied\", \"-tallied\", \"--deep\"]\n\
+         [\"tallied\", \"-leaf!\"]\n[\"tallied\", \"leaf!\"]\n"
+    );
+}
+
+/// A crate's generic impl of its trait for `&str`, which the crate
+/// compiles, at the program's string: the opened `Tallied<S>` impl runs
+/// from source at `S = &str` and calls the string's `label(&mut self)` and
+/// `width(&self)` at the program's `Note`, which its bound gives, as
+/// iced's `Container` over `container("")` calls the string's
+/// `Widget::tag`. Native code's ask for what it lifts runs the provided
+/// `lifted` the impl leaves to the trait from the trait's source, as
+/// iced's `overlay` of a string does. The output is `cargo run`'s.
+#[test]
+fn a_crate_generic_impl_for_str_runs_its_borrowing_methods_at_the_programs_string() {
+    let root = lane(Some("tinted_texted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "(\"['leaf']\", 6)\n(0, [\"0:tallied\", \"0:'leaf'\"])\n"
+    );
+}
+
+/// Native code lends a program's impl a node it owns, as iced's
+/// `UserInterface` lends a widget's `operate` its `&mut Tree`: the impl
+/// walks the node's children through the crate's `Spot::iter_mut(&mut
+/// node.children)` inside a `traverse` closure, and `Spot::iter(&node.
+/// children)`, whose items borrow the children, and passes each child on to
+/// the item's impl. The children are lent where they are for the rest of
+/// the scope, and each item's `&mut Node` and `&Node` is lent from the
+/// frame's region, lazily, as rustc runs the iterator. A native item's
+/// `seen` takes the `&Node` `Spot::iter` lends, as iced's native `Text`
+/// takes the `&Tree` in `Container::mouse_interaction`. The output is
+/// `cargo run`'s.
+#[test]
+fn a_crate_iterator_over_a_lent_slice_lends_each_item_to_the_program() {
+    let root = lane(Some("tinted_walked.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"0:tallied@0\", \"1:calm@1\", \"tallied\", \"-calm\", \"[calm11]\"]\n\
+         [\"0:tallied@0\", \"1:tallied@1\", \"2:deep@2\", \"tallied\", \"-tallied\", \"--deep\", \"[[deep11]1]\"]\n\
+         [\"0:tallied@0\", \"tallied\", \"[1]\"]\n\
+         [\"0:tallied@0\", \"tallied\", \"[leaf!01]\"]\n"
+    );
+}
+
+/// A crate trait's provided method whose signature can't cross, as
+/// iced's `Widget::overlay`, runs from the trait's source where the impl
+/// rustc selects leaves it to the trait: for the crate's native `Mark`,
+/// the crate's `Label`, whose impl runs from source, and the program's
+/// `Note`. The body's own call of `label` is each item's, natively for
+/// `Mark` at the program's `Note`. The output is `cargo run`'s.
+#[test]
+fn a_crate_traits_provided_method_that_cant_cross_runs_from_the_traits_source() {
+    let root = lane(Some("tinted_lifted.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "(0, [\"0:tallied\", \"0:calm\"])\n\
+         (0, [\"0:tallied\", \"0:leaf\"])\n\
+         (0, [\"0:tallied\", \"0:tallied\", \"0:note\"])\n"
+    );
+}
+
+/// Native code asks a program's value for what it lifts out of a node it
+/// lends, as iced's `UserInterface` asks the root widget for its
+/// `overlay<'b>(&'b mut self, tree: &'b mut Tree, ..)`. The value crosses
+/// as the trait's stand-in. The program's impl gives back what a native
+/// item it holds lifts, borrowed from the item and the node for `'b`, as
+/// `Container::overlay` gives its content's: the stand-in's call runs in a
+/// lending region at `'b`, where the native call borrows both and leaves
+/// its output. A program type whose impl leaves the method to the trait
+/// runs the trait's body over the stand-in's defaults, which the value
+/// keeps as long. The output is `cargo run`'s.
+#[test]
+fn a_native_output_that_borrows_its_receiver_and_a_lent_node_crosses_back_through_the_stand_in() {
+    let root = lane(Some("tinted_overlaid.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_CRATE_SOURCE", "events::tinted")
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "(1, [\"0:tallied\", \"0:up^\"])\n\
+         (0, [\"0:note\"])\n"
+    );
+}
+
+/// A crate call whose trait argument the call leaves open and none of its
+/// item's inputs or output names fails at check, at the call: the
+/// runner's rustc couldn't infer it either, and its build once failed.
+#[test]
+fn a_crate_call_with_an_open_trait_argument_fails_at_check() {
+    let root = lane(Some("tinted_unfixed.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env_remove("RAWR_CRATE_SOURCE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: cannot use `events::tinted::Diffed::label` here: type annotations needed: \
+             cannot infer type of the type parameter `M` (E0282)"
+        ) && stderr.contains("--> src/main.rs:14:"),
+        "{stderr}"
+    );
+}
+
+/// A program's own call of a native method whose output keeps its `&mut`
+/// receiver and a `&mut` input, beside an input borrowed for the call
+/// alone, as iced's `overlay(tree, layout, renderer, ..)`, is refused at
+/// check where no stand-in's lending region can hold what it keeps.
+#[test]
+fn a_native_call_that_keeps_its_receiver_outside_a_lending_method_fails_at_check() {
+    let root = lane(Some("tinted_unlent.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env_remove("RAWR_CRATE_SOURCE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("events::visits::Lift::lifted_at")
+            && stderr.contains("its output keeps its `&mut` receiver and a `&mut` input borrowed")
+            && stderr.contains("--> src/main.rs:15:"),
+        "{stderr}"
+    );
+}
+
+/// A program's own call of its generic impl's method whose instance calls
+/// a native method that keeps its `&mut` receiver and a `&mut` input
+/// beside a call-only borrow, as a program's `Widget::overlay` asks its
+/// content for its overlay, is refused at check: the body runs only where
+/// native code calls it, in the region that lends what the output keeps
+/// (#2698).
+#[test]
+fn a_programs_own_call_of_a_method_that_runs_only_where_native_code_lends_fails_at_check() {
+    let root = lane(Some("tinted_raised.rs"));
+    let mut rawr = crate::support::rawr_import();
+    let run = rawr
+        .arg("check")
+        .arg(&*root)
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .env_remove("RAWR_CRATE_SOURCE")
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("its body calls `events::visits::Lift::raised`")
+            && stderr.contains("--> src/main.rs:23:"),
+        "{stderr}"
+    );
+}
+
+/// A crate trait's `&mut self` method of its impl for `&str` that makes
+/// the string another one, called through a generic body's bound, gives
+/// it back: the program's string is copied in and stored back after the
+/// call, as a `&mut String` input is. The output is `cargo run`'s.
+#[test]
+fn a_crate_str_impls_mut_self_method_gives_the_program_its_new_string() {
+    let root = lane(Some("tinted_trimmed.rs"));
+    let output = |mut command: Command| {
+        let run = command
+            .current_dir(&*root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .env_remove("RAWR_CRATE_SOURCE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let mut rawr = crate::support::rawr_import();
+    rawr.arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::runtime_home());
+    let mut cargo = Command::new("cargo");
+    cargo.args(["run", "-q"]);
+    let (rawr, cargo) = (output(rawr), output(cargo));
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "4 [calm]\n");
+}
+
+/// Each runner executable under `store`, with when it was written.
+fn runners(store: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut found = Vec::new();
+    let mut pending = vec![store.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .file_name()
+                .is_some_and(|name| name == "rawr-generated-runner")
+            {
+                found.push((path, entry.metadata().unwrap().modified().unwrap()));
+            }
+        }
+    }
+    found.sort();
+    found
+}

@@ -1081,6 +1081,7 @@ impl<'a> Parser<'a> {
                 .is_some_and(|(_, declared)| {
                     declared.associated.iter().any(|name| name.text == *member)
                 })
+                || self.native_associated_type(trait_name, member)
         };
         let candidates: Vec<ImmutableString> = match self.inference.resolve(base) {
             ty @ Ty::Param(..) => self
@@ -1205,7 +1206,7 @@ impl<'a> Parser<'a> {
     /// `Page` after its root's `use page::Page;`. `None` when no crate
     /// declares a trait at `path`.
     #[cfg(feature = "rust-import")]
-    fn trait_known_as(&self, path: &str) -> Option<ImmutableString> {
+    pub(super) fn trait_known_as(&self, path: &str) -> Option<ImmutableString> {
         let parsed = crate::host::path::Path::parse(path).ok()?;
         let header = self.models.host.trait_header(&parsed)?;
         Some(
@@ -1214,6 +1215,13 @@ impl<'a> Parser<'a> {
                 .trait_name(&header.identity)
                 .unwrap_or_else(|| path.into()),
         )
+    }
+
+    /// Whether the crate trait `trait_name` declares the associated type
+    /// `member`, as iced's `container::Catalog` declares `Class`.
+    fn native_associated_type(&self, trait_name: &str, member: &str) -> bool {
+        crate::resolve::crate_trait_associated(&self.models.host, trait_name)
+            .is_some_and(|associated| associated.iter().any(|name| name == member))
     }
 
     /// The miss of `written`, the path of a trait object's trait from the
@@ -1289,6 +1297,47 @@ impl<'a> Parser<'a> {
         Some((owner, implemented.path.clone()))
     }
 
+    /// `positional`, the arguments a native trait's object is written
+    /// with, followed by the trait's default of each one left out.
+    #[cfg(feature = "rust-import")]
+    fn default_object_arguments(
+        &mut self,
+        trait_name: &str,
+        positional: &mut Vec<Ty>,
+        span: Span,
+    ) -> Result<(), Error> {
+        let Some(header) = crate::host::path::Path::parse(trait_name)
+            .ok()
+            .and_then(|path| self.models.host.trait_header(&path).cloned())
+        else {
+            return Ok(());
+        };
+        let owner = self.models.host.type_owner(trait_name).cloned();
+        let mut parameters = BTreeMap::new();
+        for (index, name) in header.parameters.iter().enumerate() {
+            let ty = match positional.get(index) {
+                Some(ty) => ty.clone(),
+                None => {
+                    let Some(default) = header.defaults.get(index).and_then(Option::as_ref) else {
+                        return Ok(());
+                    };
+                    let ty = self.instantiate_host_type(
+                        default,
+                        &mut parameters,
+                        trait_name,
+                        span,
+                        owner.as_ref(),
+                        None,
+                    )?;
+                    positional.push(ty.clone());
+                    ty
+                }
+            };
+            parameters.insert(name.clone(), ty);
+        }
+        Ok(())
+    }
+
     /// `dyn Trait` of a crate trait that can be made into an object.
     /// `dyn Shape<Output = i64>` gives each associated type (E0191). A
     /// native trait's object (`type_ref::is_native_trait`) is the crate's,
@@ -1339,8 +1388,12 @@ impl<'a> Parser<'a> {
                 }),
             };
         }
-        // A native trait's object: the crate checked the trait.
+        // A native trait's object: the crate checked the trait. An argument
+        // left out is the trait's default, as `dyn Operation` is `dyn
+        // Operation<()>`.
         if self.models.native_trait(trait_name) {
+            #[cfg(feature = "rust-import")]
+            self.default_object_arguments(trait_name, &mut positional, span)?;
             bindings.extend(
                 positional
                     .into_iter()

@@ -27,12 +27,16 @@ mod coverage;
 pub(crate) mod cow;
 
 #[cfg(feature = "rust-import")]
+mod demand;
+#[cfg(feature = "rust-import")]
 mod disk;
 mod dispatch;
 mod drops;
 mod emit;
 mod entry;
 mod error_object;
+#[cfg(feature = "rust-import")]
+mod exact;
 mod expand;
 mod expr;
 mod fmt_write;
@@ -66,6 +70,8 @@ mod moves;
 mod mutability;
 mod names;
 mod naming;
+#[cfg(feature = "rust-import")]
+mod object_stand_in;
 mod obligation;
 mod op;
 #[cfg(feature = "rust-import")]
@@ -79,6 +85,8 @@ mod places;
 mod poll;
 mod postfix;
 mod proof;
+#[cfg(feature = "rust-import")]
+mod provided;
 pub(crate) mod range;
 mod relocate;
 mod scope;
@@ -169,6 +177,8 @@ use crate::{
     Position, RawrResult, Scope, Shared, Span, INT,
 };
 use builtin_method::default_value;
+#[cfg(feature = "rust-import")]
+use builtin_method::is_string_method;
 pub(crate) use builtin_method::slice_window;
 use builtin_method::{
     char_method, int_method, primitive_size, slice_value, str_change, str_method, str_pieces,
@@ -315,7 +325,7 @@ use tokens::{
     split_arguments, split_first_argument, standard_function, stringify_tokens, template_tokens,
     text_end, without_borrow, without_reference, without_references, Continuation,
 };
-pub(crate) use tokens::{lex_rust, location_calls, token_text};
+pub(crate) use tokens::{lex_rust, location_calls, token_text, token_text_in};
 // A hover reads where each token of a line ends.
 #[cfg(feature = "debugging")]
 pub(crate) use tokens::token_length;
@@ -630,6 +640,11 @@ struct Parser<'a> {
     /// field read there, as `&mut pixel.0`, is a place the call writes
     /// through (`read_imported_field`).
     lent_mut_field: Option<Position>,
+    /// The bindings of the scope frames that lend crate values' fields
+    /// mutably for the rest of the scope (`read_imported_field`), as `&mut
+    /// tree.children` lends a `Vec<Tree>`: a call takes the lend where it
+    /// is, and copies nothing in or back out.
+    mutably_lent_fields: std::collections::HashSet<String>,
     /// The `DerefMut` call of a program type's `*w` under `&mut`, which
     /// the `&mut` makes of its `&mut w`, as rustc's `&mut *w` is
     /// `DerefMut::deref_mut(&mut w)`.
@@ -882,7 +897,7 @@ struct Parser<'a> {
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     instance_calls: Vec<(crate::item::Key, Vec<Ty>, Span)>,
     /// In an instance, each parameter its template bounds by `Into<U>`
-    /// into a held std type, by its declaration, with its `U`
+    /// into a native type, by its declaration, with its `U`
     /// (`Instances::conversions`).
     instance_conversions: BTreeMap<Span, Ty>,
     /// Each call of a template whose instance waits for the body's types
@@ -894,9 +909,51 @@ struct Parser<'a> {
     /// Each coercion to a trait object whose key waits for the body's
     /// types (D1115.3).
     pending_objects: Vec<trait_object::Pending>,
+    /// Each crate call's argument that may fill its parameter as the
+    /// trait's stand-in, decided once the body's types are known (#2698).
+    #[cfg(feature = "rust-import")]
+    pending_stand_ins: Vec<object_stand_in::Pending>,
     /// Whether this body is a template's generic read, which its instances
     /// lower again at their types (D1115).
     template_read: bool,
+    /// Whether this body is a crate-bounded template's generic read (D629),
+    /// which keeps the bound trait each call on a parameter selects for
+    /// the template's instances (`selections`).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    selecting: bool,
+    /// Whether such a read dropped a statement it couldn't lower
+    /// (`tolerant`): its body is read no further than its statements.
+    dropped: bool,
+    /// A demand read's param-env (decision 3, #2698): a body of an opened
+    /// module read at the runner's fixed arguments for its native uses
+    /// alone, whose instance no program item holds. `Some` makes the read
+    /// bind exact native instances as the program's check does.
+    #[cfg(feature = "rust-import")]
+    demand: Option<Box<[(type_ref::Type, type_ref::Type)]>>,
+    /// Each script impl of a crate trait a settled use of the trait's
+    /// member over `Self` fits, with its parameters the use fixes
+    /// (`exact.rs::seed_demand`): a demand read's seed.
+    #[cfg(feature = "rust-import")]
+    demand_seeds: Vec<demand::Seed>,
+    /// The exact native instances the demand reads bound so far, each by
+    /// its trait, member or `None` for the whole trait, and types' names:
+    /// each is bound once in a pass of reads (`demand::read`).
+    #[cfg(feature = "rust-import")]
+    demand_bound: demand::Bound,
+    /// The types each crate trait instance's own members over `Self`
+    /// give that implement it there, by the trait and its arguments'
+    /// names (`exact.rs::filling`): computed once per instance.
+    #[cfg(feature = "rust-import")]
+    fillings: exact::Fillings,
+    /// The crate trait each call of the generic read on a parameter
+    /// selects through the parameter's bound, by the method's position:
+    /// `self.content.size()` of `W: Widget<..>` is `Widget`'s.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    selections: Vec<(Position, ImmutableString)>,
+    /// The crate-trait bounds of each of the body's generic parameters
+    /// (`Generic::crate_bounds`).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    generic_crate_bounds: BTreeMap<ImmutableString, Box<[type_ref::Type]>>,
     /// Whether this body is read only for those calls (`monomorphize`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     collecting_instances: bool,
@@ -1201,6 +1258,7 @@ impl<'a> Parser<'a> {
             stored_inputs: false,
             lent_field: None,
             lent_mut_field: None,
+            mutably_lent_fields: std::collections::HashSet::new(),
             lent_deref: None,
             bound_iterators: BTreeMap::new(),
             held_iter_mut: BTreeMap::new(),
@@ -1284,7 +1342,21 @@ impl<'a> Parser<'a> {
             pending_template_calls: Vec::new(),
             instance_uses: instance::Uses::default(),
             pending_objects: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            pending_stand_ins: Vec::new(),
             template_read: false,
+            selecting: false,
+            dropped: false,
+            #[cfg(feature = "rust-import")]
+            demand: None,
+            #[cfg(feature = "rust-import")]
+            demand_seeds: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            demand_bound: demand::Bound::new(),
+            #[cfg(feature = "rust-import")]
+            fillings: BTreeMap::new(),
+            selections: Vec::new(),
+            generic_crate_bounds: BTreeMap::new(),
             reaches_host: false,
             impl_uses: Vec::new(),
             impl_instance: String::new(),
@@ -1332,6 +1404,10 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             structural_defaults: Vec::new(),
         };
+        #[cfg(feature = "rust-import")]
+        if !parser.models.native_projected.is_empty() {
+            parser.read_native_associated();
+        }
         parser.read_generics(&[]);
         parser
     }
@@ -1406,6 +1482,8 @@ impl<'a> Parser<'a> {
                     .insert(name.clone(), Ty::from_resolved(ty));
             }
         }
+        #[cfg(feature = "rust-import")]
+        parser.seed_selections(definition.key());
         #[cfg(feature = "rust-import")]
         parser.read_instance_conversions(definition.key(), definition.parameters());
         parser.copy_out = method_copied(definition, &parser.models)
@@ -1538,6 +1616,7 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         if let Some(key) = parser.callable.clone() {
             parser.read_instance_conversions(&key, &definition.parameters);
+            parser.seed_selections(&key);
         }
 
         let receiver = this_parameter(definition);

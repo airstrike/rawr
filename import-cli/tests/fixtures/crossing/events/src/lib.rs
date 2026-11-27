@@ -5,6 +5,10 @@
 
 use std::fmt::Debug;
 
+// `parts`' places, which `framed` reaches by `crate::tally`, as iced_widget
+// reaches iced_core by `crate::core`.
+pub use parts::tally;
+
 pub mod buffers;
 pub mod choices;
 pub mod classic;
@@ -16,17 +20,22 @@ pub mod diverging;
 pub mod elevated;
 pub mod flags;
 pub mod fonts;
+pub mod framed;
 pub mod framing;
 pub mod grid;
 pub mod handed;
+pub mod held;
 pub mod image;
 pub mod keyed;
 pub mod keys;
+mod made;
+pub mod marked;
 pub mod matched;
 pub mod named;
 pub mod nested;
 pub mod ordered;
 pub mod outline;
+pub mod paint;
 pub mod paired;
 pub mod piped;
 pub mod pixels;
@@ -45,8 +54,16 @@ pub mod staged;
 pub mod stock;
 pub mod styled;
 pub mod tint;
+pub mod tinted;
 pub mod tuned;
 pub mod viewed;
+pub mod visits;
+pub mod walks;
+
+pub use made::*;
+/// The crate its frames' colors come from, by std's name, as iced_widget
+/// re-exports iced_core as `core`.
+pub use parts as core;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.

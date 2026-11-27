@@ -479,6 +479,29 @@ impl Definition {
         instance
     }
 
+    /// This method read at the runner's fixed arguments for its native uses
+    /// alone (decision 3, #2698): its instance at `key` where `substitute`
+    /// writes the types the fixed parameters take, which keeps `kept`, the
+    /// rest of its generic parameters, their bounds at those types. No
+    /// program item is this definition.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn demand_instance(
+        &self,
+        key: item::Key,
+        name: ImmutableString,
+        substitute: impl Fn(&type_ref::Type) -> type_ref::Type,
+        kept: Box<[resolve::item::Generic]>,
+    ) -> Self {
+        let mut instance = self.instance(self.id, key, name, substitute);
+        let own = self.own_generics();
+        instance.impl_generics = kept
+            .iter()
+            .filter(|generic| !own.iter().any(|mine| mine.name.text == generic.name.text))
+            .count();
+        instance.generics = kept;
+        instance
+    }
+
     /// The method's generated name: its path, after its owner's place among
     /// its module's block items of its name when a block declares it.
     pub(crate) fn symbol(&self) -> ImmutableString {

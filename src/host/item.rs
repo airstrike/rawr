@@ -140,6 +140,10 @@ pub struct Definition {
     /// by its definition identity: each `into` core's blanket `Into` gives
     /// a type through a crate's `From` impls is `Into::into`.
     member: Option<[u8; 32]>,
+    /// The trait whose impl this imported item is a member of, by its
+    /// definition identity, the one its `ImplHeader` names it by: iced's
+    /// `Catalog::default` of `impl Catalog for Theme`.
+    trait_of: Option<[u8; 32]>,
     /// The signature's parameters a method's receiver gives, in its type's
     /// argument order, by the impl's names for them, which may not be the
     /// type's: `impl<T> Trait for Wrapper<T>` calls `T` what `struct
@@ -255,6 +259,7 @@ impl Definition {
             lends_receiver: self.lends_receiver,
             application: self.application,
             member: self.member,
+            trait_of: self.trait_of,
             receiver_parameters: self.receiver_parameters.clone(),
             rules: self.rules.clone(),
         })
@@ -283,6 +288,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: Some(crate::Shared::new(MacroRules {
                 source: source.into(),
@@ -321,6 +327,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -349,6 +356,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -375,6 +383,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -401,6 +410,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -430,6 +440,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -456,6 +467,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -483,6 +495,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -510,6 +523,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            trait_of: None,
             receiver_parameters: Box::default(),
             rules: None,
         })
@@ -590,6 +604,14 @@ impl Definition {
         self
     }
 
+    /// This imported item as a member of an impl of the trait whose
+    /// definition identity is `trait_of`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn implementing(mut self, trait_of: Option<[u8; 32]>) -> Self {
+        self.trait_of = trait_of;
+        self
+    }
+
     /// This imported method with `names`, its signature's parameters its
     /// receiver's type arguments give, in their order.
     #[cfg(feature = "rust-import")]
@@ -611,6 +633,13 @@ impl Definition {
     #[cfg(feature = "rust-import")]
     pub(crate) const fn trait_member(&self) -> Option<&[u8; 32]> {
         self.member.as_ref()
+    }
+
+    /// The trait whose impl this imported item is a member of, when it is
+    /// a trait impl's.
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn trait_of(&self) -> Option<&[u8; 32]> {
+        self.trait_of.as_ref()
     }
 
     /// The proof-backed application this item stands for, when it is one.
@@ -640,7 +669,7 @@ impl Definition {
     ) -> Self {
         use rawr_import::classify::representability::signature::Scope;
         self.opens = scope.map(|scope| match scope {
-            Scope::Opens => Frame::Inputs,
+            Scope::Opens | Scope::Lends => Frame::Inputs,
             Scope::Borrows => Frame::Receiver,
         });
         self
@@ -845,6 +874,7 @@ impl Definition {
             lends_receiver: self.lends_receiver,
             application: self.application,
             member: self.member,
+            trait_of: self.trait_of,
             receiver_parameters: self.receiver_parameters.clone(),
             rules: self.rules.clone(),
         })
@@ -925,6 +955,13 @@ impl Definition {
 }
 
 impl Fingerprint {
+    /// The digest of the crate's selector of the item, which names its
+    /// definition whichever path reaches it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn imported(&self) -> Option<&[u8; 32]> {
+        self.imported.as_ref()
+    }
+
     /// The proof-backed application the item stands for, when it is one.
     #[cfg(feature = "rust-import")]
     pub(crate) fn application(&self) -> Option<&[u8; 32]> {

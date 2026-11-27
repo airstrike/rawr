@@ -1,0 +1,47 @@
+// rawr
+// Native code lends a program's impl a crate trait's object, `&mut dyn
+// Visit`, as iced's `UserInterface::operate` lends a widget's `operate` a
+// `&mut dyn Operation`: the program calls its `&mut self` methods and
+// passes it on to the item's impl, which runs from source too, or to a
+// crate item's native impl, as iced's `Container` passes its `operation` on
+// to a native `Text`'s `operate`. So it lends a `&mut Sink<'_>`, a type
+// that carries a lifetime, as iced lends a widget's `update` a `&mut
+// Shell<'_, Message>`.
+
+use events::framed::Label;
+use events::tinted::{self, Diffed};
+use events::visits;
+
+struct Note;
+
+impl Diffed<Note> for Note {
+    fn label(&mut self) -> String {
+        "note".into()
+    }
+}
+
+/// The labels native code's visit of `item` notes at the program's `Note`.
+fn visited(item: impl Diffed<Note>) -> Vec<String> {
+    visits::visited(item)
+}
+
+/// What `item` notes in the sink native code lends it.
+fn published(item: impl Diffed<Note>) -> Vec<String> {
+    visits::published(item)
+}
+
+fn main() {
+    println!("{:?}", visited(tinted::tallied(Label("calm".into()))));
+    println!(
+        "{:?}",
+        visited(tinted::tallied(tinted::tallied(Label("deep".into()))))
+    );
+    println!(
+        "{:?}",
+        visited(tinted::tallied(visits::Mark("leaf".into())))
+    );
+    println!(
+        "{:?}",
+        published(tinted::tallied(visits::Mark("leaf".into())))
+    );
+}

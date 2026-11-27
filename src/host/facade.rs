@@ -190,7 +190,9 @@ impl TypeAlias {
 /// A crate trait Rawr code names (D604): its qualified path, identity,
 /// type parameters other than `Self`, each one's default, and the callable
 /// a program's function or closure fills it as, through the crate's impl
-/// of it for every callable (#1981).
+/// of it for every callable (#1981), and, when the runner has one
+/// stand-in for it that a program's value of any type fills (#2698), the
+/// path and identity of each supertrait the stand-in implements too.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TraitHeader {
     pub(crate) path: host::path::Path,
@@ -198,6 +200,36 @@ pub(crate) struct TraitHeader {
     pub(crate) parameters: Box<[ImmutableString]>,
     pub(crate) defaults: Box<[Option<host::type_ref::Type>]>,
     pub(crate) call: Option<host::type_ref::Type>,
+    pub(crate) object: Option<Supertraits>,
+    /// The names of its associated types.
+    pub(crate) associated: Box<[ImmutableString]>,
+}
+
+/// The supertraits a trait's stand-in implements too, each by its path and
+/// identity (`TraitHeader::object`).
+pub(crate) type Supertraits = Box<[(ImmutableString, [u8; 32])]>;
+
+/// What a trait's header says of the runner's one stand-in for it
+/// (`TraitHeader::object`): the path and identity of each of its
+/// supertraits, when its classified `outputs` hold the trait's vtable.
+#[cfg(feature = "rust-import")]
+pub(crate) fn stand_in(
+    outputs: Option<&rawr_import::classify::representability::signature::Outputs>,
+) -> Option<Supertraits> {
+    let outputs = outputs?;
+    outputs.object()?;
+    Some(
+        outputs
+            .supertraits()
+            .iter()
+            .map(|supertrait| {
+                (
+                    ImmutableString::from(supertrait.path()),
+                    *supertrait.identity(),
+                )
+            })
+            .collect(),
+    )
 }
 
 /// One impl of a crate trait (D604): its own type parameters, the trait's
@@ -212,6 +244,11 @@ pub(crate) struct ImplHeader {
     pub(crate) self_type: host::type_ref::Type,
     pub(crate) bounds: Box<[ImplBound]>,
     pub(crate) projections: Box<[ImplProjection]>,
+    /// Each associated type the impl gives, by name, at its parameters.
+    pub(crate) associated: Box<[(ImmutableString, host::type_ref::Type)]>,
+    /// The trait's provided methods the impl leaves to the trait, whose
+    /// own bodies rustc selects for the impl's self type.
+    pub(crate) defaulted: Box<[ImmutableString]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type,
@@ -262,6 +299,8 @@ impl TraitHeader {
                 .as_ref()
                 .map(host::type_ref::Type::try_clone)
                 .transpose()?,
+            object: self.object.clone(),
+            associated: self.associated.clone(),
         })
     }
 }
@@ -300,6 +339,12 @@ impl ImplHeader {
                     })
                 })
                 .collect::<Result<_, rawr_import::surface::Error>>()?,
+            associated: self
+                .associated
+                .iter()
+                .map(|(name, value)| Ok((name.clone(), value.try_clone()?)))
+                .collect::<Result<_, rawr_import::surface::Error>>()?,
+            defaulted: self.defaulted.clone(),
         })
     }
 }
@@ -336,6 +381,8 @@ impl TraitHeader {
             parameters: self.parameters.clone(),
             defaults,
             call,
+            object: self.object.clone(),
+            associated: self.associated.clone(),
         })
     }
 }
@@ -387,6 +434,12 @@ impl ImplHeader {
                 })
             })
             .collect::<Box<[_]>>();
+        // An associated type naming a type the facade lacks is left out.
+        let associated = self
+            .associated
+            .iter()
+            .filter_map(|(name, value)| Some((name.clone(), one(value)?)))
+            .collect();
         Some(Self {
             parameters: self.parameters.clone(),
             trait_identity: self.trait_identity,
@@ -394,6 +447,8 @@ impl ImplHeader {
             self_type: self_type.into_vec().pop()?,
             bounds,
             projections,
+            associated,
+            defaulted: self.defaulted.clone(),
         })
     }
 }
@@ -810,6 +865,8 @@ impl Builder {
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
         call: Option<host::type_ref::Type>,
+        object: Option<Supertraits>,
+        associated: Box<[ImmutableString]>,
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         self.trait_headers
@@ -821,6 +878,8 @@ impl Builder {
             parameters,
             defaults,
             call,
+            object,
+            associated,
         });
         Ok(self)
     }

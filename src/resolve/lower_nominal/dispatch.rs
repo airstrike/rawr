@@ -1335,9 +1335,13 @@ pub(super) fn function_copied(definition: &item::Function) -> Vec<usize> {
 
 /// The `&mut` parameters a function's signature lets it keep past its
 /// call (`kept_parameters`), which the call lends as references to the
-/// caller's places (D1113).
+/// caller's places (D1113). A crate trait's provided method run from its
+/// source (`crate_source::provided`) keeps none, as the trait's own
+/// methods don't (`method_kept`).
 pub(super) fn function_kept(definition: &item::Function) -> Vec<usize> {
-    if definition.body.asynchronous {
+    if definition.body.asynchronous
+        || crate::package::crate_source::is_provided(&definition.name.text)
+    {
         return Vec::new();
     }
     let receiver = this_parameter(definition);

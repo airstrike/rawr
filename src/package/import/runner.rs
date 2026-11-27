@@ -960,6 +960,8 @@ fn build(
                 header.parameters().map(ImmutableString::from).collect(),
                 defaults,
                 header.call().and_then(|call| self::ty(call).ok()),
+                host::facade::stand_in(header.outputs()),
+                header.associated().map(ImmutableString::from).collect(),
             )
             .map_err(|source| entry_error(facade.root(), header.path(), source.into()))?;
     }
@@ -1174,6 +1176,18 @@ pub(crate) fn impl_header(header: &facade::ImplHeader) -> Option<host::facade::I
         self_type,
         bounds,
         projections,
+        associated: header
+            .associated()
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((ImmutableString::from(&**name), self::ty(value).ok()?))
+            })
+            .collect(),
+        defaulted: header
+            .defaulted()
+            .iter()
+            .map(|name| ImmutableString::from(&**name))
+            .collect(),
     })
 }
 
@@ -1367,8 +1381,15 @@ pub(crate) fn item_definition(
                 .collect(),
         )
         .instancing(item.member().map(|member| *member.as_bytes()))
+        .implementing(item.trait_of().map(|trait_of| *trait_of.as_bytes()))
         .guarded(guard)
-        .opening(form.scope()))
+        .opening(form.scope())
+        .lending(
+            form.lends()
+                .iter()
+                .filter(|index| **index < 32)
+                .fold(0, |bits, index| bits | 1 << index),
+        ))
 }
 
 pub(crate) fn signature(

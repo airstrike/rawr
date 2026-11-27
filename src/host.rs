@@ -2,6 +2,7 @@
 
 pub mod debug;
 pub(crate) mod declared;
+pub(crate) mod defined;
 pub mod display;
 mod error;
 pub mod export;
@@ -1183,9 +1184,17 @@ impl Registry {
                 .members(owner.as_ref().expect("a held facade's owner parsed"))
                 .into_iter();
         }
-        self.items
+        // The items are sorted by path, so those below `owner` are the run
+        // that starts where `owner` would be.
+        let Some(owner) = owner else {
+            return Vec::new().into_iter();
+        };
+        let depth = owner.segments().len();
+        let start = self.items.partition_point(|item| *item.path_ref() < owner);
+        self.items[start..]
             .iter()
-            .filter(move |item| owner.is_some() && item.path_ref().parent() == owner)
+            .take_while(|item| item.path_ref().segments().starts_with(owner.segments()))
+            .filter(|item| item.path_ref().segments().len() == depth + 1)
             .collect::<Vec<_>>()
             .into_iter()
     }
@@ -1703,6 +1712,24 @@ impl Registry {
             .map(|header| header.path.to_string())
             .min()
             .map(ImmutableString::from)
+    }
+
+    /// Every path the facades write a header of the crate trait
+    /// `identity` at, held ones too: one trait a crate re-exports has
+    /// members under each (`Trait::__rawr_self::m`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn trait_paths(&self, identity: &[u8; 32]) -> Vec<path::Path> {
+        let held = self.held.iter().flat_map(|(held, _)| held.trait_headers());
+        let mut paths = self
+            .trait_headers
+            .iter()
+            .chain(held)
+            .filter(|header| header.identity == *identity)
+            .map(|header| header.path.clone())
+            .collect::<Vec<_>>();
+        paths.sort_by_key(ToString::to_string);
+        paths.dedup();
+        paths
     }
 
     /// The crates' impls of the trait whose identity is `identity` (D604).

@@ -43,26 +43,21 @@ pub(super) struct OpaqueTag {
     pub(super) arguments: Box<[Ty]>,
 }
 
-/// One imported type is one type at each of its paths, as rustc has it: a
-/// crate's macros name its types through a hidden segment
-/// (`events::__rawr_crate_events_<id>::stock::Stock`) beside their public
-/// paths, and a value made at one path is the type a signature names at
-/// the other (#893). Any other type is the definition it names.
+/// One native type is one type at each of its paths, as rustc has it
+/// (`host::defined`): a crate's macros name its types through a hidden
+/// segment (`events::__rawr_crate_events_<id>::stock::Stock`) beside their
+/// public paths (#893), and a crate module's generic code names them
+/// through the program's hidden dependency on the crate that defines the
+/// module (`__rawr_source_iced_widget::core::Background` is
+/// `iced::Background`), whichever dependency each path goes through.
 impl PartialEq for HostTyProof {
     fn eq(&self, other: &Self) -> bool {
-        match (
-            self.definition.identity().imported(),
-            other.definition.identity().imported(),
-        ) {
-            (Some(identity), Some(other_identity)) => {
-                identity == other_identity && self.owner == other.owner
-            }
-            _ => {
-                self.definition == other.definition
-                    && self.alias == other.alias
-                    && self.owner == other.owner
-            }
-        }
+        same_host_definition(
+            &self.definition,
+            &self.owner,
+            &other.definition,
+            &other.owner,
+        )
     }
 }
 
@@ -738,8 +733,9 @@ impl FnCandidate {
             (Self::Script(left), Self::Script(right)) => left == right,
             #[cfg(feature = "rust-import")]
             (Self::Imported { proof: left, .. }, Self::Imported { proof: right, .. }) => {
-                left.item == right.item
-                    && left.owner == right.owner
+                use crate::host::defined::Defined;
+                Defined::of_item(&left.item, Some(&left.owner))
+                    == Defined::of_item(&right.item, Some(&right.owner))
                     && left.parameters == right.parameters
             }
             #[cfg(feature = "rust-import")]
@@ -2099,14 +2095,8 @@ pub(super) fn same_host_definition(
     right: &crate::host::type_def::Definition,
     right_owner: &Option<crate::host::facade::Dependency>,
 ) -> bool {
-    match (left.identity().imported(), right.identity().imported()) {
-        (Some(left), Some(right)) => left == right,
-        _ => {
-            left.identity() == right.identity()
-                && left.path() == right.path()
-                && left_owner == right_owner
-        }
-    }
+    use crate::host::defined::Defined;
+    Defined::of_type(left, left_owner.as_ref()) == Defined::of_type(right, right_owner.as_ref())
 }
 
 pub(super) fn same_inferred(left: &Ty, right: &Ty) -> bool {

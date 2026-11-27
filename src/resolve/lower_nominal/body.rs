@@ -184,30 +184,31 @@ impl<'a> Parser<'a> {
         self.open_formatter(definition.body());
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
-            match self.peek() {
-                Token::Let => self.parse_binding(true)?,
+            self.tolerant(|parser| match parser.peek() {
+                Token::Let => parser.parse_binding(true),
                 // `const fn f()` is a nested `fn` item.
-                Token::Const if matches!(self.peek_second(), Token::Fn) => {
-                    self.next();
-                    self.skip_nested_fn()?;
+                Token::Const if matches!(parser.peek_second(), Token::Fn) => {
+                    parser.next();
+                    parser.skip_nested_fn()
                 }
-                Token::Const => self.parse_binding(false)?,
-                _ if self.static_ahead() => self.parse_block_statics()?,
-                Token::Fn => self.skip_nested_fn()?,
-                Token::Use => self.skip_nested_use()?,
-                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
-                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
-                _ if self.nested_item_ahead() => self.skip_nested_item()?,
+                Token::Const => parser.parse_binding(false),
+                _ if parser.static_ahead() => parser.parse_block_statics(),
+                Token::Fn => parser.skip_nested_fn(),
+                Token::Use => parser.skip_nested_use(),
+                _ if parser.macro_definition_ahead() => parser.parse_local_macro(),
+                _ if parser.macro_statement_ahead() => parser.parse_macro_statement(),
+                _ if parser.nested_item_ahead() => parser.skip_nested_item(),
                 // The method's output reaches its tail, as a function's
                 // does: each arm of a tail `match` coerces to it.
                 _ => {
-                    let expected = self.tail_expected(Some(definition.output()));
-                    self.parse_tail_expecting(Some(&expected))?;
+                    let expected = parser.tail_expected(Some(definition.output()));
+                    parser.parse_tail_expecting(Some(&expected))
                 }
-            }
+            })?;
         }
 
         self.expect(Token::RightBrace, "'}' to close a method body")?;
+        self.read_whole()?;
         if !matches!(self.peek(), Token::EOF) {
             return Err(self.unsupported("tokens after a method body"));
         }
@@ -359,6 +360,162 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// This instance's param-env (`Instances::bounds`), or a demand
+    /// read's (decision 3), which no program instance holds.
+    #[cfg(feature = "rust-import")]
+    fn param_env(&self) -> Option<Box<[(type_ref::Type, type_ref::Type)]>> {
+        if let Some(bounds) = &self.demand {
+            return Some(bounds.clone());
+        }
+        let key = self.callable.as_ref()?;
+        self.models.instances.bounds.get(key).cloned()
+    }
+
+    /// The arguments of the one bound of this instance's param-env
+    /// (`Instances::bounds`) on `ty` by the crate trait `identity`, as
+    /// rustc selects a where-clause candidate before the impls: in
+    /// `fn noted(item: &mut impl Diffed<Note>)` at `Tallied<Label>`,
+    /// `Tallied<Label>: Diffed<Note>` gives `Note`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn param_env_arguments(&mut self, ty: &Ty, identity: [u8; 32]) -> Option<Vec<Ty>> {
+        let bounds = self.param_env()?;
+        let ty = self.inference.resolve(ty);
+        let mut found = bounds.iter().filter_map(|(bounded, bound)| {
+            let path = crate::host::path::Path::parse(bound.opaque_trait()?).ok()?;
+            let header = self.models.host.trait_header(&path)?;
+            (header.identity == identity).then(|| {
+                (
+                    Ty::from_resolved(bounded),
+                    bound
+                        .opaque_arguments()
+                        .into_iter()
+                        .map(Ty::from_resolved)
+                        .collect::<Vec<_>>(),
+                )
+            })
+        });
+        let fitting = found
+            .by_ref()
+            .filter(|(bounded, _)| !contains_inference(bounded))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter(|(bounded, _)| self.unifies(bounded, &ty))
+            .collect::<Vec<_>>();
+        match <[_; 1]>::try_from(fitting) {
+            Ok([(_, arguments)]) => Some(arguments),
+            Err(_) => None,
+        }
+    }
+
+    /// The members at `path` of the pending family whose impl is of a
+    /// trait the body's param-env bounds `ty` by, when exactly one is: a
+    /// path call through a bound selects through the bound, as iced's
+    /// `Theme::default()` under `Theme: Catalog` is container's
+    /// `Catalog::default` and not button's or `Base::default`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn bound_family_items(
+        &mut self,
+        ty: &Ty,
+        path: &str,
+    ) -> Option<Vec<crate::host::item::Definition>> {
+        let traits = self.param_env_traits(ty);
+        let family = self.models.host.pending_family(path)?;
+        let fitting = family
+            .methods()
+            .iter()
+            .filter(|item| {
+                item.trait_of()
+                    .is_some_and(|identity| traits.contains(identity))
+            })
+            .collect::<Vec<_>>();
+        match <[_; 1]>::try_from(fitting) {
+            Ok([item]) => Some(vec![item.clone()]),
+            Err(_) => None,
+        }
+    }
+
+    /// The crate trait the body's param-env bounds Rawr's string by that
+    /// gives it `member`, by the path the bound writes it: the trait's impl
+    /// for `&str` has the member (`surface::text`), or leaves a provided
+    /// one to the trait, as `self.content.overlay(..)` in iced's
+    /// `Container` at `W = &str` selects `Widget`'s, which rustc's probe
+    /// reaches through the bound once `str` has no inherent `overlay`.
+    /// `None` unless exactly one does.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn text_bound_trait(&mut self, member: &str) -> Option<ImmutableString> {
+        let bounds = self.param_env()?;
+        let mut found = bounds
+            .iter()
+            .filter(|(bounded, _)| Ty::from_resolved(bounded).is_text())
+            .filter_map(|(_, bound)| bound.opaque_trait())
+            .filter(|trait_path| {
+                let text = rawr_import::surface::text::path(trait_path, member);
+                self.models.host_items(&text).is_some()
+                    || self.models.functions_by_key.values().any(|function| {
+                        let name = function.definition.name.text.as_str();
+                        trait_path.rsplit("::").next().is_some_and(|last| {
+                            name == crate::package::crate_source::provided(last, member)
+                        })
+                    })
+            })
+            .map(ImmutableString::from)
+            .collect::<Vec<_>>();
+        found.dedup();
+        match <[_; 1]>::try_from(found) {
+            Ok([trait_path]) => Some(trait_path),
+            Err(_) => None,
+        }
+    }
+
+    /// The identities of the crate traits the body's param-env bounds
+    /// `ty` by.
+    #[cfg(feature = "rust-import")]
+    fn param_env_traits(&mut self, ty: &Ty) -> Vec<[u8; 32]> {
+        let Some(bounds) = self.param_env() else {
+            return Vec::new();
+        };
+        let ty = self.inference.resolve(ty);
+        let bounding = bounds
+            .iter()
+            .filter(|(bounded, _)| {
+                let bounded = Ty::from_resolved(bounded);
+                !contains_inference(&bounded) && self.unifies(&bounded, &ty)
+            })
+            .collect::<Vec<_>>();
+        bounding
+            .into_iter()
+            .filter_map(|(_, bound)| {
+                let path = crate::host::path::Path::parse(bound.opaque_trait()?).ok()?;
+                Some(self.models.host.trait_header(&path)?.identity)
+            })
+            .collect()
+    }
+
+    /// Unify `arguments`, a crate trait's at a bound on `ty` that a call
+    /// leaves open, with those the body's param-env gives the bound.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn fix_by_param_env(&mut self, ty: &Ty, identity: [u8; 32], arguments: &[Ty]) {
+        if !arguments
+            .iter()
+            .any(|argument| contains_inference(&self.inference.resolve(argument)))
+        {
+            return;
+        }
+        let Some(given) = self.param_env_arguments(ty, identity) else {
+            return;
+        };
+        if given.len() <= arguments.len()
+            && given
+                .iter()
+                .zip(arguments)
+                .all(|(given, argument)| self.unifies(given, argument))
+        {
+            for (given, argument) in given.iter().zip(arguments) {
+                let _ = self.unify_type(given, argument);
+            }
+        }
+    }
+
     /// `fix_opaque` with the generic parameters `written` names at the
     /// types `substitution` gives them, as a generic function's bound
     /// `impl Widget<Message>` is at a call (D629).
@@ -433,6 +590,8 @@ impl<'a> Parser<'a> {
             self.take_opaque_arguments(&resolved, header.identity, &arguments, &[]);
             return Ok(());
         }
+        // The body's own bound on the type fixes what its impls leave open.
+        self.fix_by_param_env(&resolved, header.identity, &arguments);
         let span = match written {
             type_ref::Type::Unit(span)
             | type_ref::Type::Tuple { span, .. }
@@ -798,29 +957,29 @@ impl<'a> Parser<'a> {
         self.open_formatter(definition.body.span);
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
-            match self.peek() {
-                Token::Let => self.parse_binding(true)?,
+            self.tolerant(|parser| match parser.peek() {
+                Token::Let => parser.parse_binding(true),
                 // `const fn f()` is a nested `fn` item.
-                Token::Const if matches!(self.peek_second(), Token::Fn) => {
-                    self.next();
-                    self.skip_nested_fn()?;
+                Token::Const if matches!(parser.peek_second(), Token::Fn) => {
+                    parser.next();
+                    parser.skip_nested_fn()
                 }
-                Token::Const => self.parse_binding(false)?,
-                _ if self.static_ahead() => self.parse_block_statics()?,
-                Token::Fn => self.skip_nested_fn()?,
-                Token::Use => self.skip_nested_use()?,
-                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
-                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
-                _ if self.nested_item_ahead() => self.skip_nested_item()?,
+                Token::Const => parser.parse_binding(false),
+                _ if parser.static_ahead() => parser.parse_block_statics(),
+                Token::Fn => parser.skip_nested_fn(),
+                Token::Use => parser.skip_nested_use(),
+                _ if parser.macro_definition_ahead() => parser.parse_local_macro(),
+                _ if parser.macro_statement_ahead() => parser.parse_macro_statement(),
+                _ if parser.nested_item_ahead() => parser.skip_nested_item(),
                 _ => {
-                    let expected = self.tail_expected(definition.output.as_ref());
-                    self.parse_tail_expecting(Some(&expected))?;
+                    let expected = parser.tail_expected(definition.output.as_ref());
+                    parser.parse_tail_expecting(Some(&expected))
                 }
-            }
+            })?;
         }
 
         self.expect(Token::RightBrace, "'}' to close a function body")?;
-        Ok(())
+        self.read_whole()
     }
 
     /// rustc's error for the inference variable `unknown`, which the use at

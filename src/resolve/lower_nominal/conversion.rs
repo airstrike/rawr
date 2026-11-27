@@ -692,16 +692,20 @@ impl<'a> Parser<'a> {
         self.operator_expr(rendered, target, expression)
     }
 
-    /// The helper of a facade value's `.into()` into `target`: the one
-    /// `into` form of its type whose output is `target`, or `target`'s one
-    /// `from` that takes it. `None` when neither converts it. More than one
-    /// that fits, or a target the program has not fixed where the forms
-    /// are a trait method's instances, is rustc's E0283: rustc infers
-    /// `Into<U>`'s `U` before it selects an impl, never a first fit. A
-    /// target whose type is known but whose arguments are still open, as
-    /// `Slot<'_, _>` in a row whose message only a later child fixes, is
-    /// fixed enough: rustc selects the one impl that unifies, and its
-    /// unification binds what it can (#1403).
+    /// The helper of a facade value's `.into()` into `target`, as rustc
+    /// selects `Into<target>` for `source`: core's `impl<T, U: From<T>>
+    /// Into<U> for T` when `target`'s one `from` takes it, whose body is
+    /// that `from`, else the one `into` form of its type whose output is
+    /// `target`, a crate's own `impl Into<target>`. Coherence lets no crate
+    /// write both, so the blanket's body is never a crate's `into`. `None`
+    /// when neither converts it. More than one that fits, or a target the
+    /// program has not fixed where the forms are a trait method's
+    /// instances, is rustc's E0283: rustc infers `Into<U>`'s `U` before it
+    /// selects an impl, never a first fit. A target whose type is known but
+    /// whose arguments are still open, as `Slot<'_, _>` in a row whose
+    /// message only a later child fixes, is fixed enough: rustc selects the
+    /// one impl that unifies, and its unification binds what it can
+    /// (#1403).
     pub(super) fn host_into_helper(
         &mut self,
         host: &HostInto,
@@ -709,6 +713,9 @@ impl<'a> Parser<'a> {
         target: &Ty,
         call: Span,
     ) -> Result<Option<String>, Error> {
+        if let Some(helper) = self.target_from_helper(host, source, target, call)? {
+            return Ok(Some(helper));
+        }
         let mut fitting = Vec::new();
         for item in &host.forms {
             let checkpoint = self.inference.checkpoint();
@@ -747,6 +754,18 @@ impl<'a> Parser<'a> {
             }
             _ => return Err(self.ambiguous_conversion(target, source, call, fitting.len())),
         }
+        Ok(None)
+    }
+
+    /// The blanket `Into`'s body for `source` into `target`: `target`'s one
+    /// `from` that takes `source` (`host_into_helper`).
+    fn target_from_helper(
+        &mut self,
+        host: &HostInto,
+        source: &Ty,
+        target: &Ty,
+        call: Span,
+    ) -> Result<Option<String>, Error> {
         let Some((items, owner)) = self.target_from(target) else {
             return Ok(None);
         };

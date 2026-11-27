@@ -261,7 +261,7 @@ fn lay_out_items(
                 .unwrap_or_default();
             super::item_macro::locate_at(
                 &laid.0,
-                &crate::resolve::lower_nominal::location_origins(input, locations),
+                &crate::resolve::lower_nominal::location_origins(input, None, locations),
             );
             Some(laid)
         }
@@ -3121,6 +3121,9 @@ fn parse_impl(
             if is_associated_type(input) {
                 input.next();
                 let name = parse_name(input, "after 'type'")?;
+                // `type Class<'a> = StyleFn<'a, Self>;`: a generic associated
+                // type's lifetimes, which Rawr erases as every lifetime.
+                skip_associated_lifetimes(input)?;
                 expect(input, Token::Equals, "after an associated type name")?;
                 let ty = parse_type(input)?;
                 expect(input, Token::SemiColon, "after an associated type")?;
@@ -3358,6 +3361,8 @@ fn parse_trait(
             if is_associated_type(input) {
                 input.next();
                 let name = parse_name(input, "after 'type'")?;
+                // `type Class<'a>;`, as iced's `Catalog` declares.
+                skip_associated_lifetimes(input)?;
                 // `type Output: Clone + Shape;`, `type Fore: Iterator<Item =
                 // Self::For>;`.
                 let mut projections = Vec::new();
@@ -3763,6 +3768,22 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
 
 /// [`parse_generic_params`], with the lifetime parameters and the outlives
 /// bounds written on them (`'b: 'a`, `T: 'a`).
+/// The parameters after an associated type's name, which may only be
+/// lifetimes: a generic associated type's, as iced's `type Class<'a>`.
+fn skip_associated_lifetimes(input: &mut TokenStream) -> ParseResult<()> {
+    let position = input.peek().map(|(_, position)| *position);
+    let (generics, _) = parse_generics(input)?;
+    match (generics.is_empty(), position) {
+        (false, Some(position)) => Err(PERR::MissingToken(
+            Token::Equals.into(),
+            "after a generic associated type's lifetimes (type parameters are not supported)"
+                .into(),
+        )
+        .into_err(position)),
+        _ => Ok(()),
+    }
+}
+
 fn parse_generics(
     input: &mut TokenStream,
 ) -> ParseResult<(Vec<crate::item::GenericParam>, crate::item::Lifetimes)> {

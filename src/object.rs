@@ -74,6 +74,31 @@ impl Coerced {
     }
 }
 
+/// The tag of a program's value of any type coerced to a crate trait's
+/// object: the runner's one stand-in for the trait holds it
+/// (`crossing::Object`, #2698). The importer's `object::PROGRAM`.
+pub const PROGRAM: &str = "program";
+
+/// A program's value of any type where a crate's trait object is (#2698):
+/// the value, and the member of its type's impl each method of the trait
+/// calls, by the method's name. The runner's stand-in for the trait holds
+/// it (`crossing::Object`).
+#[derive(Clone)]
+pub struct Program {
+    pub(crate) value: Dynamic,
+    pub(crate) members: std::sync::Arc<[(ImmutableString, ImmutableString)]>,
+}
+
+impl Program {
+    /// `value`, whose impl's member for each method is in `members`.
+    pub(crate) fn coerced(
+        value: Dynamic,
+        members: std::sync::Arc<[(ImmutableString, ImmutableString)]>,
+    ) -> Coerced {
+        Coerced::new(Dynamic::from(Self { value, members }), PROGRAM.into())
+    }
+}
+
 thread_local! {
     /// Each object [`lasting`] kept, by its type and the function it calls.
     static LASTING: std::cell::RefCell<

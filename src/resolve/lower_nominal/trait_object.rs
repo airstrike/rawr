@@ -438,3 +438,197 @@ impl Parser<'_> {
         Ok(())
     }
 }
+
+impl Parser<'_> {
+    /// The member of the program's impl each method of the native trait
+    /// `trait_name` calls, by the method's name, for a value of the
+    /// program's own type `concrete` unsized to `dyn trait_name<arguments>`
+    /// (#2698): the instance of a generic impl's method at `concrete`'s
+    /// arguments, or the impl's own method, by its path in the running
+    /// program, which the runner's one stand-in for the trait calls. `None`
+    /// when `concrete` is no type of the program's, or the program writes
+    /// no impl of the trait for it.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn native_object_members(
+        &mut self,
+        concrete: &Ty,
+        (trait_name, arguments): (&ImmutableString, &[Ty]),
+        span: Span,
+    ) -> Result<Option<Vec<(ImmutableString, ImmutableString)>>, Error> {
+        let concrete = self.unreferenced(concrete);
+        let Ty::Script(owner, _) = self.inference.resolve(&concrete) else {
+            return Ok(None);
+        };
+        let names = |path: &str| {
+            path == trait_name.as_str()
+                || self
+                    .trait_known_as(path)
+                    .is_some_and(|known| known == *trait_name)
+        };
+        // The trait's path, as the impls of the program's that resolve to
+        // it write it in their modules: `Shown` in the crate's own source.
+        let implemented = self.models.script_impls.iter().any(|candidate| {
+            matches!(&candidate.owner, crate::resolve::type_ref::Type::Path(crate::resolve::type_ref::Path {
+                target: crate::resolve::type_ref::Target::Script { definition, .. },
+                ..
+            }) if *definition == owner)
+                && names(candidate.path.as_str())
+        });
+        let last = trait_name.rsplit("::").next().unwrap_or_default();
+        let by_name = self.impl_functions(owner, |written| {
+            names(written) || (implemented && written.rsplit("::").next() == Some(last))
+        });
+        // An impl that writes no function, as `impl Meta for Mood {}`, has
+        // the trait's provided ones, which the stand-in runs itself.
+        let written = !by_name.is_empty();
+        let Some(mut members) = self
+            .impl_members(by_name, &concrete, (trait_name, arguments), span)?
+            .or_else(|| (implemented && !written).then(Vec::new))
+        else {
+            return Ok(None);
+        };
+        // Each supertrait's, as the impl of it writes its last segment, by
+        // the key the stand-in's impl of it calls (#2698).
+        let supertraits = crate::host::path::Path::parse(trait_name)
+            .ok()
+            .and_then(|path| self.models.host.trait_header(&path))
+            .and_then(|header| header.object.clone())
+            .unwrap_or_default();
+        for (position, (supertrait, _)) in supertraits.iter().enumerate() {
+            let last = supertrait.rsplit("::").next().unwrap_or_default();
+            let by_name =
+                self.impl_functions(owner, |written| written.rsplit("::").next() == Some(last));
+            let found = self
+                .impl_members(by_name, &concrete, (supertrait, &[]), span)?
+                .unwrap_or_default();
+            members.extend(found.into_iter().map(|(function, path)| {
+                (
+                    rawr_import::classify::representability::object::Supertrait::key(
+                        position, &function,
+                    )
+                    .into(),
+                    path,
+                )
+            }));
+        }
+        Ok(Some(members))
+    }
+
+    /// Whether the runner has its one stand-in for the native trait
+    /// `trait_name` (`object::Pointer::StandIn`), which holds a program's
+    /// value of any type: none where a method names a type the runner
+    /// can't give or take, as `&mut dyn Visitor`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn native_stand_in(&self, trait_name: &str) -> bool {
+        crate::host::path::Path::parse(trait_name)
+            .ok()
+            .and_then(|path| self.models.host.trait_header(&path))
+            .is_some_and(|header| header.object.is_some())
+    }
+
+    /// The functions of the program's impls for the type `owner` of each
+    /// trait `names` holds of as the impl writes it, by name.
+    #[cfg(feature = "rust-import")]
+    fn impl_functions(
+        &self,
+        owner: crate::type_def::Id,
+        names: impl Fn(&str) -> bool,
+    ) -> BTreeMap<ImmutableString, Vec<method::Definition>> {
+        let mut by_name = BTreeMap::<ImmutableString, Vec<method::Definition>>::new();
+        for ((of, function), definitions) in &self.models.trait_methods {
+            if *of != owner {
+                continue;
+            }
+            for definition in definitions {
+                if definition
+                    .trait_name()
+                    .is_some_and(|written| names(written))
+                {
+                    by_name
+                        .entry(function.clone())
+                        .or_default()
+                        .push(definition.clone());
+                }
+            }
+        }
+        by_name
+    }
+
+    /// The member each of `by_name`, the functions of the impls of the
+    /// trait `trait_name` at `arguments` for `concrete`, is in the running
+    /// program, by the function's name. `None` when it has none, or one
+    /// isn't a member of the program's.
+    #[cfg(feature = "rust-import")]
+    fn impl_members(
+        &mut self,
+        mut by_name: BTreeMap<ImmutableString, Vec<method::Definition>>,
+        concrete: &Ty,
+        (trait_name, arguments): (&ImmutableString, &[Ty]),
+        span: Span,
+    ) -> Result<Option<Vec<(ImmutableString, ImmutableString)>>, Error> {
+        // An instance of a generic impl's method (D629) is its template's
+        // to bind at `concrete`'s arguments, as a call binds it.
+        for definitions in by_name.values_mut() {
+            definitions.retain(|definition| {
+                !self
+                    .models
+                    .instances
+                    .templates
+                    .values()
+                    .any(|instances| instances.iter().any(|(_, key)| key == definition.key()))
+            });
+        }
+        by_name.retain(|_, definitions| !definitions.is_empty());
+        if by_name.is_empty() {
+            return Ok(None);
+        }
+        let mut members = Vec::with_capacity(by_name.len());
+        for (function, definitions) in by_name {
+            let Some(definition) = self.fitting_impl(definitions, concrete) else {
+                return Ok(None);
+            };
+            let substitution = self.impl_at(&definition, concrete, arguments);
+            // An instance lowered at the types (D1115) takes no witnesses;
+            // the method itself, or a crate-bounded one's instance (D629),
+            // takes those its generics still name.
+            let (key, bound) = match self.instance_key(definition.key(), &substitution, span) {
+                Some(key) => (key, None),
+                None => {
+                    let bound = self.bind_method_instance(definition, &substitution, span)?;
+                    (bound.key().clone(), Some(bound))
+                }
+            };
+            if bound.is_some_and(|bound| {
+                witness_generics(bound.generics(), &self.models)
+                    .next()
+                    .is_some()
+            }) {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: crate::resolve::Unsupported::said(format!(
+                        "coercing `{}` to the native trait object `dyn {trait_name}`, whose impl's \
+                         `{function}` takes its generics' types, is not supported yet",
+                        concrete.name(&self.models)
+                    )),
+                    source: span,
+                });
+            }
+            let Some(crate::type_def::Identity::Script(script)) = key.owner() else {
+                return Ok(None);
+            };
+            let path = script
+                .modules()
+                .iter()
+                .map(ImmutableString::as_str)
+                .chain([script.name()])
+                .collect::<Vec<_>>()
+                .join("::");
+            let path = format!(
+                "{}::{}",
+                self.models.runtime.crossing_path(&path),
+                key.name()
+            );
+            members.push((function, path.into()));
+        }
+        Ok(Some(members))
+    }
+}

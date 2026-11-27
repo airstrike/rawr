@@ -400,6 +400,14 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let path = rawr_import::surface::text::path(trait_path, &member);
         let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            // A provided method the impl leaves to the trait whose signature
+            // can't cross runs from the trait's source, as iced's `overlay`
+            // of `impl Widget<..> for &str` does (`provided_body_call`).
+            let receiver = match self.provided_body_call(receiver, &member, member_span)? {
+                Ok(value) => return Ok(value),
+                Err(receiver) => receiver,
+            };
+            drop(receiver);
             let error = Error::UnknownMember {
                 owner: trait_path.clone(),
                 member,
@@ -409,6 +417,28 @@ impl<'a> Parser<'a> {
         };
         let owner = self.models.item_owner(&path).cloned();
         let start = receiver.span.start();
+        // A method that borrows the `&str` mutably takes the program's
+        // string as a `&mut String`, copied in and stored back after the
+        // call, as rustc's `&mut self` lets the method make it another one.
+        let mut receiver = receiver;
+        let mutable = items.first().is_some_and(|item| {
+            item.signature().parameters().first().is_some_and(|ty| {
+                matches!(
+                    ty.shape(),
+                    crate::host::type_ref::Shape::Reference { mutable: true, .. }
+                )
+            })
+        });
+        if mutable && receiver.lvalue.is_some() {
+            if let Some(error) = self.immutable_borrow(&receiver, receiver.span) {
+                return Err(error);
+            }
+            self.mutable_use(&receiver, receiver.span);
+            receiver.ty = Ty::Reference {
+                mutable: true,
+                target: Box::new(Ty::String),
+            };
+        }
         let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
         let mut inputs = Vec::with_capacity(arguments.len() + 1);
         inputs.push(receiver);
@@ -2119,7 +2149,11 @@ impl<'a> Parser<'a> {
                         });
                     }
                     // An imported type's `default` comes from its crate's
-                    // `impl Default`, demanded as `Type::default`.
+                    // `impl Default`, demanded as `Type::default`: a native
+                    // miss, which a resident check prepares for.
+                    #[cfg(feature = "rust-import")]
+                    return Err(self.demanded_member(owner.into(), "default", span));
+                    #[cfg(not(feature = "rust-import"))]
                     return Err(Error::UnknownMember {
                         owner: owner.into(),
                         member: "default".into(),
@@ -2460,6 +2494,19 @@ pub(super) fn vec_method(
 }
 
 /// The `String` methods `StrChange` runs in place, by code.
+/// Whether `member` is a method Rawr's string has, as `str` or `String`
+/// does (`parse_string_method`).
+#[cfg(feature = "rust-import")]
+pub(super) fn is_string_method(member: &str) -> bool {
+    STR_CHANGES.contains(&member)
+        || STR_PIECES.contains(&member)
+        || STR_METHODS.iter().any(|(name, ..)| *name == member)
+        || matches!(
+            member,
+            "parse" | "as_mut_str" | "drain" | "replace_range" | "to_string" | "clone"
+        )
+}
+
 pub(super) const STR_CHANGES: &[&str] = &[
     "pop",
     "clear",

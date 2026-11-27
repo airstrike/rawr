@@ -131,9 +131,15 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // blanket impl over a parameter `I` bounded `&I: Other`, with each impl of
 // `Other` for `&[T]` (#2079). Schema 78 keeps a crate trait's impl that
 // forwards the associated type a parameter's projection names to its own
-// parameter's, with that item (#2060). `driver.rs`, `cargo/toolchain.rs` and
-// `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 104;
+// parameter's, with that item (#2060). Schema 107 gives a standard trait
+// whose supertrait is `Iterator` its shape, as `DoubleEndedIterator`
+// (#2698). Schema 108 normalizes a projection on a concrete trait reference
+// whose own arguments hold a lifetime, as `<Theme as Catalog>::Class<'_>`,
+// to the impl's value at that lifetime (#2698). Schema 110 holds those with
+// the expansion of a macro call through a hidden crate (#2290). `driver.rs`,
+// `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
+// move with it.
+const PROTOCOL_SCHEMA: u32 = 110;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -552,6 +558,8 @@ enum Shape {
         auto_trait: bool,
         supertraits: Vec<Predicate>,
         associated: Vec<Id>,
+        /// The associated functions with a default body.
+        provided: Vec<Id>,
         generics: Generics,
     },
     AssociatedType {
@@ -2896,12 +2904,35 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             ImplementationWork::Trait if self.is_sysroot_crate(def_id.krate)? => {}
             ImplementationWork::Trait => {
                 let mut scalars = Vec::new();
+                // A trait with associated types gives each of its crate's
+                // own impls' types, which a program's copy of the crate's
+                // generic code projects on the trait's parameter, as iced's
+                // `Container` holds `Theme::Class<'a>` of iced_widget's
+                // `impl container::Catalog for Theme` (#2698). A type's
+                // own crate's impls come with the type.
+                let associated_types = self
+                    .tcx
+                    .associated_items(def_id)
+                    .in_definition_order()
+                    .any(|item| item.is_type());
                 for implementation in self.implementations(def_id)? {
                     self.budget.edge(1)?;
                     let impl_id = implementation.id();
                     let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
                         continue;
                     };
+                    if associated_types
+                        && impl_id.krate == def_id.krate
+                        && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                    {
+                        let nominal = AssociatedObligation {
+                            kind: AssociatedDemandKind::NominalSurface,
+                            trait_item: None,
+                            arguments: None,
+                            param_env: self.tcx.param_env(impl_id),
+                        };
+                        self.request_implementation(implementation, def_id, Some(nominal))?;
+                    }
                     let reference = reference.instantiate_identity().skip_norm_wip();
                     if matches!(
                         reference.self_ty().kind(),
@@ -3113,7 +3144,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         // a selected source surface: a member of a std trait is
                         // demanded where the program names it, as a crate trait's
                         // is (#709). A Rust future's `Output` is the exception:
-                        // Rawr types the future as `Task<Output>`.
+                        // Rawr types the future as `Task<Output>`. So is a
+                        // crate trait's associated type, which a program's
+                        // copy of the crate's generic code projects on the
+                        // trait's parameter, as iced's `Container` holds
+                        // `Theme::Class<'a>` (#2698).
                         AssociatedDemandKind::NominalSurface => {
                             if Some(trait_id) == self.tcx.lang_items().future_trait()
                                 && let Some(output) = self.tcx.lang_items().future_output()
@@ -3125,6 +3160,25 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                                     implementors,
                                     &mut selected,
                                 )?;
+                            }
+                            if !self.is_sysroot_crate(trait_id.krate)? {
+                                let types = self
+                                    .tcx
+                                    .associated_items(trait_id)
+                                    .in_definition_order()
+                                    .filter(|item| item.is_type())
+                                    .map(|item| item.def_id)
+                                    .collect::<Vec<_>>();
+                                self.edge(types.len())?;
+                                for item in types {
+                                    self.select_trait_item_for_impl(
+                                        impl_id,
+                                        trait_id,
+                                        item,
+                                        implementors,
+                                        &mut selected,
+                                    )?;
+                                }
                             }
                         }
                         AssociatedDemandKind::SelectedMember => {
@@ -3489,11 +3543,26 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     }
 
     /// `def_id` is core's `Iterator` or its `next`, whose signature names
-    /// nothing but the trait's `Self` and `Item`.
+    /// nothing but the trait's `Self` and `Item`, or a standard trait whose
+    /// supertrait `Iterator` is, as `DoubleEndedIterator` and
+    /// `ExactSizeIterator` of iced's `Layout::iter` output are: what an
+    /// `impl DoubleEndedIterator<Item = T>` gives is an iterator through it.
     fn iteration(&self, def_id: DefId) -> bool {
         let iterator = self.tcx.lang_items().iterator_trait();
         match self.tcx.def_kind(def_id) {
-            DefKind::Trait => iterator == Some(def_id),
+            DefKind::Trait => {
+                iterator == Some(def_id)
+                    || iterator.is_some_and(|iterator| {
+                        crate::compat::explicit_super_clauses(self.tcx, def_id)
+                            .skip_binder()
+                            .iter()
+                            .any(|(clause, _)| {
+                                clause
+                                    .as_trait_clause()
+                                    .is_some_and(|bound| bound.def_id() == iterator)
+                            })
+                    })
+            }
             DefKind::AssocFn => {
                 iterator == Some(self.tcx.parent(def_id))
                     && self.tcx.item_name(def_id).as_str() == "next"
@@ -3792,6 +3861,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let associated_count = tcx.associated_items(def_id).in_definition_order().count();
         self.edge(associated_count)?;
         let mut associated = Vec::new();
+        let mut provided = Vec::new();
         for item in tcx.associated_items(def_id).in_definition_order() {
             let associated_id = item.def_id;
             let associated_namespace = namespace(item.namespace());
@@ -3806,6 +3876,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 .try_reserve(1)
                 .map_err(|error| format!("trait associated allocation failed: {error}"))?;
             associated.push(self.id(associated_id, associated_namespace)?);
+            if item.is_fn() && tcx.defaultness(associated_id).has_value() {
+                provided
+                    .try_reserve(1)
+                    .map_err(|error| format!("trait provided allocation failed: {error}"))?;
+                provided.push(self.id(associated_id, associated_namespace)?);
+            }
         }
         let predicates = crate::compat::explicit_super_clauses(tcx, def_id).skip_binder();
         self.edge(predicates.len())?;
@@ -3816,6 +3892,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             auto_trait: self.tcx.trait_is_auto(def_id),
             supertraits,
             associated,
+            provided,
             generics: self.generics(def_id)?,
         })
     }
@@ -4077,6 +4154,61 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         (!normalized.has_aliases() && !has_lifetime(normalized)).then_some(normalized)
     }
 
+    /// What the projection `ty` on a trait reference that names no
+    /// parameter and no lifetime normalizes to with its own lifetimes
+    /// kept, as rustc confirms the one impl that applies: iced's `fn
+    /// style(&self, class: &Self::Class<'_>)` in `impl Catalog for Theme`
+    /// takes `&StyleFn<'_, Theme>`, the impl's `type Class<'a> =
+    /// StyleFn<'a, Self>` at the signature's late-bound lifetime, and its
+    /// `fn default<'a>() -> Self::Class<'a>` gives `StyleFn<'a, Theme>` at
+    /// the function's own early-bound one. The projection's own arguments
+    /// may be lifetimes of the signature, never a type or const. A value
+    /// the impl doesn't give itself (the trait's default, a specialized
+    /// one) and a value that would name an impl's erased lifetime are
+    /// none.
+    fn normalized_through_impl(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+        let tcx = self.tcx;
+        let ty::Alias(_, alias) = ty.kind() else {
+            return None;
+        };
+        let ty::AliasTyKind::Projection { def_id } = alias.kind else {
+            return None;
+        };
+        let trait_id = tcx.parent(def_id);
+        let own = tcx.generics_of(trait_id).count();
+        let trait_ref = ty::TraitRef::new(tcx, trait_id, alias.args.iter().take(own));
+        let named_lifetime = trait_ref
+            .args
+            .iter()
+            .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)));
+        let own_typed = alias.args.iter().skip(own).any(|argument| {
+            !matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)) && argument.has_param()
+        });
+        if trait_ref.has_param()
+            || own_typed
+            || named_lifetime
+            || trait_ref.has_escaping_bound_vars()
+        {
+            return None;
+        }
+        let selected = tcx.codegen_select_candidate(
+            ty::TypingEnv::fully_monomorphized()
+                .as_query_input(tcx.erase_and_anonymize_regions(trait_ref)),
+        );
+        let Ok(rustc_middle::traits::ImplSource::UserDefined(selected)) = selected else {
+            return None;
+        };
+        let value = tcx
+            .impl_item_implementor_ids(selected.impl_def_id)
+            .get(&def_id)?;
+        let arguments = alias.args.rebase_onto(tcx, trait_id, selected.args);
+        let normalized = tcx
+            .type_of(*value)
+            .instantiate(tcx, arguments)
+            .skip_norm_wip();
+        (!normalized.has_erased_regions()).then_some(normalized)
+    }
+
     fn type_of(&mut self, ty: Ty<'tcx>, owner: DefId, depth: usize) -> Result<Type, String> {
         check_type_depth(depth)?;
         Ok(match ty.kind() {
@@ -4260,6 +4392,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 // the owner's environment: here the impl's `T`.
                 ty::AliasTyKind::Projection { .. }
                     if let Some(normalized) = self.normalized_in(ty, owner) =>
+                {
+                    return self.type_of(normalized, owner, depth.saturating_add(1));
+                }
+                // A projection whose own arguments hold a lifetime, as
+                // `<Theme as Catalog>::Class<'a>` at a signature's
+                // late-bound `'a`, is the impl's value at that lifetime.
+                ty::AliasTyKind::Projection { .. }
+                    if let Some(normalized) = self.normalized_through_impl(ty) =>
                 {
                     return self.type_of(normalized, owner, depth.saturating_add(1));
                 }

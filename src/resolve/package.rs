@@ -200,6 +200,9 @@ struct Resolver<'a> {
     /// the crate's name (`Graph::island_mirrors`, #1249).
     #[cfg(feature = "rust-import")]
     mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    /// Whether the crate root is native Rust (`Graph::native_root`).
+    #[cfg(feature = "rust-import")]
+    native_root: bool,
     /// The roots of the facades of the program's own crate and its
     /// binary's (`Program::own`).
     #[cfg(feature = "rust-import")]
@@ -326,6 +329,8 @@ impl<'a> Resolver<'a> {
         let hosted = graph.hosted();
         #[cfg(feature = "rust-import")]
         let mirrors = graph.island_mirrors();
+        #[cfg(feature = "rust-import")]
+        let native_root = graph.native_root();
         #[cfg(feature = "rust-import")]
         let statics = graph.native_statics();
         #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
@@ -468,6 +473,8 @@ impl<'a> Resolver<'a> {
             #[cfg(feature = "rust-import")]
             mirrors,
             #[cfg(feature = "rust-import")]
+            native_root,
+            #[cfg(feature = "rust-import")]
             own,
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             natives,
@@ -500,6 +507,31 @@ impl<'a> Resolver<'a> {
 
         for unit in units {
             let context = &unit.context;
+            // A crate module whose generic items the package holds is a
+            // module of its root that no `mod` item declares
+            // (`crate_source`): every module of the crate reaches it.
+            if let [module] = context.namespace.modules.as_ref()
+                && crate::package::crate_source::is_name(module)
+            {
+                let root = Namespace {
+                    package: context.namespace.package.clone(),
+                    modules: Box::default(),
+                };
+                let address = Address {
+                    package: root.package.clone(),
+                    modules: Box::default(),
+                    name: module.clone(),
+                };
+                self.insert_declaration(
+                    address,
+                    Declaration {
+                        source: context.source,
+                        span: Span::new(crate::Position::START, crate::Position::START),
+                        reach: root.reach(None),
+                        target: Target::Module,
+                    },
+                )?;
+            }
             let items = unit.parsed.items();
             let mut slots = Vec::with_capacity(items.len());
             let mut blocks = BlockItems::new();
@@ -959,10 +991,18 @@ impl<'a> Resolver<'a> {
             for call in qualified_calls(body) {
                 let scoped = self.in_blocks(&unit.context, &call.path, call.path_span);
                 let path = scoped.as_deref().unwrap_or(&call.path);
+                let source = program::source::Id::from_index(unit.context.source.index());
+                // `crate::widgets::button(..)` in a program module of a crate
+                // module's generic items: the crate's function.
+                if let Some(spelled) = self.crate_source_spelled(&unit.context, path) {
+                    resolved
+                        .rust
+                        .insert((source, call.path_span), spelled.into_boxed_slice());
+                    continue;
+                }
                 if !self.is_script_path(&unit.context, path) {
                     continue;
                 }
-                let source = program::source::Id::from_index(unit.context.source.index());
                 // `crate::model::Thing::new` into a `.rs` module
                 // is the app crate's `polyglot::model::Thing::new`.
                 if let Some(spelled) = self.rust_spelling(&unit.context, path) {
@@ -1353,6 +1393,8 @@ impl<'a> Resolver<'a> {
             entry_crate,
             #[cfg(feature = "rust-import")]
             mirrors: self.mirrors,
+            #[cfg(feature = "rust-import")]
+            native_root: self.native_root,
             #[cfg(feature = "rust-import")]
             own: self.own,
             crates: prelude,
@@ -2327,7 +2369,16 @@ impl<'a> Resolver<'a> {
                 // resolved as a macro before stays one.
                 let variant = variant.or_else(|| {
                     let qualified = super::std_reexport(&spelled.join("::"), self.host);
-                    if self.host.entry(&qualified).is_some() {
+                    // An item of a program module that stands for a crate
+                    // module, as its generic type alias, which no facade
+                    // holds, is that item.
+                    let program = self
+                        .crate_source_path(context, &path)
+                        .is_some_and(|mapped| {
+                            self.resolve_path(context, &mapped, name.span, &mut BTreeSet::new())
+                                .is_ok()
+                        });
+                    if program || self.host.entry(&qualified).is_some() {
                         None
                     } else if self.host.derive_macro(&qualified) {
                         Some(item::Import::Derive)
@@ -2427,8 +2478,28 @@ impl<'a> Resolver<'a> {
                 if let Target::Trait(address) = &target {
                     traits.push(self.known_trait_name(address.clone()));
                 }
+                // A crate module the program module stands for, beside a
+                // function of its name that another such module, globbed into
+                // the same parent, holds: `iced::widget::container` is the
+                // module `container` and `helpers`'s generic `container`.
+                let beside = match &target {
+                    Target::Module if !module_only => self.crate_source_beside(context, &path),
+                    _ => None,
+                };
                 let import = match target {
                     _ if let Some(variant) = variant.clone() => variant,
+                    Target::Module if beside.is_some() => item::Import::Module,
+                    // A crate module the program module stands for, which
+                    // shares its name with a native item, as
+                    // `iced::widget::container` is a module and a function:
+                    // the import binds both, as rustc's binds each namespace.
+                    Target::Module
+                        if !module_only
+                            && let Some((definitions, owner)) =
+                                self.crate_source_item(context, &path) =>
+                    {
+                        item::Import::ModuleItem { definitions, owner }
+                    }
                     Target::Module | Target::Trait(_) => item::Import::Module,
                     // `use a::m::{self}` imports the module `m` only.
                     Target::HostModuleItem { .. } if module_only => item::Import::Module,
@@ -2536,6 +2607,22 @@ impl<'a> Resolver<'a> {
                     && let Some(path) = super::std_path::bound_type(&qualified)
                 {
                     types.insert(name.text.clone(), type_ref::Target::Std(path));
+                }
+                if let Some((key, beside)) = beside {
+                    let written = super::Import {
+                        written: parsed.written(&name),
+                        rename: parsed.rename(&name),
+                        kind: "function",
+                    };
+                    bound.insert(
+                        (name.text.clone(), item::Namespace::Value),
+                        (context.source, name.span, Some(written)),
+                    );
+                    bindings.push(item::Binding {
+                        name: name.clone(),
+                        qualified: beside,
+                        target: item::Import::ScriptItem { key },
+                    });
                 }
                 bindings.push(item::Binding {
                     name,
@@ -2757,12 +2844,318 @@ impl<'a> Resolver<'a> {
                     .is_some_and(|first| self.module_alias(context, first).is_some())
     }
 
+    /// `path` in a program module of a crate module's generic items
+    /// (`crate_source`) when it starts at `crate` or `super`: the program's
+    /// path to the crate's item, as `crate::core::Border` in `iced_widget`
+    /// is `__rawr_source_iced_widget::core::Border`, through the package's
+    /// hidden dependency on the crate.
+    fn crate_source_spelled(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let module = context.namespace.modules.first()?;
+        if context.namespace.modules.len() != 1 || !crate::package::crate_source::is_name(module) {
+            return None;
+        }
+        let supers = path
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let (supers, rest) = match path.first()?.as_str() {
+            // A program module's own path (`crate_source_sibling`).
+            "crate"
+                if path
+                    .get(1)
+                    .is_some_and(|next| crate::package::crate_source::is_name(next)) =>
+            {
+                return None;
+            }
+            "crate" => (0, &path[1..]),
+            "super" => (supers, &path[supers..]),
+            _ => return None,
+        };
+        let spelled = self
+            .tables
+            .crate_source_path(context.package, module, supers, rest)?;
+        // A path into another opened module of the crate is that module's
+        // program module (`crate_source_path`).
+        if self
+            .tables
+            .crate_source_module(context.package, &spelled)
+            .is_some()
+        {
+            return None;
+        }
+        Some(spelled)
+    }
+
+    /// `path` in a program module of a crate module's generic items whose
+    /// first segment a `use` there binds to a module of the crate, as
+    /// iced's `helpers` binds `text` by `use crate::text::{self, Text};`
+    /// and writes `text::Catalog`: the crate's path to it, the `use`'s path
+    /// spelled as [`Self::crate_source_spelled`] spells it and the rest
+    /// after it, as rustc resolves the module in the type namespace beside
+    /// the function `text`. `None` when the `use` binds no module.
+    fn crate_source_alias_spelled(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let (first, rest) = path.split_first()?;
+        if rest.is_empty() {
+            return None;
+        }
+        let address = context.address(first);
+        let import = self
+            .tables
+            .alias(&address)
+            .or_else(|| self.tables.export(&address))?;
+        // Only a module: a type the `use` binds, as `crate::core::Theme`,
+        // is no prefix where a parameter of its name is in scope.
+        let module = self.crate_source_spelled(&import.context, &import.path)?;
+        if !matches!(
+            self.host.entry(&module.join("::")),
+            Some(host::Entry::Module | host::Entry::ModuleItem(_))
+        ) {
+            return None;
+        }
+        let mut spelled = module;
+        spelled.extend_from_slice(rest);
+        Some(spelled)
+    }
+
+    /// The crate's path to the item `name` names in a program module of a
+    /// crate module's generic items, when the module's `use` binds it to
+    /// a native item of the crate (`use crate::framed::Shown;`), as
+    /// [`Self::crate_source_spelled`] spells the `use`'s path, or when the
+    /// crate module declares it natively (`Diffed` in its own module).
+    fn crate_source_imported(
+        &self,
+        context: &Context,
+        name: &ImmutableString,
+    ) -> Option<Vec<ImmutableString>> {
+        let address = context.address(name);
+        if self.tables.declaration(&address).is_some() {
+            return None;
+        }
+        if let Some(import) = self
+            .tables
+            .alias(&address)
+            .or_else(|| self.tables.export(&address))
+        {
+            // `crate::framed::Shown`, or the native module's own path its
+            // glob writes (`events::tinted::Diffed`).
+            return self
+                .crate_source_spelled(&import.context, &import.path)
+                .or_else(|| {
+                    let first = import.path.first()?;
+                    if matches!(
+                        first.as_str(),
+                        "crate" | "self" | "super" | "std" | "core" | "alloc"
+                    ) {
+                        return None;
+                    }
+                    host_target(
+                        self.host,
+                        &import.path,
+                        Span::NONE,
+                        #[cfg(feature = "rust-import")]
+                        None,
+                    )
+                    .ok()?;
+                    Some(import.path.to_vec())
+                });
+        }
+        // A trait the crate module declares itself, which the program
+        // module's glob of the native module binds.
+        let module = context.namespace.modules.first()?;
+        if context.namespace.modules.len() != 1 || !crate::package::crate_source::is_name(module) {
+            return None;
+        }
+        let spelled = self.tables.crate_source_path(
+            context.package,
+            module,
+            0,
+            std::slice::from_ref(name),
+        )?;
+        host_target(
+            self.host,
+            &spelled,
+            Span::NONE,
+            #[cfg(feature = "rust-import")]
+            None,
+        )
+        .ok()?;
+        Some(spelled)
+    }
+
+    /// `path` in a program module of a crate module's generic items when it
+    /// starts at `crate` or `super` and goes through a module of the crate
+    /// whose generic items the package holds too: that module's program
+    /// path (`Package::crate_source_module`).
+    fn crate_source_sibling(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let module = context.namespace.modules.first()?;
+        if context.namespace.modules.len() != 1 || !crate::package::crate_source::is_name(module) {
+            return None;
+        }
+        let supers = path
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let (supers, rest) = match path.first()?.as_str() {
+            "crate"
+                if !path
+                    .get(1)
+                    .is_some_and(|next| crate::package::crate_source::is_name(next)) =>
+            {
+                (0, &path[1..])
+            }
+            "super" => (supers, &path[supers..]),
+            _ => return None,
+        };
+        let spelled = self
+            .tables
+            .crate_source_path(context.package, module, supers, rest)?;
+        self.tables.crate_source_module(context.package, &spelled)
+    }
+
+    /// The native item `path` names beside the crate module whose program
+    /// module it stands for (`crate_source`), when the path names that
+    /// module itself: the function `iced::widget::container` beside the
+    /// module.
+    fn crate_source_item(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<(
+        Box<[host::item::Definition]>,
+        Option<host::facade::Dependency>,
+    )> {
+        let mapped = self.crate_source_path(context, path)?;
+        if mapped.len() != 2 {
+            return None;
+        }
+        let qualified = path.join("::");
+        match self.host.entry(&qualified) {
+            Some(host::Entry::ModuleItem(definitions)) => Some((
+                definitions.into(),
+                self.host.item_owner(&qualified).cloned(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// The program's function of `path`'s name that a program module
+    /// globbed into `path`'s parent holds, when `path` names a crate module
+    /// the program module stands for (`crate_source_item`): its key and
+    /// its path from the crate's root.
+    fn crate_source_beside(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<(crate::item::Key, ImmutableString)> {
+        let (_, parent) = path.split_last()?;
+        if self.crate_source_path(context, path)?.len() != 2 {
+            return None;
+        }
+        let module = crate::package::crate_source::name(parent);
+        if !self.tables.crate_source_mounted(context.package, &module) {
+            return None;
+        }
+        let beside: Vec<ImmutableString> = [ImmutableString::from("crate"), module]
+            .into_iter()
+            .chain(path.last().cloned())
+            .collect();
+        match self.resolve_path(context, &beside, Span::NONE, &mut BTreeSet::new()) {
+            Ok(Target::Item(key)) => Some((key, beside.join("::").into())),
+            _ => None,
+        }
+    }
+
     fn is_direct_script_path(&self, context: &Context, path: &[ImmutableString]) -> bool {
+        if self.crate_source_spelled(context, path).is_some() {
+            return false;
+        }
         path.first().is_some_and(|first| {
             first == "crate"
                 || first == "super"
                 || first == "self" && path.len() > 1
                 || self.is_child_module(context, first)
+        }) || self.crate_source_path(context, path).is_some()
+    }
+
+    /// `path` from the program module that stands for a crate module whose
+    /// generic items the package holds (`crate_source`), when the path goes
+    /// through that crate module: `events::tinted::Tint` is
+    /// `crate::__rawr_crate__events__tinted::Tint`, which the program
+    /// module's glob re-exports from the crate, and `events::tinted::shade`
+    /// the program module's own `shade`. A crate's own code never names
+    /// itself through the extern prelude, so in such a program module the
+    /// crate's name is the native crate's, which its glob names.
+    fn crate_source_path(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let first = path.first()?;
+        let in_crate_source = context
+            .namespace
+            .modules
+            .first()
+            .is_some_and(|module| crate::package::crate_source::is_name(module));
+        if in_crate_source {
+            return self.crate_source_sibling(context, path);
+        }
+        if path.len() < 2
+            || self.tables.declaration(&context.address(first)).is_some()
+            || !self.tables.reaches(first)
+        {
+            return None;
+        }
+        let package: ImmutableString = self.tables.package_name(context.package).into();
+        // A crate module globbed into its crate's root stands for that root
+        // (`crate_source::located::Located::mount`).
+        (1..=path.len()).rev().find_map(|split| {
+            let module = crate::package::crate_source::name(&path[..split]);
+            let address = Address {
+                package: package.clone(),
+                modules: Box::default(),
+                name: module.clone(),
+            };
+            self.tables.declaration(&address)?;
+            // The module a crate module is globbed into keeps its other
+            // items native: only the crate module's own are the program's.
+            // A name that is a macro there too stays the crate's, as
+            // `column` is `column!` and a function: one binding holds
+            // either a program function or a crate macro.
+            if self.tables.crate_source_mounted(context.package, &module) {
+                let item = Address {
+                    package: package.clone(),
+                    modules: Box::new([module.clone()]),
+                    name: path.get(split)?.clone(),
+                };
+                self.tables.declaration(&item)?;
+                let native = path[..=split].join("::");
+                if let Some(host::Entry::ModuleItem(definitions) | host::Entry::Item(definitions)) =
+                    self.host.entry(&native)
+                    && definitions
+                        .iter()
+                        .any(|definition| definition.kind().is_macro())
+                {
+                    return None;
+                }
+            }
+            Some(
+                [ImmutableString::from("crate"), module]
+                    .into_iter()
+                    .chain(path[split..].iter().cloned())
+                    .collect(),
+            )
         })
     }
 
@@ -2789,6 +3182,12 @@ impl<'a> Resolver<'a> {
         path: &[ImmutableString],
         active: &mut BTreeSet<Address>,
     ) -> bool {
+        if self.crate_source_spelled(context, path).is_some() {
+            return false;
+        }
+        if let Some(mapped) = self.crate_source_path(context, path) {
+            return self.names_script_module(context, &mapped, active);
+        }
         let path = through_self(path);
         let supers = path
             .iter()
@@ -2956,7 +3355,9 @@ impl<'a> Resolver<'a> {
         reference: Span,
         active: &mut BTreeSet<Address>,
     ) -> Result<Target, Failure> {
-        if self.is_script_path(context, path) {
+        if let Some(spelled) = self.crate_source_spelled(context, path) {
+            self.resolve_any_path(context, &spelled, reference, active)
+        } else if self.is_script_path(context, path) {
             self.resolve_path(context, path, reference, active)
         } else if let Some((address, alias)) = self.crate_alias(context, path)
             && active.insert(address.clone())
@@ -3103,7 +3504,39 @@ impl<'a> Resolver<'a> {
     fn write_outside_paths(&self, context: &Context, item: &mut crate::item::Parsed) {
         use crate::item::type_ref::{Path, Segment, DYN_SEGMENT};
         let app = self.tables.rust_crate(context.package);
-        let path = |path: &mut Path, _: Place| {
+        let path = |path: &mut Path, place: Place| {
+            if let [only] = &path.segments[..]
+                && place == Place::Trait
+                && !path.global
+                && let Some(spelled) = self.crate_source_imported(context, &only.name.text)
+            {
+                // `Shown` after a crate-source module's `use
+                // crate::framed::Shown;` is the crate's trait, spelled
+                // through the program's dependency on the crate.
+                let (at, span) = (only.name.span, only.span);
+                let last = only.clone();
+                let count = spelled.len();
+                path.segments = spelled
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, text)| {
+                        let name = crate::item::Name { text, span: at };
+                        if index + 1 == count {
+                            Segment {
+                                name,
+                                ..last.clone()
+                            }
+                        } else {
+                            Segment {
+                                name,
+                                arguments: Box::default(),
+                                span,
+                            }
+                        }
+                    })
+                    .collect();
+                return;
+            }
             let [first, .., last] = &path.segments[..] else {
                 return;
             };
@@ -3120,14 +3553,20 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .map(|segment| segment.name.text.clone())
                 .collect::<Vec<_>>();
-            if !self.is_script_path(context, &written) {
-                return;
-            }
-            // A path into a `.rs` module keeps its types' own resolution.
-            let Some(spelled) = self
-                .rust_spelling(context, &written)
-                .filter(|spelled| app.is_none_or(|app| spelled[0] != app))
-            else {
+            // A crate-source module's `crate::` path names the crate's
+            // item through the program's dependency on that crate.
+            let spelled = match self
+                .crate_source_spelled(context, &written)
+                .or_else(|| self.crate_source_alias_spelled(context, &written))
+            {
+                Some(spelled) => Some(spelled),
+                None if !self.is_script_path(context, &written) => return,
+                // A path into a `.rs` module keeps its types' own resolution.
+                None => self
+                    .rust_spelling(context, &written)
+                    .filter(|spelled| app.is_none_or(|app| spelled[0] != app)),
+            };
+            let Some(spelled) = spelled else {
                 return;
             };
             let (at, span) = (first.name.span, first.span);
@@ -3361,6 +3800,12 @@ impl<'a> Resolver<'a> {
         path: &[ImmutableString],
         active: &mut BTreeSet<Address>,
     ) -> Option<Vec<ImmutableString>> {
+        if let Some(spelled) = self.crate_source_spelled(context, path) {
+            return Some(spelled);
+        }
+        if let Some(mapped) = self.crate_source_path(context, path) {
+            return self.spelling_from(context, &mapped, active);
+        }
         let path = through_self(path);
         let first = path.first()?;
         let supers = path
@@ -3499,6 +3944,12 @@ impl<'a> Resolver<'a> {
         reference: Span,
         active: &mut BTreeSet<Address>,
     ) -> Result<Target, Failure> {
+        if let Some(spelled) = self.crate_source_spelled(context, path) {
+            return self.resolve_any_path(context, &spelled, reference, active);
+        }
+        if let Some(mapped) = self.crate_source_path(context, path) {
+            return self.resolve_path(context, &mapped, reference, active);
+        }
         let path = through_self(path);
         let Some(first) = path.first() else {
             return Err(self.unknown_import(context, path, reference));
@@ -5047,9 +5498,14 @@ fn qualify_opaque_bounds(
             .collect();
     }
     // `impl<R> Widget<M, T, R> for Quad where R: renderer::Renderer`: the
-    // impl's own bounds name a dependency's trait the same way (D629).
-    if let crate::item::Parsed::Impl(item) = item {
-        qualify_bounds(&mut item.generics, modules);
+    // impl's own bounds name a dependency's trait the same way (D629), and
+    // so do a type's, as iced's `Container<'a, W, Theme> where Theme:
+    // Catalog`.
+    match item {
+        crate::item::Parsed::Impl(item) => qualify_bounds(&mut item.generics, modules),
+        crate::item::Parsed::Struct(item) => qualify_bounds(&mut item.generics, modules),
+        crate::item::Parsed::Enum(item) => qualify_bounds(&mut item.generics, modules),
+        _ => {}
     }
     let functions: Vec<&mut crate::item::Function> = match item {
         crate::item::Parsed::Function(function) => vec![function],
@@ -5204,13 +5660,40 @@ fn each_signature_path(
             Type::Reference { target, .. } => ty(target, path),
         }
     }
+    // A bound's trait, and the types its arguments name: `Paint` of
+    // `T: Into<crate::paint::Paint>`.
+    let bound = |bound: &mut Path| {
+        path(bound, Place::Trait);
+        for segment in bound.segments.iter_mut() {
+            for argument in segment.arguments.iter_mut() {
+                if let Argument::Type(argument) = argument {
+                    ty(argument, path);
+                }
+            }
+        }
+    };
     let generics = |generics: &mut [crate::item::GenericParam]| {
         for generic in generics.iter_mut() {
             let mut bounds = generic.bounds.to_vec();
-            for bound in &mut bounds {
-                path(bound, Place::Trait);
+            for written in &mut bounds {
+                bound(written);
             }
             generic.bounds = bounds.into_boxed_slice();
+            // A default and the types its bounds' equalities name, as
+            // `Theme = crate::Theme`.
+            if let Some(default) = &mut generic.default {
+                ty(default, path);
+            }
+            // The type a `where` bound on another type bounds, as
+            // `<Theme as container::Catalog>::Class<'a>`.
+            if let Some(fixed) = &mut generic.fixed {
+                ty(fixed, path);
+            }
+            let mut projections = generic.projections.to_vec();
+            for (.., projected) in &mut projections {
+                ty(projected, path);
+            }
+            generic.projections = projections.into_boxed_slice();
         }
     };
     let function = |function: &mut crate::item::Function| {
@@ -5366,6 +5849,28 @@ fn collect_function_type_paths<'a>(
     }
     if let Some(ty) = &function.output {
         collect_type_paths(ty, output);
+    }
+    // The types its bounds name, as `container::StyleFn` of iced's `where
+    // <Theme as container::Catalog>::Class<'a>: From<container::StyleFn<'a,
+    // Theme>>`, and the type such a `where` bound bounds.
+    for generic in &function.generics {
+        for bound in &generic.bounds {
+            for segment in &bound.segments {
+                for argument in &segment.arguments {
+                    if let crate::item::type_ref::Argument::Type(ty) = argument {
+                        collect_type_paths(ty, output);
+                    }
+                }
+            }
+        }
+        for ty in generic
+            .default
+            .iter()
+            .chain(&generic.fixed)
+            .chain(generic.projections.iter().map(|(.., ty)| ty))
+        {
+            collect_type_paths(ty, output);
+        }
     }
 }
 
