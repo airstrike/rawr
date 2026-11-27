@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-23",
+  "updated": "2026-11-27",
   "version": "0.5.23",
   "examples": {
     "running": 55,
@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],
+      "entries": [
+        {"text":"With `RAWR_CRATE_SOURCE` opening iced's container, helpers and widget modules, a crate's generic code runs from its source at the program's types while its concrete code stays native. A save that adds `container(text(..))`, `row![button(..)]` or `column![container(..)]` swaps in place with no runner build and keeps the app's state, and a swatch panel with `color!` literals and `.style(panel)` runs unchanged. A program's own call of a method that only runs where native code lends (a native `overlay`) is refused at check with the reason, and a crate's `&mut self` method of its impl for `&str` gives the program its new string.","issues":[2699],"refs":[2698]},
+        {"text":"A crate macro that stringifies an integer literal reads it as written, so iced's `color!(0x00ff00)` is green, not red.","issues":[2700]},
+        {"text":"A start with opened crate modules checks in about 25 s instead of about 5 minutes: a type's members are read as a sorted range, and the opened modules' source graph is read once while its files are unchanged.","issues":[2701],"refs":[2698]}
+      ]
+    },
     "releases": [
       {
         "version": "0.5.23",
@@ -6607,7 +6614,12 @@
     {"issue":2695,"title":"A const's array of trait objects is refused as a type mismatch","state":"open","category":"Divergences from rustc"},
     {"issue":2696,"title":"A turbofish on a std free function rawr runs is the not-yet error","state":"open","category":"Divergences from rustc"},
     {"issue":2697,"title":"A std enum's variant by its full path is the not-yet error","state":"open","category":"Divergences from rustc"},
-    {"issue":2698,"title":"Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open","category":"No glue (D593)"}
+    {"issue":2698,"title":"Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open","category":"No glue (D593)"},
+    {"issue":2699,"title":"Opened crate modules run iced's generic widgets from source with no runner rebuild","state":"open","category":"No glue (D593)"},
+    {"issue":2700,"title":"A crate macro reads an integer literal as written","state":"open","category":"No glue (D593)"},
+    {"issue":2701,"title":"A start with opened crate modules checks in seconds","state":"open","category":"No glue (D593)"},
+    {"issue":2702,"title":"?play: open crate modules from source in the wasm playground","state":"open","category":"No glue (D593)"},
+    {"issue":2703,"title":"Literals and stringify in crate macro expansions read text from the wrong source","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -9291,9 +9303,9 @@
           "id": "universe-coverage-0-3",
           "name": "?play covers what the examples use",
           "start": 86,
-          "size": 0.8,
+          "size": 0.7,
           "state": "done",
-          "note": "solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Left: a builder call that takes a crate function item (#1029). A snippet's locals don't drop at its end (#1247).",
+          "note": "solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Opened iced modules run new widget nestings from source locally with no runner build (#2698). Left: the same on ?play, a builder call that takes a crate function item (#1029), and a snippet's locals don't drop at its end (#1247).",
           "issues": [
             {"number":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"closed"},
             {"number":1019,"title":"Universe build overflows the stack at \"building API\" since 0.3.150","state":"closed"},
@@ -9310,7 +9322,7 @@
           "start": 86,
           "size": 0.5,
           "state": "done",
-          "note": "solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Left: a builder call that takes a crate function item (#1029). A snippet's locals don't drop at its end (#1247).",
+          "note": "solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Opened iced modules run new widget nestings from source locally with no runner build (#2698). Left: the same on ?play, a builder call that takes a crate function item (#1029), and a snippet's locals don't drop at its end (#1247).",
           "issues": [
             {"number":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"closed"}
           ],
@@ -9320,9 +9332,9 @@
           "id": "universe-coverage",
           "name": "?play covers what the examples use",
           "start": 86,
-          "size": 1.1,
+          "size": 1.2,
           "state": "next",
-          "note": "solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Left: a builder call that takes a crate function item (#1029). A snippet's locals don't drop at its end (#1247).",
+          "note": "solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Opened iced modules run new widget nestings from source locally with no runner build (#2698). Left: the same on ?play, a builder call that takes a crate function item (#1029), and a snippet's locals don't drop at its end (#1247).",
           "issues": [
             {"number":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open"},
             {"number":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open"},
@@ -9332,7 +9344,8 @@
             {"number":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open"},
             {"number":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open"},
             {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"},
-            {"number":2698,"title":"Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open"}
+            {"number":2698,"title":"Interpreted crate generics: fix or bound the eight ways they can differ from rustc","state":"open"},
+            {"number":2702,"title":"?play: open crate modules from source in the wasm playground","state":"open"}
           ],
           "milestone": "0.8"
         },

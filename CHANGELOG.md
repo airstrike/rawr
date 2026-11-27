@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+- With `RAWR_CRATE_SOURCE` opening iced's container, helpers and widget modules, a crate's generic code runs from its source at the program's types while its concrete code stays native. A save that adds `container(text(..))`, `row![button(..)]` or `column![container(..)]` swaps in place with no runner build and keeps the app's state, and a swatch panel with `color!` literals and `.style(panel)` runs unchanged. A program's own call of a method that only runs where native code lends (a native `overlay`) is refused at check with the reason, and a crate's `&mut self` method of its impl for `&str` gives the program its new string. (#2699; part of #2698)
+- A crate macro that stringifies an integer literal reads it as written, so iced's `color!(0x00ff00)` is green, not red. (#2700)
+- A start with opened crate modules checks in about 25 s instead of about 5 minutes: a type's members are read as a sorted range, and the opened modules' source graph is read once while its files are unchanged. (#2701; part of #2698)
 
 ## 0.5.23 (2026-11-22)
 
